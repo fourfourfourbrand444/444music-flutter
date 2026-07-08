@@ -81,6 +81,13 @@ const _writerRoles = [
   'Arranger', 'Top-Liner', 'Concept Writer',
 ];
 
+// Version options for the release (single / EP / album track version)
+const _versionOptions = [
+  'Original', 'Radio Edit', 'Extended Mix', 'Remix', 'Acoustic',
+  'Live', 'Instrumental', 'Remastered', 'Cover', 'Sped Up', 'Slowed',
+  'Other',
+];
+
 // ════════════════════════════════════════════════════════════════════════════
 //  SCREEN
 // ════════════════════════════════════════════════════════════════════════════
@@ -114,6 +121,12 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
   String    _country     = 'Ghana';
   String    _explicit    = 'No';
   DateTime? _releaseDate;
+
+  // NEW — song details / ownership state
+  String _previouslyReleased        = 'No';       // Yes / No radio
+  String _version                   = 'Original'; // dropdown, required
+  String _vocalType                 = 'Vocals';   // Vocals / Instrumental radio
+  bool   _originalOwnershipConfirmed = false;      // agreement checkbox, required
 
   final List<ArtistResult> _selectedArtists = [];
   List<ArtistResult>       _searchResults   = [];
@@ -358,6 +371,13 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
           ? 'Auto-assign' : data['upc'],
       'catalog_number': (data['catalogNumber'] as String).isEmpty
           ? 'Not provided' : data['catalogNumber'],
+      // NEW — song details / ownership fields
+      'version':               data['version'],
+      'previously_released':   data['previouslyReleased'],
+      'vocal_type':            data['vocalType'],
+      'ownership_confirmed':   (data['ownershipConfirmed'] == true)
+          ? 'Yes — confirmed original work'
+          : 'Not confirmed',
       'producers':      _formatCredits(_credits['producer']!),
       'musicians':      _formatCredits(_credits['musician']!),
       'songwriters':    _formatCredits(_credits['writer']!),
@@ -383,6 +403,15 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
     final producers = _credits['producer']!;
     if (producers.isEmpty || producers.every((p) => p.name.trim().isEmpty)) {
       return 'Please add at least one producer name.';
+    }
+
+    // NEW — version, previous-release status, and ownership agreement
+    if (_version.trim().isEmpty) return 'Please select a version for this track.';
+    if (_previouslyReleased.trim().isEmpty) {
+      return 'Please indicate if this song has been released before.';
+    }
+    if (!_originalOwnershipConfirmed) {
+      return 'Please confirm you own this song / hold the rights to distribute it.';
     }
 
     if (_emailCtrl.text.trim().isEmpty) return 'Email address is required.';
@@ -420,6 +449,11 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
         'upc':           _upcCtrl.text.trim(),
         'catalogNumber': _catalogCtrl.text.trim(),
         'lyrics':        _lyricsCtrl.text.trim(),
+        // NEW — song details / ownership
+        'version':             _version,
+        'previouslyReleased':  _previouslyReleased,
+        'vocalType':           _vocalType,
+        'ownershipConfirmed':  _originalOwnershipConfirmed,
         'credits': {
           'producer': _credits['producer']!
               .map((c) => {'name': c.name, 'role': c.role, 'ipi': c.ipi})
@@ -521,6 +555,30 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
                       const SizedBox(height: 14),
                       _buildDateField(),
 
+                      // ── Song Details & Ownership ─────────────────────────
+                      _sectionHeader(Icons.fact_check_outlined,
+                          'Song Details & Ownership',
+                          'Version, prior release status, and rights'),
+                      _buildRow([
+                        _dropdownField('Version', _version, _versionOptions,
+                                (v) => setState(() => _version = v!),
+                            required: true),
+                        _radioField(
+                          'Vocals or Instrumental',
+                          _vocalType,
+                          const ['Vocals', 'Instrumental'],
+                              (v) => setState(() => _vocalType = v),
+                        ),
+                      ]),
+                      const SizedBox(height: 14),
+                      _radioField(
+                        'Has this song been released before?',
+                        _previouslyReleased,
+                        const ['No', 'Yes'],
+                            (v) => setState(() => _previouslyReleased = v),
+                        required: true,
+                      ),
+
                       // ── Label & Rights ───────────────────────────────────
                       _sectionHeader(Icons.business_center_outlined,
                           'Label & Rights', 'Copyright and label ownership'),
@@ -581,6 +639,9 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
                       _sectionHeader(Icons.format_align_left_rounded,
                           'Lyrics', 'Optional — improves discoverability'),
                       _buildLyricsField(),
+
+                      // ── Ownership Agreement ──────────────────────────────
+                      _buildAgreementCheck(),
 
                       const SizedBox(height: 32),
                       _buildSubmitButton(),
@@ -938,6 +999,138 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
           ),
         ),
       ],
+    );
+  }
+
+  // ── RADIO FIELD (NEW) ─────────────────────────────────────────────────────
+  // Pill-style radio selector used for Yes/No and Vocals/Instrumental choices.
+  Widget _radioField(
+      String label,
+      String value,
+      List<String> options,
+      ValueChanged<String> onChanged, {
+        bool required = false,
+      }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _fieldLabel(label, required: required),
+        const SizedBox(height: 6),
+        Row(
+          children: options.map((opt) {
+            final selected = value == opt;
+            return Padding(
+              padding: EdgeInsets.only(
+                  right: opt == options.last ? 0 : 10),
+              child: GestureDetector(
+                onTap: () => onChanged(opt),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 120),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: selected ? _white : _input,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                        color: selected ? _white : _border),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        selected
+                            ? Icons.radio_button_checked_rounded
+                            : Icons.radio_button_unchecked_rounded,
+                        size: 15,
+                        color: selected ? _bg : _grey,
+                      ),
+                      const SizedBox(width: 7),
+                      Text(opt,
+                          style: GoogleFonts.inter(
+                              color: selected ? _bg : _white70,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600)),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+      ],
+    );
+  }
+
+  // ── AGREEMENT CHECK (NEW) ─────────────────────────────────────────────────
+  Widget _buildAgreementCheck() {
+    return Padding(
+      padding: const EdgeInsets.only(top: 24),
+      child: GestureDetector(
+        onTap: () => setState(
+                () => _originalOwnershipConfirmed = !_originalOwnershipConfirmed),
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: _card,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+                color: _originalOwnershipConfirmed ? _white40 : _border),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 20, height: 20,
+                margin: const EdgeInsets.only(top: 1),
+                decoration: BoxDecoration(
+                  color: _originalOwnershipConfirmed
+                      ? _white
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(5),
+                  border: Border.all(
+                      color: _originalOwnershipConfirmed
+                          ? _white
+                          : _white40),
+                ),
+                child: _originalOwnershipConfirmed
+                    ? const Icon(Icons.check_rounded,
+                    size: 14, color: _bg)
+                    : null,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text('OWNERSHIP AGREEMENT',
+                            style: GoogleFonts.outfit(
+                                color: _greyDark,
+                                fontSize: 9,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 1.2)),
+                        const SizedBox(width: 5),
+                        Container(
+                          width: 5, height: 5,
+                          decoration: const BoxDecoration(
+                              color: _white40, shape: BoxShape.circle),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'I confirm that this is an original song that I own, or that I hold full legal rights to distribute, and that it does not infringe on any third-party copyrights.',
+                      style: GoogleFonts.inter(
+                          color: _white70, fontSize: 12.5, height: 1.45),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 

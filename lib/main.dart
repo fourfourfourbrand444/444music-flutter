@@ -125,15 +125,12 @@ class _SplashScreenState extends State<SplashScreen>
     with TickerProviderStateMixin {
 
   late AnimationController _ctrl;
-  late Animation<double> _logoFade;
-  late Animation<double> _logoScale;
-  late Animation<double> _wordFade;
-  late Animation<double> _wordScale;
-  late Animation<double> _lineWidth;
   late Animation<double> _tagFade;
   late Animation<Offset>  _tagSlide;
 
   late AnimationController _dotCtrl;
+
+  static const _bgRed = Color(0xFFD90429);
 
   @override
   void initState() {
@@ -144,31 +141,13 @@ class _SplashScreenState extends State<SplashScreen>
       duration: const Duration(milliseconds: 900),
     );
 
-    _logoFade = Tween<double>(begin: 0, end: 1).animate(
-        CurvedAnimation(parent: _ctrl,
-            curve: const Interval(0.00, 0.38, curve: Curves.easeOut)));
-    _logoScale = Tween<double>(begin: 0.78, end: 1.0).animate(
-        CurvedAnimation(parent: _ctrl,
-            curve: const Interval(0.00, 0.38, curve: Curves.easeOutCubic)));
-
-    _wordFade = Tween<double>(begin: 0, end: 1).animate(
-        CurvedAnimation(parent: _ctrl,
-            curve: const Interval(0.16, 0.60, curve: Curves.easeOut)));
-    _wordScale = Tween<double>(begin: 0.90, end: 1.0).animate(
-        CurvedAnimation(parent: _ctrl,
-            curve: const Interval(0.16, 0.60, curve: Curves.easeOutCubic)));
-
-    _lineWidth = Tween<double>(begin: 0, end: 1).animate(
-        CurvedAnimation(parent: _ctrl,
-            curve: const Interval(0.44, 0.77, curve: Curves.easeOut)));
-
     _tagFade = Tween<double>(begin: 0, end: 1).animate(
         CurvedAnimation(parent: _ctrl,
-            curve: const Interval(0.66, 1.00, curve: Curves.easeOut)));
+            curve: const Interval(0.00, 0.60, curve: Curves.easeOut)));
     _tagSlide = Tween<Offset>(
       begin: const Offset(0, 0.25), end: Offset.zero,
     ).animate(CurvedAnimation(parent: _ctrl,
-        curve: const Interval(0.66, 1.00, curve: Curves.easeOutCubic)));
+        curve: const Interval(0.00, 0.60, curve: Curves.easeOutCubic)));
 
     _dotCtrl = AnimationController(
       vsync: this,
@@ -201,149 +180,64 @@ class _SplashScreenState extends State<SplashScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.white,
-      body: Stack(
-        children: [
-          Positioned.fill(child: CustomPaint(painter: _SplashBgPainter())),
+      backgroundColor: _bgRed,
+      body: SizedBox.expand(
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
 
-          Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-
-                FadeTransition(
-                  opacity: _logoFade,
-                  child: ScaleTransition(
-                    scale: _logoScale,
-                    child: Container(
-                      width: 72, height: 72,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF0A0A0A),
-                        borderRadius: BorderRadius.circular(18),
-                      ),
-                      alignment: Alignment.center,
-                      child: const Text(
-                        '444',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 26,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: -1,
-                          height: 1,
-                        ),
-                      ),
+              SlideTransition(
+                position: _tagSlide,
+                child: FadeTransition(
+                  opacity: _tagFade,
+                  child: const Text(
+                    'Distribute. Earn. Grow.',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      letterSpacing: 0.6,
                     ),
                   ),
                 ),
+              ),
 
-                const SizedBox(height: 18),
+              const SizedBox(height: 56),
 
-                FadeTransition(
-                  opacity: _wordFade,
-                  child: ScaleTransition(
-                    scale: _wordScale,
-                    child: const Text(
-                      '444Music',
-                      style: TextStyle(
-                        color: Color(0xFF0A0A0A),
-                        fontSize: 38,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: -1.5,
-                        height: 1,
-                      ),
-                    ),
-                  ),
-                ),
-
-                const SizedBox(height: 14),
-
-                AnimatedBuilder(
-                  animation: _lineWidth,
-                  builder: (_, __) => Align(
-                    child: FractionallySizedBox(
-                      widthFactor: _lineWidth.value * 0.28,
-                      child: Container(
-                        height: 1.5,
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(99),
-                          color: const Color(0xFF0A0A0A),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-
-                const SizedBox(height: 18),
-
-                SlideTransition(
-                  position: _tagSlide,
-                  child: FadeTransition(
-                    opacity: _tagFade,
-                    child: const Text(
-                      'Distribute. Earn. Grow.',
-                      style: TextStyle(
-                        color: Color(0xFF888888),
-                        fontSize: 13,
-                        fontWeight: FontWeight.w400,
-                        letterSpacing: 0.6,
-                      ),
-                    ),
-                  ),
-                ),
-
-                const SizedBox(height: 56),
-
-                AnimatedBuilder(
-                  animation: _dotCtrl,
-                  builder: (_, __) => Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: List.generate(3, (i) {
-                      final t = ((_dotCtrl.value - i * 0.25) % 1.0);
-                      final scale   = 0.55 + 0.45 * sin(t * pi).clamp(0.0, 1.0);
-                      final opacity = (0.2  + 0.8  * sin(t * pi)).clamp(0.2, 1.0);
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 4),
-                        child: Transform.scale(
-                          scale: scale,
-                          child: Opacity(
-                            opacity: opacity,
-                            child: Container(
-                              width: 6, height: 6,
-                              decoration: const BoxDecoration(
-                                color: Color(0xFF0A0A0A),
-                                shape: BoxShape.circle,
-                              ),
+              AnimatedBuilder(
+                animation: _dotCtrl,
+                builder: (_, __) => Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: List.generate(3, (i) {
+                    final t = ((_dotCtrl.value - i * 0.25) % 1.0);
+                    final scale   = 0.55 + 0.45 * sin(t * pi).clamp(0.0, 1.0);
+                    final opacity = (0.2  + 0.8  * sin(t * pi)).clamp(0.2, 1.0);
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: Transform.scale(
+                        scale: scale,
+                        child: Opacity(
+                          opacity: opacity,
+                          child: Container(
+                            width: 6, height: 6,
+                            decoration: const BoxDecoration(
+                              color: Colors.white,
+                              shape: BoxShape.circle,
                             ),
                           ),
                         ),
-                      );
-                    }),
-                  ),
+                      ),
+                    );
+                  }),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
-}
-
-class _SplashBgPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()..color = const Color(0x06000000);
-    final rnd = Random(42);
-    for (int i = 0; i < 1800; i++) {
-      canvas.drawCircle(
-        Offset(rnd.nextDouble() * size.width, rnd.nextDouble() * size.height),
-        rnd.nextDouble() * 1.2,
-        paint,
-      );
-    }
-  }
-  @override
-  bool shouldRepaint(_SplashBgPainter _) => false;
 }
 
 // ════════════════════════════════════════════════════════════════════

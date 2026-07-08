@@ -12,13 +12,12 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-
     signingConfigs {
         create("release") {
-            keyAlias = "444music"
-            keyPassword = "Music112@"
-            storeFile = file("key.jks")
-            storePassword = "Music112@"
+            keyAlias = System.getenv("CM_KEY_ALIAS") ?: "444music"
+            keyPassword = System.getenv("CM_KEY_PASSWORD") ?: "Music112@"
+            storeFile = System.getenv("CM_KEYSTORE_PATH")?.let { file(it) } ?: file("key.jks")
+            storePassword = System.getenv("CM_KEYSTORE_PASSWORD") ?: "Music112@"
         }
     }
 
