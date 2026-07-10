@@ -21,6 +21,7 @@ import 'release_info_screen.dart';
 import 'select_screen.dart';
 import 'legal_screen.dart';
 import 'confirm_screen.dart';
+import 'verify_code_screen.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
@@ -85,33 +86,37 @@ class _MyAppState extends State<MyApp> {
         fontFamily: 'SF Pro Display',
       ),
       home: const SplashScreen(),
-      routes: {
-        '/home':            (_) => const HomeScreen(),
-        '/loading':         (_) => const HomeScreen(),
-        '/upload':          (_) => const PricingScreen(),
-        '/analytics':       (_) => const AnalyticsScreen(),
-        '/earnings':        (_) => const EarningsScreen(),
-        '/profile':         (_) => const ProfileScreen(),
-        '/dashboard':       (_) => const ReleasesScreen(),
-        '/tools':           (_) => const ToolsScreen(),
-        '/support':         (_) => const HomeScreen(),
-        '/releases':        (_) => const ReleasesScreen(),
-        '/pricing':         (_) => const PricingScreen(),
-        '/notifications':   (_) => const HomeScreen(),
-        '/payment-success': (_) => const PaymentSuccessScreen(),
-        '/agreement':       (_) => const AgreementScreen(),
-        '/upload-files':    (_) => const UploadScreen(),
-        '/release-info':    (_) => const ReleaseInfoScreen(),
-        '/select':          (_) => const SelectScreen(),
-        '/confirm':         (_) => const ConfirmScreen(),
-        '/rejection':       (_) => const RejectionScreen(),
-        '/legal':           (_) => const LegalScreen(),
-        '/withdrawal': (context) => WithdrawalScreen(),
-      },
-    );
-  }
-}
-
+     routes: {
+       '/home':            (_) => const HomeScreen(),
+       '/loading':         (_) => const HomeScreen(),
+       '/upload':          (_) => const PricingScreen(),
+       '/analytics':       (_) => const AnalyticsScreen(),
+       '/earnings':        (_) => const EarningsScreen(),
+       '/profile':         (_) => const ProfileScreen(),
+       '/dashboard':       (_) => const ReleasesScreen(),
+       '/tools':           (_) => const ToolsScreen(),
+       '/support':         (_) => const HomeScreen(),
+       '/releases':        (_) => const ReleasesScreen(),
+       '/pricing':         (_) => const PricingScreen(),
+       '/notifications':   (_) => const HomeScreen(),
+       '/payment-success': (_) => const PaymentSuccessScreen(),
+       '/agreement':       (_) => const AgreementScreen(),
+       '/upload-files':    (_) => const UploadScreen(),
+       '/release-info':    (_) => const ReleaseInfoScreen(),
+       '/select':          (_) => const SelectScreen(),
+       '/confirm':         (_) => const ConfirmScreen(),
+       '/rejection':       (_) => const RejectionScreen(),
+       '/legal':           (_) => const LegalScreen(),
+       '/withdrawal':      (context) => WithdrawalScreen(),
+       '/verify-code': (context) {
+         final args = ModalRoute.of(context)!.settings.arguments as Map;
+         return VerifyCodeScreen(
+           uid: args['uid'],
+           email: args['email'],
+           name: args['name'],
+         );
+       },
+     },
 // ════════════════════════════════════════════════════════════════════
 //  SPLASH SCREEN
 // ════════════════════════════════════════════════════════════════════

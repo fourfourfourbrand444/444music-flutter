@@ -3,6 +3,13 @@ import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+
+// ─────────────────────────────────────────
+//  BACKEND CONFIG
+// ─────────────────────────────────────────
+const String _backendBaseUrl = 'https://444music-backend.bonto.run';
 
 // ─────────────────────────────────────────
 //  COLOURS
@@ -107,47 +114,61 @@ class _LoginScreenState extends State<LoginScreen>
       value: SystemUiOverlayStyle.light,
       child: Scaffold(
         backgroundColor: _bg,
-        body: Column(
-          children: [
-            SlideTransition(
-              position: _headerSlide,
-              child: FadeTransition(
-                opacity: _headerFade,
-                child: _Header(),
-              ),
-            ),
-            Expanded(
-              child: SingleChildScrollView(
-                physics: const BouncingScrollPhysics(),
-                padding: const EdgeInsets.fromLTRB(26, 32, 26, 36),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    SlideTransition(
-                      position: _toggleSlide,
-                      child: FadeTransition(
-                        opacity: _toggleFade,
-                        child: _ToggleBar(
-                          current: _tab,
-                          onSwitch: _switchTab,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 36),
-                    SlideTransition(
-                      position: _panelSlide,
-                      child: FadeTransition(
-                        opacity: _panelFade,
-                        child: _tab == 0
-                            ? _LoginPanel(onSwitchToSignup: () => _switchTab(1))
-                            : _SignupPanel(onSwitchToLogin: () => _switchTab(0)),
-                      ),
-                    ),
-                  ],
+        resizeToAvoidBottomInset: true,
+        body: SafeArea(
+          top: false,
+          child: Column(
+            children: [
+              SlideTransition(
+                position: _headerSlide,
+                child: FadeTransition(
+                  opacity: _headerFade,
+                  child: _Header(),
                 ),
               ),
-            ),
-          ],
+              Expanded(
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    return SingleChildScrollView(
+                      physics: const BouncingScrollPhysics(),
+                      padding: const EdgeInsets.fromLTRB(26, 32, 26, 36),
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(
+                          minHeight: constraints.maxHeight - 68,
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            SlideTransition(
+                              position: _toggleSlide,
+                              child: FadeTransition(
+                                opacity: _toggleFade,
+                                child: _ToggleBar(
+                                  current: _tab,
+                                  onSwitch: _switchTab,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 36),
+                            SlideTransition(
+                              position: _panelSlide,
+                              child: FadeTransition(
+                                opacity: _panelFade,
+                                child: _tab == 0
+                                    ? _LoginPanel(onSwitchToSignup: () => _switchTab(1))
+                                    : _SignupPanel(onSwitchToLogin: () => _switchTab(0)),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -433,19 +454,31 @@ class _FieldInputState extends State<_FieldInput>
   }
 }
 
-Widget _msgWidget(String text, Color color) {
+Widget _msgWidget(String text, Color color, {IconData? icon}) {
   if (text.isEmpty) return const SizedBox.shrink();
   return Padding(
     padding: const EdgeInsets.only(top: 14),
-    child: Text(
-      text,
-      textAlign: TextAlign.center,
-      style: TextStyle(
-        color: color,
-        fontSize: 12.5,
-        fontWeight: FontWeight.w500,
-        letterSpacing: 0.1,
-      ),
+    child: Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (icon != null) ...[
+          Icon(icon, size: 15, color: color),
+          const SizedBox(width: 6),
+        ],
+        Flexible(
+          child: Text(
+            text,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: color,
+              fontSize: 12.5,
+              fontWeight: FontWeight.w500,
+              letterSpacing: 0.1,
+            ),
+          ),
+        ),
+      ],
     ),
   );
 }
@@ -509,13 +542,16 @@ Widget _socialButton({
         children: [
           SizedBox(width: 17, height: 17, child: icon),
           const SizedBox(width: 10),
-          Text(
-            label,
-            style: const TextStyle(
-              color: Color(0xFF9999AA),
-              fontSize: 14,
-              fontWeight: FontWeight.w500,
-              letterSpacing: 0.1,
+          Flexible(
+            child: Text(
+              label,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Color(0xFF9999AA),
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+                letterSpacing: 0.1,
+              ),
             ),
           ),
         ],
@@ -563,6 +599,26 @@ Widget _divider() {
 }
 
 // ─────────────────────────────────────────
+//  BACKEND: SEND VERIFICATION CODE
+// ─────────────────────────────────────────
+Future<void> _triggerVerificationEmail({
+  required String uid,
+  required String email,
+  required String name,
+}) async {
+  try {
+    await http.post(
+      Uri.parse('$_backendBaseUrl/api/verification/send-code'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'uid': uid, 'email': email, 'name': name}),
+    );
+  } catch (_) {
+    // Best-effort: signup already succeeded. If this fails, the
+    // verify-code screen offers a "resend" option to try again.
+  }
+}
+
+// ─────────────────────────────────────────
 //  LOGIN PANEL
 // ─────────────────────────────────────────
 class _LoginPanel extends StatefulWidget {
@@ -581,9 +637,10 @@ class _LoginPanelState extends State<_LoginPanel> {
   bool   _errPass  = false;
   String _msg      = '';
   Color  _msgCol   = _errorRed;
+  IconData? _msgIcon;
 
-  void _showMsg(String t, Color c) =>
-      setState(() { _msg = t; _msgCol = c; });
+  void _showMsg(String t, Color c, {IconData? icon}) =>
+      setState(() { _msg = t; _msgCol = c; _msgIcon = icon; });
 
   Future<void> _doLogin() async {
     setState(() { _errEmail = false; _errPass = false; _msg = ''; });
@@ -591,17 +648,17 @@ class _LoginPanelState extends State<_LoginPanel> {
     final pass  = _passCtrl.text;
     if (email.isEmpty) {
       setState(() => _errEmail = true);
-      _showMsg('Enter your email.', _warnOrange); return;
+      _showMsg('Enter your email.', _warnOrange, icon: Icons.error_outline); return;
     }
     if (pass.isEmpty) {
       setState(() => _errPass = true);
-      _showMsg('Enter your password.', _warnOrange); return;
+      _showMsg('Enter your password.', _warnOrange, icon: Icons.error_outline); return;
     }
     setState(() => _loading = true);
     try {
       await FirebaseAuth.instance
           .signInWithEmailAndPassword(email: email, password: pass);
-      _showMsg('Signing in…', _successGrn);
+      _showMsg('Signing in…', _successGrn, icon: Icons.check_circle_outline);
       await Future.delayed(const Duration(milliseconds: 700));
       if (mounted) Navigator.pushReplacementNamed(context, '/home');
     } on FirebaseAuthException catch (e) {
@@ -609,11 +666,11 @@ class _LoginPanelState extends State<_LoginPanel> {
       final c = e.code;
       if (c == 'user-not-found' || c == 'wrong-password' || c == 'invalid-credential') {
         setState(() { _errEmail = true; _errPass = true; });
-        _showMsg('Incorrect email or password.', _errorRed);
+        _showMsg('Incorrect email or password.', _errorRed, icon: Icons.error_outline);
       } else if (c == 'too-many-requests') {
-        _showMsg('Too many attempts. Try later.', _errorRed);
+        _showMsg('Too many attempts. Try later.', _errorRed, icon: Icons.error_outline);
       } else {
-        _showMsg('Something went wrong.', _errorRed);
+        _showMsg('Something went wrong.', _errorRed, icon: Icons.error_outline);
       }
     }
   }
@@ -631,7 +688,7 @@ class _LoginPanelState extends State<_LoginPanel> {
       await FirebaseAuth.instance.signInWithCredential(cred);
       if (mounted) Navigator.pushReplacementNamed(context, '/home');
     } catch (_) {
-      _showMsg('Google sign-in failed. Try again.', _errorRed);
+      _showMsg('Google sign-in failed. Try again.', _errorRed, icon: Icons.error_outline);
     }
   }
 
@@ -649,7 +706,7 @@ class _LoginPanelState extends State<_LoginPanel> {
       // await FirebaseAuth.instance.signInWithCredential(oauthCredential);
       // if (mounted) Navigator.pushReplacementNamed(context, '/home');
     } catch (_) {
-      _showMsg('Apple sign-in failed. Try again.', _errorRed);
+      _showMsg('Apple sign-in failed. Try again.', _errorRed, icon: Icons.error_outline);
     }
   }
 
@@ -657,13 +714,13 @@ class _LoginPanelState extends State<_LoginPanel> {
     final email = _emailCtrl.text.trim();
     if (email.isEmpty) {
       setState(() => _errEmail = true);
-      _showMsg('Enter your email first.', _warnOrange); return;
+      _showMsg('Enter your email first.', _warnOrange, icon: Icons.error_outline); return;
     }
     try {
       await FirebaseAuth.instance.sendPasswordResetEmail(email: email);
-      _showMsg('Reset link sent — check your inbox or spam/junk messages.', _successGrn);
+      _showMsg('Reset link sent — check your inbox or spam folder.', _successGrn, icon: Icons.check_circle_outline);
     } on FirebaseAuthException catch (e) {
-      _showMsg(e.message ?? 'Error sending reset.', _errorRed);
+      _showMsg(e.message ?? 'Error sending reset.', _errorRed, icon: Icons.error_outline);
     }
   }
 
@@ -720,30 +777,36 @@ class _LoginPanelState extends State<_LoginPanel> {
 
         _submitButton(label: 'Login', loading: _loading, onTap: _doLogin),
 
-        if (_msg.isNotEmpty) _msgWidget(_msg, _msgCol),
+        if (_msg.isNotEmpty) _msgWidget(_msg, _msgCol, icon: _msgIcon),
         const SizedBox(height: 20),
 
         Center(
-          child: RichText(
-            text: TextSpan(
-              style: const TextStyle(color: Color(0xFF444455), fontSize: 13),
-              children: [
-                const TextSpan(text: 'No account yet? '),
-                WidgetSpan(
-                  child: GestureDetector(
-                    onTap: widget.onSwitchToSignup,
-                    child: const Text(
-                      'Sign up →',
+          child: Wrap(
+            alignment: WrapAlignment.center,
+            children: [
+              const Text(
+                'No account yet? ',
+                style: TextStyle(color: Color(0xFF444455), fontSize: 13),
+              ),
+              GestureDetector(
+                onTap: widget.onSwitchToSignup,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: const [
+                    Text(
+                      'Sign up',
                       style: TextStyle(
                         color: Color(0xFF8888AA),
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
-                  ),
+                    SizedBox(width: 3),
+                    Icon(Icons.arrow_forward, size: 13, color: Color(0xFF8888AA)),
+                  ],
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       ],
@@ -775,12 +838,13 @@ class _SignupPanelState extends State<_SignupPanel> {
   bool   _errConfirm = false;
   String _msg        = '';
   Color  _msgCol     = _errorRed;
+  IconData? _msgIcon;
   int    _strength   = 0;
   String _matchHint  = '';
   bool   _matchOk    = false;
 
-  void _showMsg(String t, Color c) =>
-      setState(() { _msg = t; _msgCol = c; });
+  void _showMsg(String t, Color c, {IconData? icon}) =>
+      setState(() { _msg = t; _msgCol = c; _msgIcon = icon; });
 
   int _getStrength(String v) {
     int s = 0;
@@ -799,10 +863,10 @@ class _SignupPanelState extends State<_SignupPanel> {
       if (c.isEmpty) {
         _matchHint = '';
       } else if (p == c) {
-        _matchHint = '✓ Passwords match';
+        _matchHint = 'Passwords match';
         _matchOk = true;
       } else {
-        _matchHint = '✗ Passwords don\'t match';
+        _matchHint = 'Passwords don\'t match';
         _matchOk = false;
       }
     });
@@ -820,19 +884,19 @@ class _SignupPanelState extends State<_SignupPanel> {
 
     if (name.length < 2) {
       setState(() => _errName = true);
-      _showMsg('Enter your username.', _warnOrange); return;
+      _showMsg('Enter your username.', _warnOrange, icon: Icons.error_outline); return;
     }
     if (!RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$').hasMatch(email)) {
       setState(() => _errEmail = true);
-      _showMsg('Enter a valid email.', _warnOrange); return;
+      _showMsg('Enter a valid email.', _warnOrange, icon: Icons.error_outline); return;
     }
     if (pass.length < 6) {
       setState(() => _errPass = true);
-      _showMsg('Password must be 6+ characters.', _warnOrange); return;
+      _showMsg('Password must be 6+ characters.', _warnOrange, icon: Icons.error_outline); return;
     }
     if (pass != confirm) {
       setState(() => _errConfirm = true);
-      _showMsg('Passwords do not match.', _errorRed); return;
+      _showMsg('Passwords do not match.', _errorRed, icon: Icons.error_outline); return;
     }
 
     setState(() => _loading = true);
@@ -842,16 +906,17 @@ class _SignupPanelState extends State<_SignupPanel> {
       final uid = cred.user!.uid;
       final db  = FirebaseFirestore.instance;
 
-     await db.collection('users').doc(uid).set({
-       'name': name,
-       'email': email,
-       'artistType': 'Independent Artist',
-       'genre': 'Afrobeats',
-       'country': 'Ghana',
-       'earnings': 0,
-       'emailOptIn': true,
-       'createdAt': FieldValue.serverTimestamp(),
-     });
+      await db.collection('users').doc(uid).set({
+        'name': name,
+        'email': email,
+        'artistType': 'Independent Artist',
+        'genre': 'Afrobeats',
+        'country': 'Ghana',
+        'earnings': 0,
+        'emailOptIn': true,
+        'emailVerified': false,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
 
       await db.collection('analytics').doc(uid).set({
         'totalStreams': 0,
@@ -866,9 +931,19 @@ class _SignupPanelState extends State<_SignupPanel> {
         'createdAt': FieldValue.serverTimestamp(),
       });
 
-      _showMsg('Account created! Welcome to 444Music 🎵', _successGrn);
-      await Future.delayed(const Duration(milliseconds: 1500));
-      if (mounted) Navigator.pushReplacementNamed(context, '/loading');
+      // Fire off the verification code email — best-effort, doesn't
+      // block navigation if it fails (user can resend from next screen).
+      await _triggerVerificationEmail(uid: uid, email: email, name: name);
+
+      _showMsg('Account created. Check your email for a code.', _successGrn, icon: Icons.check_circle_outline);
+      await Future.delayed(const Duration(milliseconds: 1200));
+      if (mounted) {
+        Navigator.pushReplacementNamed(
+          context,
+          '/verify-code',
+          arguments: {'uid': uid, 'email': email, 'name': name},
+        );
+      }
     } on FirebaseAuthException catch (e) {
       setState(() => _loading = false);
       const msgs = {
@@ -877,7 +952,7 @@ class _SignupPanelState extends State<_SignupPanel> {
         'weak-password':        'Choose a stronger password (min 6 chars).',
         'network-request-failed': 'Network error. Check your connection.',
       };
-      _showMsg(msgs[e.code] ?? e.message ?? 'Error.', _errorRed);
+      _showMsg(msgs[e.code] ?? e.message ?? 'Error.', _errorRed, icon: Icons.error_outline);
     }
   }
 
@@ -890,7 +965,7 @@ class _SignupPanelState extends State<_SignupPanel> {
     super.dispose();
   }
 
-  static const _strengthLabels = ['Too short', 'Weak', 'Fair', 'Strong 💪'];
+  static const _strengthLabels = ['Too short', 'Weak', 'Fair', 'Strong'];
   static const _strengthColors = [
     _errorRed, _warnOrange, Color(0xFFFACC15), _successGrn,
   ];
@@ -972,14 +1047,26 @@ class _SignupPanelState extends State<_SignupPanel> {
         if (_matchHint.isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(bottom: 10),
-            child: Text(
-              _matchHint,
-              style: TextStyle(
-                color: _matchOk ? _successGrn : _errorRed,
-                fontSize: 11,
-                fontWeight: FontWeight.w500,
-                letterSpacing: 0.1,
-              ),
+            child: Row(
+              children: [
+                Icon(
+                  _matchOk ? Icons.check_circle_outline : Icons.cancel_outlined,
+                  size: 13,
+                  color: _matchOk ? _successGrn : _errorRed,
+                ),
+                const SizedBox(width: 5),
+                Flexible(
+                  child: Text(
+                    _matchHint,
+                    style: TextStyle(
+                      color: _matchOk ? _successGrn : _errorRed,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                      letterSpacing: 0.1,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         const SizedBox(height: 6),
@@ -1024,30 +1111,36 @@ class _SignupPanelState extends State<_SignupPanel> {
           onTap: _agreed ? _doSignup : null,
         ),
 
-        if (_msg.isNotEmpty) _msgWidget(_msg, _msgCol),
+        if (_msg.isNotEmpty) _msgWidget(_msg, _msgCol, icon: _msgIcon),
         const SizedBox(height: 20),
 
         Center(
-          child: RichText(
-            text: TextSpan(
-              style: const TextStyle(color: Color(0xFF444455), fontSize: 13),
-              children: [
-                const TextSpan(text: 'Already have an account? '),
-                WidgetSpan(
-                  child: GestureDetector(
-                    onTap: widget.onSwitchToLogin,
-                    child: const Text(
-                      'Login →',
+          child: Wrap(
+            alignment: WrapAlignment.center,
+            children: [
+              const Text(
+                'Already have an account? ',
+                style: TextStyle(color: Color(0xFF444455), fontSize: 13),
+              ),
+              GestureDetector(
+                onTap: widget.onSwitchToLogin,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: const [
+                    Text(
+                      'Login',
                       style: TextStyle(
                         color: Color(0xFF8888AA),
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
-                  ),
+                    SizedBox(width: 3),
+                    Icon(Icons.arrow_forward, size: 13, color: Color(0xFF8888AA)),
+                  ],
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
         const SizedBox(height: 16),
