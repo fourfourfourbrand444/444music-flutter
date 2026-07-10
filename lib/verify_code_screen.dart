@@ -455,18 +455,6 @@ class _VerifyCodeScreenState extends State<VerifyCodeScreen>
               color: _hasError ? _errorRed.withOpacity(0.5) : _border,
             ),
           ),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: BorderSide(
-              color: _hasError ? _errorRed.withOpacity(0.5) : _border,
-            ),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: BorderSide(
-              color: _hasError ? _errorRed.withOpacity(0.5) : _border,
-            ),
-          ),
           focusedBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(12),
             borderSide: const BorderSide(color: _borderFoc, width: 1.4),
