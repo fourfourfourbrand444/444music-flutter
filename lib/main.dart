@@ -108,19 +108,23 @@ class _MyAppState extends State<MyApp> {
        '/rejection':       (_) => const RejectionScreen(),
        '/legal':           (_) => const LegalScreen(),
        '/withdrawal':      (context) => WithdrawalScreen(),
-       '/verify-code': (context) {
-         final args = ModalRoute.of(context)!.settings.arguments as Map;
-         return VerifyCodeScreen(
-           uid: args['uid'],
-           email: args['email'],
-           name: args['name'],
-         );
-       },
-     },
-// ════════════════════════════════════════════════════════════════════
-//  SPLASH SCREEN
-// ════════════════════════════════════════════════════════════════════
-class SplashScreen extends StatefulWidget {
+      '/verify-code': (context) {
+               final args = ModalRoute.of(context)!.settings.arguments as Map;
+               return VerifyCodeScreen(
+                 uid: args['uid'],
+                 email: args['email'],
+                 name: args['name'],
+               );
+             },
+           },
+          );
+        }
+      }
+
+      // ════════════════════════════════════════════════════════════════════
+      //  SPLASH SCREEN
+      // ════════════════════════════════════════════════════════════════════
+      class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
   @override
   State<SplashScreen> createState() => _SplashScreenState();
