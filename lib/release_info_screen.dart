@@ -25,12 +25,6 @@ const _greyDark    = Color(0xFF444444);
 const _green       = Color(0xFF4ADE80);
 const _red         = Color(0xFFF87171);
 
-// ─── EMAILJS CONFIG ──────────────────────────────────────────────────────────
-const _ejsServiceId = 'service_ydy0muo';
-const _ejsPublicKey = 'mwAZ_hDxmnBqkrTfA';
-const _ejsTemplate1 = 'template_i6qh7ew'; // admin notification
-const _ejsTemplate2 = 'template_m8g8n9q'; // user confirmation
-
 // ─── MODELS ─────────────────────────────────────────────────────────────────
 class ArtistResult {
   final String name;
@@ -123,10 +117,11 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
   DateTime? _releaseDate;
 
   // NEW — song details / ownership state
-  String _previouslyReleased        = 'No';       // Yes / No radio
-  String _version                   = 'Original'; // dropdown, required
-  String _vocalType                 = 'Vocals';   // Vocals / Instrumental radio
-  bool   _originalOwnershipConfirmed = false;      // agreement checkbox, required
+  String     _previouslyReleased        = 'No';       // Yes / No radio
+  String     _version                   = 'Original'; // dropdown, required
+  String     _vocalType                 = 'Vocals';   // Vocals / Instrumental radio
+  bool       _originalOwnershipConfirmed = false;      // agreement checkbox, required
+  DateTime?  _previousReleaseDate;                     // only used when previouslyReleased == 'Yes'
 
   final List<ArtistResult> _selectedArtists = [];
   List<ArtistResult>       _searchResults   = [];
@@ -297,7 +292,10 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
   void _removeCredit(String type, int idx) =>
       setState(() => _credits[type]!.removeAt(idx));
 
-  // ── EMAILJS ──────────────────────────────────────────────────────────────
+  // ── NOTIFICATIONS (own backend) ────────────────────────────────────────
+  static const _notifyUrl = 'https://444music-backend.bonto.run/api/submissions/notify';
+  static const _appSecret = 'e993b17f0762667e27d5298839dacff4a7409bb74e11e9ecaf0bb2bb647120a8';
+
   String _formatCredits(List<CreditEntry> list) {
     if (list.isEmpty) return 'None';
     final lines = list
@@ -312,44 +310,13 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
     return lines.isEmpty ? 'None' : lines.join('\n');
   }
 
-  /// Send a single EmailJS template via the REST API.
-  /// Returns true on success, false on failure.
-  Future<bool> _emailJSPost(
-      String templateId, Map<String, dynamic> params) async {
-    try {
-      final response = await http
-          .post(
-        Uri.parse('https://api.emailjs.com/api/v1.0/email/send'),
-        headers: {
-          'Content-Type': 'application/json',
-          // Required by EmailJS REST API — mirrors what the JS SDK sends
-          'origin': 'http://localhost',
-        },
-        body: jsonEncode({
-          'service_id':      _ejsServiceId,
-          'template_id':     templateId,
-          'user_id':         _ejsPublicKey,
-          'template_params': params,
-        }),
-      )
-          .timeout(const Duration(seconds: 15));
-
-      // EmailJS returns 200 with body "OK" on success
-      debugPrint(
-          '[EmailJS] template=$templateId  status=${response.statusCode}  body=${response.body}');
-      return response.statusCode == 200;
-    } catch (e) {
-      debugPrint('[EmailJS] ERROR template=$templateId  $e');
-      return false;
-    }
-  }
-
   Future<void> _sendEmails(Map<String, dynamic> data) async {
     final params = {
+      'email':          data['email'],
       'artist_name':    data['artistName'],
+      'release_title':  data['releaseTitle'],
       'featuring':      (data['featuring'] as String).isEmpty
           ? 'None' : data['featuring'],
-      'release_title':  data['releaseTitle'],
       'release_type':   data['releaseType'],
       'genre':          data['genre'],
       'language':       (data['language'] as String).isEmpty
@@ -360,7 +327,6 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
       'country':        data['country'],
       'phone':          (data['phone'] as String).isEmpty
           ? 'Not provided' : data['phone'],
-      'email':          data['email'],
       'label':          (data['label'] as String).isEmpty
           ? 'Independent' : data['label'],
       'copyright':      (data['copyright'] as String).isEmpty
@@ -374,6 +340,8 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
       // NEW — song details / ownership fields
       'version':               data['version'],
       'previously_released':   data['previouslyReleased'],
+      'previous_release_date': (data['previousReleaseDate'] as String).isEmpty
+          ? 'N/A' : data['previousReleaseDate'],
       'vocal_type':            data['vocalType'],
       'ownership_confirmed':   (data['ownershipConfirmed'] == true)
           ? 'Yes — confirmed original work'
@@ -388,9 +356,21 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
       'status':         'Pending',
     };
 
-    // Send sequentially so errors are easy to trace in logs
-    await _emailJSPost(_ejsTemplate1, params);
-    await _emailJSPost(_ejsTemplate2, params);
+    try {
+      final response = await http
+          .post(
+        Uri.parse(_notifyUrl),
+        headers: {
+          'Content-Type': 'application/json',
+          'x-app-secret': _appSecret,
+        },
+        body: jsonEncode(params),
+      )
+          .timeout(const Duration(seconds: 15));
+      debugPrint('[Notify] status=${response.statusCode} body=${response.body}');
+    } catch (e) {
+      debugPrint('[Notify] ERROR: $e');
+    }
   }
 
   // ── VALIDATION ───────────────────────────────────────────────────────────
@@ -409,6 +389,9 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
     if (_version.trim().isEmpty) return 'Please select a version for this track.';
     if (_previouslyReleased.trim().isEmpty) {
       return 'Please indicate if this song has been released before.';
+    }
+    if (_previouslyReleased == 'Yes' && _previousReleaseDate == null) {
+      return 'Please select the previous release date.';
     }
     if (!_originalOwnershipConfirmed) {
       return 'Please confirm you own this song / hold the rights to distribute it.';
@@ -450,10 +433,13 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
         'catalogNumber': _catalogCtrl.text.trim(),
         'lyrics':        _lyricsCtrl.text.trim(),
         // NEW — song details / ownership
-        'version':             _version,
-        'previouslyReleased':  _previouslyReleased,
-        'vocalType':           _vocalType,
-        'ownershipConfirmed':  _originalOwnershipConfirmed,
+        'version':               _version,
+        'previouslyReleased':    _previouslyReleased,
+        'previousReleaseDate':   _previouslyReleased == 'Yes'
+            ? (_previousReleaseDate?.toIso8601String() ?? '')
+            : '',
+        'vocalType':             _vocalType,
+        'ownershipConfirmed':    _originalOwnershipConfirmed,
         'credits': {
           'producer': _credits['producer']!
               .map((c) => {'name': c.name, 'role': c.role, 'ipi': c.ipi})
@@ -473,7 +459,7 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
       // 1 ── Save to Firestore
       await FirebaseFirestore.instance.collection('submissions').add(data);
 
-      // 2 ── Send emails via EmailJS
+      // 2 ── Send notification emails via our own backend
       await _sendEmails(data);
 
       setState(() { _submitting = false; _statusMsg = ''; });
@@ -559,24 +545,42 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
                       _sectionHeader(Icons.fact_check_outlined,
                           'Song Details & Ownership',
                           'Version, prior release status, and rights'),
-                      _buildRow([
-                        _dropdownField('Version', _version, _versionOptions,
-                                (v) => setState(() => _version = v!),
-                            required: true),
-                        _radioField(
-                          'Vocals or Instrumental',
-                          _vocalType,
-                          const ['Vocals', 'Instrumental'],
-                              (v) => setState(() => _vocalType = v),
-                        ),
-                      ]),
+                      // Version dropdown — full width, its own row
+                      _dropdownField('Version', _version, _versionOptions,
+                              (v) => setState(() => _version = v!),
+                          required: true),
+                      const SizedBox(height: 14),
+                      // Vocals / Instrumental — full width so pills never
+                      // get squeezed into a half-column and overflow
+                      _radioField(
+                        'Vocals or Instrumental',
+                        _vocalType,
+                        const ['Vocals', 'Instrumental'],
+                            (v) => setState(() => _vocalType = v),
+                      ),
                       const SizedBox(height: 14),
                       _radioField(
                         'Has this song been released before?',
                         _previouslyReleased,
                         const ['No', 'Yes'],
-                            (v) => setState(() => _previouslyReleased = v),
+                            (v) => setState(() {
+                          _previouslyReleased = v;
+                          // clear the stored date if the user switches back to "No"
+                          if (v == 'No') _previousReleaseDate = null;
+                        }),
                         required: true,
+                      ),
+                      // Conditionally shown — only when "Yes" is selected
+                      AnimatedSize(
+                        duration: const Duration(milliseconds: 220),
+                        curve: Curves.easeOut,
+                        alignment: Alignment.topCenter,
+                        child: _previouslyReleased == 'Yes'
+                            ? Padding(
+                          padding: const EdgeInsets.only(top: 14),
+                          child: _buildPreviousReleaseDateField(),
+                        )
+                            : const SizedBox(width: double.infinity),
                       ),
 
                       // ── Label & Rights ───────────────────────────────────
@@ -697,6 +701,7 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
             const SizedBox(width: 14),
             Expanded(
               child: Text('Create New Release',
+                  overflow: TextOverflow.ellipsis,
                   style: GoogleFonts.outfit(
                       color: _white,
                       fontSize: 17,
@@ -710,6 +715,7 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
                 border: Border.all(color: _border),
               ),
               child: Row(
+                mainAxisSize: MainAxisSize.min,
                 children: [
                   const Icon(Icons.lock_outline_rounded,
                       color: _grey, size: 10),
@@ -796,11 +802,13 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(title,
+                    overflow: TextOverflow.ellipsis,
                     style: GoogleFonts.outfit(
                         color: _white,
                         fontSize: 13,
                         fontWeight: FontWeight.w700)),
                 Text(desc,
+                    overflow: TextOverflow.ellipsis,
                     style: GoogleFonts.inter(
                         color: _greyDark, fontSize: 11)),
               ],
@@ -874,6 +882,7 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
   Widget _artistPill(ArtistResult a, int idx) {
     return Container(
       padding: const EdgeInsets.fromLTRB(6, 4, 8, 4),
+      constraints: const BoxConstraints(maxWidth: 220),
       decoration: BoxDecoration(
         color: _white10,
         borderRadius: BorderRadius.circular(99),
@@ -897,11 +906,14 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
                 : null,
           ),
           const SizedBox(width: 6),
-          Text(a.name,
-              style: GoogleFonts.inter(
-                  color: _white70,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w500)),
+          Flexible(
+            child: Text(a.name,
+                overflow: TextOverflow.ellipsis,
+                style: GoogleFonts.inter(
+                    color: _white70,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500)),
+          ),
           const SizedBox(width: 6),
           GestureDetector(
             onTap: () => setState(() => _selectedArtists.removeAt(idx)),
@@ -992,7 +1004,9 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
                   color: _grey, size: 18),
               style: GoogleFonts.inter(color: _white, fontSize: 14),
               items: options
-                  .map((o) => DropdownMenuItem(value: o, child: Text(o)))
+                  .map((o) => DropdownMenuItem(
+                  value: o,
+                  child: Text(o, overflow: TextOverflow.ellipsis)))
                   .toList(),
               onChanged: onChanged,
             ),
@@ -1002,8 +1016,10 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
     );
   }
 
-  // ── RADIO FIELD (NEW) ─────────────────────────────────────────────────────
+  // ── RADIO FIELD ────────────────────────────────────────────────────────────
   // Pill-style radio selector used for Yes/No and Vocals/Instrumental choices.
+  // Uses Wrap (not Row) so pills flow onto a new line instead of overflowing
+  // when the available width is tight — fully responsive, no RenderFlex errors.
   Widget _radioField(
       String label,
       String value,
@@ -1016,42 +1032,40 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
       children: [
         _fieldLabel(label, required: required),
         const SizedBox(height: 6),
-        Row(
+        Wrap(
+          spacing: 10,
+          runSpacing: 10,
           children: options.map((opt) {
             final selected = value == opt;
-            return Padding(
-              padding: EdgeInsets.only(
-                  right: opt == options.last ? 0 : 10),
-              child: GestureDetector(
-                onTap: () => onChanged(opt),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 120),
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 14, vertical: 12),
-                  decoration: BoxDecoration(
-                    color: selected ? _white : _input,
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(
-                        color: selected ? _white : _border),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        selected
-                            ? Icons.radio_button_checked_rounded
-                            : Icons.radio_button_unchecked_rounded,
-                        size: 15,
-                        color: selected ? _bg : _grey,
-                      ),
-                      const SizedBox(width: 7),
-                      Text(opt,
-                          style: GoogleFonts.inter(
-                              color: selected ? _bg : _white70,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600)),
-                    ],
-                  ),
+            return GestureDetector(
+              onTap: () => onChanged(opt),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 120),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 14, vertical: 12),
+                decoration: BoxDecoration(
+                  color: selected ? _white : _input,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                      color: selected ? _white : _border),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      selected
+                          ? Icons.radio_button_checked_rounded
+                          : Icons.radio_button_unchecked_rounded,
+                      size: 15,
+                      color: selected ? _bg : _grey,
+                    ),
+                    const SizedBox(width: 7),
+                    Text(opt,
+                        style: GoogleFonts.inter(
+                            color: selected ? _bg : _white70,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600)),
+                  ],
                 ),
               ),
             );
@@ -1061,7 +1075,71 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
     );
   }
 
-  // ── AGREEMENT CHECK (NEW) ─────────────────────────────────────────────────
+  // ── PREVIOUS RELEASE DATE FIELD (NEW) ─────────────────────────────────────
+  // Shown only when the user answers "Yes" to "Has this song been released before?"
+  Widget _buildPreviousReleaseDateField() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _fieldLabel('Previous Release Date', required: true),
+        const SizedBox(height: 6),
+        GestureDetector(
+          onTap: () async {
+            final now = DateTime.now();
+            final d = await showDatePicker(
+              context: context,
+              initialDate: _previousReleaseDate ?? now,
+              firstDate: DateTime(1980),
+              lastDate: now,
+              builder: (ctx, child) => Theme(
+                data: ThemeData.dark().copyWith(
+                  colorScheme: const ColorScheme.dark(
+                      primary: _white,
+                      onPrimary: _bg,
+                      surface: Color(0xFF1A1A1A)),
+                ),
+                child: child!,
+              ),
+            );
+            if (d != null) setState(() => _previousReleaseDate = d);
+          },
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+            decoration: BoxDecoration(
+              color: _input,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: _border),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.history_rounded, color: _grey, size: 16),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    _previousReleaseDate != null
+                        ? '${_previousReleaseDate!.day}/${_previousReleaseDate!.month}/${_previousReleaseDate!.year}'
+                        : 'Select when it was originally released',
+                    overflow: TextOverflow.ellipsis,
+                    style: GoogleFonts.inter(
+                        color: _previousReleaseDate != null
+                            ? _white
+                            : _greyDark,
+                        fontSize: 14),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 5),
+        Text('Used for prior-release / re-release documentation',
+            style: GoogleFonts.inter(color: _greyDark, fontSize: 11)),
+      ],
+    );
+  }
+
+  // ── AGREEMENT CHECK ───────────────────────────────────────────────────────
   Widget _buildAgreementCheck() {
     return Padding(
       padding: const EdgeInsets.only(top: 24),
@@ -1104,12 +1182,15 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
                   children: [
                     Row(
                       children: [
-                        Text('OWNERSHIP AGREEMENT',
-                            style: GoogleFonts.outfit(
-                                color: _greyDark,
-                                fontSize: 9,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: 1.2)),
+                        Flexible(
+                          child: Text('OWNERSHIP AGREEMENT',
+                              overflow: TextOverflow.ellipsis,
+                              style: GoogleFonts.outfit(
+                                  color: _greyDark,
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: 1.2)),
+                        ),
                         const SizedBox(width: 5),
                         Container(
                           width: 5, height: 5,
@@ -1174,13 +1255,16 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
                 const Icon(Icons.calendar_today_outlined,
                     color: _grey, size: 16),
                 const SizedBox(width: 10),
-                Text(
-                  _releaseDate != null
-                      ? '${_releaseDate!.day}/${_releaseDate!.month}/${_releaseDate!.year}'
-                      : 'Select release date',
-                  style: GoogleFonts.inter(
-                      color: _releaseDate != null ? _white : _greyDark,
-                      fontSize: 14),
+                Expanded(
+                  child: Text(
+                    _releaseDate != null
+                        ? '${_releaseDate!.day}/${_releaseDate!.month}/${_releaseDate!.year}'
+                        : 'Select release date',
+                    overflow: TextOverflow.ellipsis,
+                    style: GoogleFonts.inter(
+                        color: _releaseDate != null ? _white : _greyDark,
+                        fontSize: 14),
+                  ),
                 ),
               ],
             ),
@@ -1216,6 +1300,7 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
               const SizedBox(width: 8),
               Expanded(
                 child: Text(title,
+                    overflow: TextOverflow.ellipsis,
                     style: GoogleFonts.outfit(
                         color: _white70,
                         fontSize: 12,
@@ -1253,13 +1338,16 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
                 children: [
                   const Icon(Icons.add_rounded, color: _grey, size: 14),
                   const SizedBox(width: 7),
-                  Text(
-                    'Add ${title.split('&').first.trim()}',
-                    style: GoogleFonts.outfit(
-                        color: _grey,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.5),
+                  Flexible(
+                    child: Text(
+                      'Add ${title.split('&').first.trim()}',
+                      overflow: TextOverflow.ellipsis,
+                      style: GoogleFonts.outfit(
+                          color: _grey,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.5),
+                    ),
                   ),
                 ],
               ),
@@ -1334,8 +1422,9 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
                     color: _grey, size: 16),
                 style: GoogleFonts.inter(color: _white, fontSize: 13),
                 items: roles
-                    .map((r) =>
-                    DropdownMenuItem(value: r, child: Text(r)))
+                    .map((r) => DropdownMenuItem(
+                    value: r,
+                    child: Text(r, overflow: TextOverflow.ellipsis)))
                     .toList(),
                 onChanged: (v) => setState(() => entry.role = v ?? ''),
               ),
@@ -1439,12 +1528,15 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
             const Icon(Icons.arrow_forward_rounded,
                 color: _bg, size: 17),
             const SizedBox(width: 9),
-            Text('SAVE & CONTINUE TO STORES',
-                style: GoogleFonts.outfit(
-                    color: _bg,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 1.0)),
+            Flexible(
+              child: Text('SAVE & CONTINUE TO STORES',
+                  overflow: TextOverflow.ellipsis,
+                  style: GoogleFonts.outfit(
+                      color: _bg,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 1.0)),
+            ),
           ],
         ),
       ),
@@ -1453,13 +1545,13 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
 
   // ── TRUST STRIP ───────────────────────────────────────────────────────────
   Widget _buildTrustStrip() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
+    return Wrap(
+      alignment: WrapAlignment.center,
+      spacing: 20,
+      runSpacing: 10,
       children: [
         _trustItem(Icons.lock_outline_rounded, '256-bit SSL'),
-        const SizedBox(width: 20),
         _trustItem(Icons.shield_outlined, 'GDPR Compliant'),
-        const SizedBox(width: 20),
         _trustItem(Icons.verified_outlined, 'Secure Data'),
       ],
     );
@@ -1467,6 +1559,7 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
 
   Widget _trustItem(IconData icon, String label) {
     return Row(
+      mainAxisSize: MainAxisSize.min,
       children: [
         Icon(icon, color: _greyDark, size: 12),
         const SizedBox(width: 5),
@@ -1480,12 +1573,15 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
   Widget _fieldLabel(String label, {bool required = false}) {
     return Row(
       children: [
-        Text(label.toUpperCase(),
-            style: GoogleFonts.outfit(
-                color: _greyDark,
-                fontSize: 9,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 1.2)),
+        Flexible(
+          child: Text(label.toUpperCase(),
+              overflow: TextOverflow.ellipsis,
+              style: GoogleFonts.outfit(
+                  color: _greyDark,
+                  fontSize: 9,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.2)),
+        ),
         if (required) ...[
           const SizedBox(width: 5),
           Container(
@@ -1645,17 +1741,20 @@ class _ArtistDropdown extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(a.name,
+                      overflow: TextOverflow.ellipsis,
                       style: GoogleFonts.inter(
                           color: _white,
                           fontSize: 13,
                           fontWeight: FontWeight.w500)),
                   if (a.genre.isNotEmpty)
                     Text(a.genre,
+                        overflow: TextOverflow.ellipsis,
                         style: GoogleFonts.inter(
                             color: _grey, fontSize: 11)),
                 ],
               ),
             ),
+            const SizedBox(width: 8),
             Container(
               padding: const EdgeInsets.symmetric(
                   horizontal: 8, vertical: 3),
@@ -1699,16 +1798,19 @@ class _ArtistDropdown extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text('Add "$query" as new artist',
+                      overflow: TextOverflow.ellipsis,
                       style: GoogleFonts.inter(
                           color: _white,
                           fontSize: 13,
                           fontWeight: FontWeight.w500)),
                   Text('Type your name exactly as it appears on stores',
+                      overflow: TextOverflow.ellipsis,
                       style: GoogleFonts.inter(
                           color: _grey, fontSize: 11)),
                 ],
               ),
             ),
+            const SizedBox(width: 8),
             Container(
               padding: const EdgeInsets.symmetric(
                   horizontal: 8, vertical: 3),
