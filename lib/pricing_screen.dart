@@ -53,7 +53,7 @@ TextStyle _mono(double size, FontWeight weight, Color color,
 
 // ─── PLAN DATA ────────────────────────────────────────────────────────
 class _Plan {
-  final String badge, badgeIcon, planName, desc, price, period, btnLabel, btnRoute;
+  final String badge, badgeIcon, planName, desc, price, usdPrice, period, btnLabel, btnRoute;
   final bool isFeatured;
   final PlanStyle style;
   final List<_Feature> features;
@@ -66,6 +66,7 @@ class _Plan {
     required this.planName,
     required this.desc,
     required this.price,
+    required this.usdPrice,
     required this.period,
     required this.btnLabel,
     required this.btnRoute,
@@ -98,6 +99,7 @@ final _plans = [
     planName: 'Release as Draft',
     desc: 'Upload now, settle fees after your release starts earning.',
     price: '0',
+    usdPrice: '0',
     period: 'No upfront payment',
     btnLabel: 'Get Started Free',
     btnRoute: '/agreement',
@@ -124,7 +126,8 @@ final _plans = [
     badgeIcon: 'fire',
     planName: 'Single',
     desc: 'Drop a track professionally with fast global delivery and store cover art.',
-    price: '39.99',
+    price: '39',
+    usdPrice: '3.41',
     period: 'One-time per release',
     btnLabel: 'Release Single',
     btnRoute: 'https://paystack.shop/pay/444musics',
@@ -152,7 +155,8 @@ final _plans = [
     badgeIcon: 'layers',
     planName: 'EP / Album',
     desc: 'Full project distribution with advanced reporting and priority support.',
-    price: '59.55',
+    price: '59',
+    usdPrice: '5.16',
     period: 'One-time per project',
     btnLabel: 'Release Project',
     btnRoute: 'https://paystack.shop/pay/a4uw9i8ov-',
@@ -180,6 +184,7 @@ final _plans = [
     planName: 'Artist Pro+',
     desc: 'Unlimited releases, promotion tools, and playlist pitching all year.',
     price: '350',
+    usdPrice: '30.59',
     period: 'per year',
     saveBadge: 'Save 40%',
     btnLabel: 'Get Artist Pro+',
@@ -225,6 +230,10 @@ const _faqs = [
   _FAQ(
     q: 'Can I upgrade my plan later?',
     a: 'Yes. You can upgrade at any time from your dashboard. Your existing releases remain active and all new features unlock immediately upon payment.',
+  ),
+  _FAQ(
+    q: 'Can I pay in US Dollars instead of Cedis?',
+    a: 'Yes. Prices are shown in both Ghanaian Cedis (GHC) and US Dollars so international artists know exactly what they will be charged. Payment can be made in either currency at checkout.',
   ),
 ];
 
@@ -374,6 +383,11 @@ class _PricingScreenState extends State<PricingScreen>
           Text(
             'Upload once. Reach millions. Keep every cent you earn — no hidden cuts, no annual surprises.',
             style: _outfit(14, FontWeight.w500, _grey, h: 1.6),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Prices shown in Ghana Cedis (GHC) with US Dollar equivalents for international artists.',
+            style: _outfit(12, FontWeight.w500, _greyDark, h: 1.5),
           ),
           const SizedBox(height: 28),
         ],
@@ -709,36 +723,52 @@ class _PlanCardState extends State<_PlanCard>
                       style: _outfit(13, FontWeight.w500, _grey, h: 1.55),
                     ),
                     const SizedBox(height: 22),
-                    // Price block
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.end,
+                    // Price block — GHC primary, USD equivalent alongside
+                    Wrap(
+                      crossAxisAlignment: WrapCrossAlignment.end,
+                      spacing: 8,
+                      runSpacing: 4,
                       children: [
-                        Text(
-                          'GHS',
-                          style: _outfit(15, FontWeight.w700, _white70),
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          plan.price,
-                          // Price number uses DM Mono for that data/code feel
-                          style: _mono(44, FontWeight.w500, _white),
-                        ),
-                        if (plan.saveBadge != null) ...[
-                          const SizedBox(width: 10),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 8, vertical: 3),
-                            decoration: BoxDecoration(
-                              color: _greenDim,
-                              borderRadius: BorderRadius.circular(99),
-                              border: Border.all(color: _greenBorder),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              'GHC',
+                              style: _outfit(15, FontWeight.w700, _white70),
                             ),
-                            child: Text(
-                              plan.saveBadge!,
-                              style: _outfit(11, FontWeight.w700, _green),
+                            const SizedBox(width: 4),
+                            Text(
+                              plan.price,
+                              // Price number uses DM Mono for that data/code feel
+                              style: _mono(44, FontWeight.w500, _white),
+                            ),
+                          ],
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: Text(
+                            '/ \$${plan.usdPrice}',
+                            style: _outfit(13, FontWeight.w600, _grey),
+                          ),
+                        ),
+                        if (plan.saveBadge != null)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 6),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: _greenDim,
+                                borderRadius: BorderRadius.circular(99),
+                                border: Border.all(color: _greenBorder),
+                              ),
+                              child: Text(
+                                plan.saveBadge!,
+                                style: _outfit(11, FontWeight.w700, _green),
+                              ),
                             ),
                           ),
-                        ],
                       ],
                     ),
                     const SizedBox(height: 4),
