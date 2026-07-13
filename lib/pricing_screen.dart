@@ -4,10 +4,13 @@
 //  Upload button → navigates here from home bottom nav
 // ═══════════════════════════════════════════════════════════════════
 import 'dart:ui';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:webview_flutter/webview_flutter.dart';
+import 'package:http/http.dart' as http;
 
 // ─── PALETTE (same as home) ──────────────────────────────────────────
 const _black      = Color(0xFF000000);
@@ -29,8 +32,11 @@ const _green      = Color(0xFF22C55E);
 const _greenDim   = Color(0x1F22C55E);
 const _greenBorder= Color(0x3322C55E);
 
+// ─── BACKEND CONFIG ───────────────────────────────────────────────────
+const _backendBase = 'https://444music-backend.bonto.run';
+const _successMarker = 'www.444musicdistro.com/payment-success';
+
 // ─── FONT HELPERS ────────────────────────────────────────────────────
-// Main font: Outfit (matches web upload page)
 TextStyle _outfit(double size, FontWeight weight, Color color,
     {double ls = 0, double h = 1.4}) =>
     GoogleFonts.outfit(
@@ -41,7 +47,6 @@ TextStyle _outfit(double size, FontWeight weight, Color color,
       height: h,
     );
 
-// Mono font: DM Mono (matches web upload page)
 TextStyle _mono(double size, FontWeight weight, Color color,
     {double ls = 0}) =>
     GoogleFonts.dmMono(
@@ -54,6 +59,7 @@ TextStyle _mono(double size, FontWeight weight, Color color,
 // ─── PLAN DATA ────────────────────────────────────────────────────────
 class _Plan {
   final String badge, badgeIcon, planName, desc, price, usdPrice, period, btnLabel, btnRoute;
+  final double amountGHS;
   final bool isFeatured;
   final PlanStyle style;
   final List<_Feature> features;
@@ -70,6 +76,7 @@ class _Plan {
     required this.period,
     required this.btnLabel,
     required this.btnRoute,
+    required this.amountGHS,
     required this.features,
     required this.stores,
     this.isFeatured = false,
@@ -103,6 +110,7 @@ final _plans = [
     period: 'No upfront payment',
     btnLabel: 'Get Started Free',
     btnRoute: '/agreement',
+    amountGHS: 0,
     style: PlanStyle.outline,
     features: [
       const _Feature('Upload unlimited songs as draft'),
@@ -126,11 +134,12 @@ final _plans = [
     badgeIcon: 'fire',
     planName: 'Single',
     desc: 'Drop a track professionally with fast global delivery and store cover art.',
-    price: '39',
+    price: '1',
     usdPrice: '3.41',
     period: 'One-time per release',
     btnLabel: 'Release Single',
-    btnRoute: 'https://paystack.shop/pay/444musics',
+    btnRoute: '',
+    amountGHS: 1,
     isFeatured: true,
     style: PlanStyle.solid,
     features: [
@@ -159,7 +168,8 @@ final _plans = [
     usdPrice: '5.16',
     period: 'One-time per project',
     btnLabel: 'Release Project',
-    btnRoute: 'https://paystack.shop/pay/a4uw9i8ov-',
+    btnRoute: '',
+    amountGHS: 59,
     style: PlanStyle.outline,
     features: [
       const _Feature('Up to 20 tracks per project'),
@@ -178,35 +188,6 @@ final _plans = [
       _StoreChip(Icons.headphones_rounded, 'Tidal'),
     ],
   ),
-  _Plan(
-    badge: 'Annual',
-    badgeIcon: 'crown',
-    planName: 'Artist Pro+',
-    desc: 'Unlimited releases, promotion tools, and playlist pitching all year.',
-    price: '350',
-    usdPrice: '30.59',
-    period: 'per year',
-    saveBadge: 'Save 40%',
-    btnLabel: 'Get Artist Pro+',
-    btnRoute: 'https://paystack.shop/pay/year444',
-    style: PlanStyle.green,
-    features: [
-      const _Feature('Unlimited releases all year'),
-      const _Feature('Editorial playlist pitching'),
-      const _Feature('Smart Links for every release'),
-      const _Feature('Social media promotion kit'),
-      const _Feature('Pre-save campaign tools'),
-      const _Feature('Fan insights & audience analytics'),
-      const _Feature('Dedicated account manager'),
-      const _Feature('Verified artist badge'),
-    ],
-    stores: const [
-      _StoreChip(Icons.music_note_rounded, 'Spotify'),
-      _StoreChip(Icons.apple_rounded, 'Apple'),
-      _StoreChip(Icons.play_circle_filled_rounded, 'YouTube'),
-      _StoreChip(Icons.music_video_rounded, 'TikTok'),
-    ],
-  ),
 ];
 
 // ─── FAQ DATA ─────────────────────────────────────────────────────────
@@ -217,19 +198,15 @@ const _faqs = [
   ),
   _FAQ(
     q: 'How long does it take for my music to go live?',
-    a: 'Standard delivery is 5–7 business days. Pro and Pro+ plans enjoy priority processing of 3–5 days. Stores like Spotify and Apple Music control final publishing timelines.',
+    a: 'Standard delivery is 5–7 business days. Pro plans enjoy priority processing of 3–5 days. Stores like Spotify and Apple Music control final publishing timelines.',
   ),
   _FAQ(
     q: 'Do you take any percentage of my royalties?',
-    a: 'Never. You keep 100% of all streaming royalties across every store. Our revenue comes from the one-time or annual plan fees only.',
-  ),
-  _FAQ(
-    q: 'What is playlist pitching in the Pro+ plan?',
-    a: 'Our team submits your upcoming releases to independent playlist curators and Spotify\'s editorial pipeline on your behalf, giving you organic reach before release day.',
+    a: 'Never. You keep 100% of all streaming royalties across every store. Our revenue comes from the one-time plan fees only.',
   ),
   _FAQ(
     q: 'Can I upgrade my plan later?',
-    a: 'Yes. You can upgrade at any time from your dashboard. Your existing releases remain active and all new features unlock immediately upon payment.',
+    a: 'Yes. You can choose a different plan for each new release from your dashboard. Your existing releases remain active regardless of which plan you pick next.',
   ),
   _FAQ(
     q: 'Can I pay in US Dollars instead of Cedis?',
@@ -246,7 +223,9 @@ class _FAQ {
 //  PRICING SCREEN
 // ════════════════════════════════════════════════════════════════════
 class PricingScreen extends StatefulWidget {
-  const PricingScreen({super.key});
+  final String? submissionId;
+
+  const PricingScreen({super.key, this.submissionId});
 
   @override
   State<PricingScreen> createState() => _PricingScreenState();
@@ -284,12 +263,31 @@ class _PricingScreenState extends State<PricingScreen>
   }
 
   Future<void> _handlePlanTap(_Plan plan) async {
-    if (plan.btnRoute.startsWith('http')) {
-      final uri = Uri.parse(plan.btnRoute);
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } else {
+    if (plan.amountGHS == 0) {
       Navigator.pushNamed(context, plan.btnRoute);
+      return;
     }
+
+    if (widget.submissionId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please submit your release details first.')),
+      );
+      return;
+    }
+
+    final email = FirebaseAuth.instance.currentUser?.email ?? '';
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PaymentWebViewScreen(
+          amountGHS: plan.amountGHS,
+          submissionId: widget.submissionId!,
+          email: email,
+          successRouteName: '/upload',
+        ),
+      ),
+    );
   }
 
   @override
@@ -354,7 +352,6 @@ class _PricingScreenState extends State<PricingScreen>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Eyebrow pill
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
@@ -696,7 +693,6 @@ class _PlanCardState extends State<_PlanCard>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Badge row
                     Row(
                       children: [
                         _Badge(plan: plan),
@@ -723,7 +719,6 @@ class _PlanCardState extends State<_PlanCard>
                       style: _outfit(13, FontWeight.w500, _grey, h: 1.55),
                     ),
                     const SizedBox(height: 22),
-                    // Price block — GHC primary, USD equivalent alongside
                     Wrap(
                       crossAxisAlignment: WrapCrossAlignment.end,
                       spacing: 8,
@@ -740,7 +735,6 @@ class _PlanCardState extends State<_PlanCard>
                             const SizedBox(width: 4),
                             Text(
                               plan.price,
-                              // Price number uses DM Mono for that data/code feel
                               style: _mono(44, FontWeight.w500, _white),
                             ),
                           ],
@@ -1003,17 +997,14 @@ class _PlanButtonState extends State<_PlanButton> {
 //  COMPARISON TABLE
 // ════════════════════════════════════════════════════════════════════
 class _CompareTable extends StatelessWidget {
-  static const _headers = ['Feature', 'Starter', 'Single', 'EP / Album', 'Pro+'];
+  static const _headers = ['Feature', 'Starter', 'Single', 'EP / Album'];
   static const _rows = [
-    ['Store Distribution', '100+', '100+', '100+', '100+'],
-    ['Royalty Split', '100%', '100%', '100%', '100%'],
-    ['Releases', '1', '1 Single', '1 Project', 'Unlimited'],
-    ['Free ISRC & UPC', 'yes', 'yes', 'yes', 'yes'],
-    ['Analytics', 'Basic', 'Standard', 'Advanced', 'Full + Fan'],
-    ['Playlist Pitching', 'no', 'no', 'no', 'yes'],
-    ['Smart Links', 'no', 'no', 'no', 'yes'],
-    ['Promotion Kit', 'no', 'no', 'no', 'yes'],
-    ['Support', 'Community', 'Email', 'Priority', 'Dedicated'],
+    ['Store Distribution', '100+', '100+', '100+'],
+    ['Royalty Split', '100%', '100%', '100%'],
+    ['Releases', '1', '1 Single', '1 Project'],
+    ['Free ISRC & UPC', 'yes', 'yes', 'yes'],
+    ['Analytics', 'Basic', 'Standard', 'Advanced'],
+    ['Support', 'Community', 'Email', 'Priority'],
   ];
 
   const _CompareTable();
@@ -1026,10 +1017,8 @@ class _CompareTable extends StatelessWidget {
         1: FixedColumnWidth(72),
         2: FixedColumnWidth(72),
         3: FixedColumnWidth(88),
-        4: FixedColumnWidth(80),
       },
       children: [
-        // Header row
         TableRow(
           decoration: const BoxDecoration(
             color: _black3,
@@ -1050,7 +1039,6 @@ class _CompareTable extends StatelessWidget {
             );
           }).toList(),
         ),
-        // Data rows
         ..._rows.map((row) {
           return TableRow(
             decoration: BoxDecoration(
@@ -1072,7 +1060,6 @@ class _CompareTable extends StatelessWidget {
               } else {
                 child = Text(
                   val,
-                  // Table data values use DM Mono for that structured data feel
                   style: e.key == 0
                       ? _outfit(12, isHighlighted ? FontWeight.w700 : FontWeight.w500,
                       isHighlighted ? _white : _white70)
@@ -1159,6 +1146,133 @@ class _FaqItem extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  IN-APP PAYMENT SCREEN (WebView)
+//  Opens Paystack checkout INSIDE the app instead of an outside
+//  browser, and auto-navigates forward once payment succeeds.
+// ════════════════════════════════════════════════════════════════════
+class PaymentWebViewScreen extends StatefulWidget {
+  final double amountGHS;
+  final String submissionId;
+  final String email;
+  final String successRouteName;
+
+  const PaymentWebViewScreen({
+    super.key,
+    required this.amountGHS,
+    required this.submissionId,
+    required this.email,
+    required this.successRouteName,
+  });
+
+  @override
+  State<PaymentWebViewScreen> createState() => _PaymentWebViewScreenState();
+}
+
+class _PaymentWebViewScreenState extends State<PaymentWebViewScreen> {
+  WebViewController? _controller;
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _createPaymentLink();
+  }
+
+  Future<void> _createPaymentLink() async {
+    try {
+      final response = await http.post(
+        Uri.parse('$_backendBase/api/paystack/create-payment'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'email': widget.email,
+          'amountGHS': widget.amountGHS,
+          'submissionId': widget.submissionId,
+        }),
+      );
+
+      final data = jsonDecode(response.body);
+      final paymentUrl = data['paymentUrl'];
+
+      if (paymentUrl == null) {
+        setState(() {
+          _error = 'Could not start payment. Please try again.';
+          _loading = false;
+        });
+        return;
+      }
+
+      final controller = WebViewController()
+        ..setJavaScriptMode(JavaScriptMode.unrestricted)
+        ..setNavigationDelegate(
+          NavigationDelegate(
+            onNavigationRequest: (request) {
+              if (request.url.contains(_successMarker)) {
+                Navigator.of(context).pushReplacementNamed(
+                  widget.successRouteName,
+                  arguments: widget.submissionId,
+                );
+                return NavigationDecision.prevent;
+              }
+              return NavigationDecision.navigate;
+            },
+            onPageFinished: (_) {
+              if (mounted) setState(() => _loading = false);
+            },
+          ),
+        )
+        ..loadRequest(Uri.parse(paymentUrl));
+
+      setState(() => _controller = controller);
+    } catch (err) {
+      setState(() {
+        _error = 'Network error. Please check your connection and try again.';
+        _loading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: _black,
+      appBar: AppBar(
+        backgroundColor: _black,
+        title: Text('Complete Payment', style: _outfit(16, FontWeight.w700, _white)),
+        iconTheme: const IconThemeData(color: Colors.white),
+      ),
+      body: _error != null
+          ? Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(_error!, style: _outfit(13, FontWeight.w500, _white70)),
+                  const SizedBox(height: 16),
+                  ElevatedButton(
+                    onPressed: () {
+                      setState(() {
+                        _error = null;
+                        _loading = true;
+                      });
+                      _createPaymentLink();
+                    },
+                    child: const Text('Try Again'),
+                  ),
+                ],
+              ),
+            )
+          : Stack(
+              children: [
+                if (_controller != null) WebViewWidget(controller: _controller!),
+                if (_loading)
+                  const Center(child: CircularProgressIndicator(color: Colors.white)),
+              ],
+            ),
     );
   }
 }

@@ -21,11 +21,12 @@ dependencies:
   video_player: ^2.9.2
   share_plus: ^10.1.4
   app_links: ^7.1.1
-  http: ^1.2.1
+  http: ^1.2.0
   flutter_svg: ^2.0.10+1
   url_launcher: ^6.3.0
   google_sign_in: ^6.2.1
   cupertino_icons: ^1.0.8
+  webview_flutter: ^4.7.0
 
 flutter_launcher_icons:
   android: true
