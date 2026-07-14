@@ -4,6 +4,7 @@
 //  Upload button → navigates here from home bottom nav
 // ═══════════════════════════════════════════════════════════════════
 import 'dart:ui';
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -11,6 +12,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_flutter_android/webview_flutter_android.dart';
 import 'package:http/http.dart' as http;
 
 // ─── PALETTE (same as home) ──────────────────────────────────────────
@@ -240,7 +242,6 @@ class _PricingScreenState extends State<PricingScreen>
 
   final Set<int> _openFaqs = {};
 
-  // ── NEW: resume-unclaimed-payment state ──
   bool _checkingResume = true;
   String? _resumeReference;
 
@@ -268,8 +269,6 @@ class _PricingScreenState extends State<PricingScreen>
     super.dispose();
   }
 
-  // ── NEW: checks if this user already paid but never finished their
-  // release (app closed, connection dropped, etc.) ──
   Future<void> _checkForUnclaimedPayment() async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) {
@@ -295,8 +294,6 @@ class _PricingScreenState extends State<PricingScreen>
         setState(() => _checkingResume = false);
       }
     } catch (err) {
-      // If this check fails for any reason (offline, etc.), fail silently —
-      // the user can still pay normally, we just don't show the resume banner
       if (mounted) setState(() => _checkingResume = false);
     }
   }
@@ -355,7 +352,6 @@ class _PricingScreenState extends State<PricingScreen>
                   onBack: () => Navigator.pop(context),
                 ),
               ),
-              // ── NEW: resume banner, only shows if an unclaimed paid record exists ──
               if (!_checkingResume && _resumeReference != null)
                 SliverToBoxAdapter(child: _buildResumeBanner()),
               SliverToBoxAdapter(child: _buildHeader()),
@@ -393,7 +389,6 @@ class _PricingScreenState extends State<PricingScreen>
     );
   }
 
-  // ── NEW: resume banner widget ──
   Widget _buildResumeBanner() {
     return Container(
       margin: const EdgeInsets.fromLTRB(22, 16, 22, 0),
@@ -1251,6 +1246,9 @@ class _FaqItem extends StatelessWidget {
 //  IN-APP PAYMENT SCREEN (WebView)
 //  Opens Paystack checkout INSIDE the app instead of an outside
 //  browser, and auto-navigates forward once payment succeeds.
+//  FIXED: enables DOM storage (required by Paystack's checkout page,
+//  missing this caused the infinite loading spinner) and adds a
+//  20-second safety timeout so it never hangs forever again.
 // ════════════════════════════════════════════════════════════════════
 class PaymentWebViewScreen extends StatefulWidget {
   final double amountGHS;
@@ -1276,11 +1274,18 @@ class _PaymentWebViewScreenState extends State<PaymentWebViewScreen> {
   WebViewController? _controller;
   bool _loading = true;
   String? _error;
+  Timer? _stuckTimer;
 
   @override
   void initState() {
     super.initState();
     _createPaymentLink();
+  }
+
+  @override
+  void dispose() {
+    _stuckTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _createPaymentLink() async {
@@ -1313,6 +1318,7 @@ class _PaymentWebViewScreenState extends State<PaymentWebViewScreen> {
           NavigationDelegate(
             onNavigationRequest: (request) {
               if (request.url.contains(_successMarker)) {
+                _stuckTimer?.cancel();
                 Navigator.of(context).pushReplacementNamed(
                   widget.successRouteName,
                   arguments: widget.submissionId,
@@ -1322,11 +1328,31 @@ class _PaymentWebViewScreenState extends State<PaymentWebViewScreen> {
               return NavigationDecision.navigate;
             },
             onPageFinished: (_) {
+              _stuckTimer?.cancel();
               if (mounted) setState(() => _loading = false);
             },
           ),
         )
         ..loadRequest(Uri.parse(paymentUrl));
+
+      // FIX: Paystack's checkout page requires DOM storage (local storage)
+      // to render correctly. webview_flutter doesn't enable this by default,
+      // which caused the infinite loading spinner with no visible error.
+      if (controller.platform is AndroidWebViewController) {
+        (controller.platform as AndroidWebViewController)
+            .setDomStorageEnabled(true);
+      }
+
+      // FIX: safety net — if the page still somehow never finishes loading
+      // (slow network, Paystack outage, etc.), stop spinning forever after
+      // 20 seconds and show a clear error with a retry button instead.
+      _stuckTimer = Timer(const Duration(seconds: 20), () {
+        if (mounted && _loading) {
+          setState(() {
+            _error = 'This is taking longer than expected. Please check your connection and try again.';
+          });
+        }
+      });
 
       setState(() => _controller = controller);
     } catch (err) {
@@ -1348,22 +1374,27 @@ class _PaymentWebViewScreenState extends State<PaymentWebViewScreen> {
       ),
       body: _error != null
           ? Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(_error!, style: _outfit(13, FontWeight.w500, _white70)),
-                  const SizedBox(height: 16),
-                  ElevatedButton(
-                    onPressed: () {
-                      setState(() {
-                        _error = null;
-                        _loading = true;
-                      });
-                      _createPaymentLink();
-                    },
-                    child: const Text('Try Again'),
-                  ),
-                ],
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(_error!,
+                        textAlign: TextAlign.center,
+                        style: _outfit(13, FontWeight.w500, _white70)),
+                    const SizedBox(height: 16),
+                    ElevatedButton(
+                      onPressed: () {
+                        setState(() {
+                          _error = null;
+                          _loading = true;
+                        });
+                        _createPaymentLink();
+                      },
+                      child: const Text('Try Again'),
+                    ),
+                  ],
+                ),
               ),
             )
           : Stack(
