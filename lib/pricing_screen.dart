@@ -12,7 +12,6 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:webview_flutter/webview_flutter.dart';
-import 'package:webview_flutter_android/webview_flutter_android.dart';
 import 'package:http/http.dart' as http;
 
 // ─── PALETTE (same as home) ──────────────────────────────────────────
@@ -1246,9 +1245,6 @@ class _FaqItem extends StatelessWidget {
 //  IN-APP PAYMENT SCREEN (WebView)
 //  Opens Paystack checkout INSIDE the app instead of an outside
 //  browser, and auto-navigates forward once payment succeeds.
-//  FIXED: enables DOM storage (required by Paystack's checkout page,
-//  missing this caused the infinite loading spinner) and adds a
-//  20-second safety timeout so it never hangs forever again.
 // ════════════════════════════════════════════════════════════════════
 class PaymentWebViewScreen extends StatefulWidget {
   final double amountGHS;
@@ -1335,17 +1331,9 @@ class _PaymentWebViewScreenState extends State<PaymentWebViewScreen> {
         )
         ..loadRequest(Uri.parse(paymentUrl));
 
-      // FIX: Paystack's checkout page requires DOM storage (local storage)
-      // to render correctly. webview_flutter doesn't enable this by default,
-      // which caused the infinite loading spinner with no visible error.
-      if (controller.platform is AndroidWebViewController) {
-        (controller.platform as AndroidWebViewController)
-            .setDomStorageEnabled(true);
-      }
-
-      // FIX: safety net — if the page still somehow never finishes loading
-      // (slow network, Paystack outage, etc.), stop spinning forever after
-      // 20 seconds and show a clear error with a retry button instead.
+      // Safety net — if the page never finishes loading (slow network,
+      // Paystack outage, blocked resource, etc.), stop spinning forever
+      // after 20 seconds and show a clear error with a retry button.
       _stuckTimer = Timer(const Duration(seconds: 20), () {
         if (mounted && _loading) {
           setState(() {
