@@ -12,6 +12,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_flutter_android/webview_flutter_android.dart';
 import 'package:http/http.dart' as http;
 
 // ─── PALETTE (same as home) ──────────────────────────────────────────
@@ -1285,6 +1286,14 @@ class _PaymentWebViewScreenState extends State<PaymentWebViewScreen> {
   @override
   void initState() {
     super.initState();
+    // Enables chrome://inspect remote debugging on Android. Plug your
+    // phone into a computer with Chrome, open chrome://inspect there,
+    // and you'll see this WebView listed — you can open DevTools on it
+    // and read the actual console/network errors happening on the
+    // Paystack page in real time, instead of guessing.
+    if (WebViewPlatform.instance is AndroidWebViewPlatform) {
+      AndroidWebViewController.enableDebugging(true);
+    }
     _createPaymentLink();
   }
 
@@ -1349,8 +1358,26 @@ class _PaymentWebViewScreenState extends State<PaymentWebViewScreen> {
               if (mounted) setState(() => _loading = false);
             },
           ),
-        )
-        ..loadRequest(Uri.parse(paymentUrl));
+        );
+
+      // Paystack's checkout uses third-party payment-provider iframes
+      // (bank auth, OTP, etc.) which need third-party cookies to work.
+      // Android WebViews block these by default — without this, the
+      // checkout page's own JS can spin forever waiting on a cookie
+      // that never arrives, which matches the "stuck on a page spinner"
+      // symptom (as opposed to a stuck Flutter loading indicator).
+      if (controller.platform is AndroidWebViewController) {
+        final cookieManager = WebViewCookieManager();
+        if (cookieManager.platform is AndroidWebViewCookieManager) {
+          await (cookieManager.platform as AndroidWebViewCookieManager)
+              .setAcceptThirdPartyCookies(
+            controller.platform as AndroidWebViewController,
+            true,
+          );
+        }
+      }
+
+      await controller.loadRequest(Uri.parse(paymentUrl));
 
       // Safety net — if the page never finishes loading (slow network,
       // Paystack outage, blocked resource, etc.), stop spinning forever
