@@ -1245,6 +1245,16 @@ class _FaqItem extends StatelessWidget {
 //  IN-APP PAYMENT SCREEN (WebView)
 //  Opens Paystack checkout INSIDE the app instead of an outside
 //  browser, and auto-navigates forward once payment succeeds.
+//
+//  FIX APPLIED (per Paystack's official Flutter WebView guide):
+//   1. setUserAgent('Flutter;Webview') — Paystack's own sample code
+//      sets this exact value. Without it, some devices get served a
+//      broken/stripped checkout page that never finishes loading.
+//   2. Explicit handling of https://standard.paystack.co/close — after
+//      3DS/bank auth, Paystack redirects here and expects the host app
+//      to close the WebView itself, since window.close() does not work
+//      inside a WebView. Without this, bank/3DS payments hang forever
+//      on a "closed" page that never actually closes.
 // ════════════════════════════════════════════════════════════════════
 class PaymentWebViewScreen extends StatefulWidget {
   final double amountGHS;
@@ -1310,6 +1320,7 @@ class _PaymentWebViewScreenState extends State<PaymentWebViewScreen> {
 
       final controller = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
+        ..setUserAgent('Flutter;Webview')
         ..setNavigationDelegate(
           NavigationDelegate(
             onNavigationRequest: (request) {
@@ -1319,6 +1330,16 @@ class _PaymentWebViewScreenState extends State<PaymentWebViewScreen> {
                   widget.successRouteName,
                   arguments: widget.submissionId,
                 );
+                return NavigationDecision.prevent;
+              }
+              // 3DS / bank auth lands here when done. window.close() does
+              // not work inside a WebView, so we must close it ourselves
+              // or the screen sits here looking "stuck" forever.
+              if (request.url.contains('standard.paystack.co/close')) {
+                _stuckTimer?.cancel();
+                if (Navigator.of(context).canPop()) {
+                  Navigator.of(context).pop();
+                }
                 return NavigationDecision.prevent;
               }
               return NavigationDecision.navigate;
