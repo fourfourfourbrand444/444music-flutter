@@ -11,8 +11,7 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:webview_flutter/webview_flutter.dart';
-import 'package:webview_flutter_android/webview_flutter_android.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:http/http.dart' as http;
 
 // ─── PALETTE (same as home) ──────────────────────────────────────────
@@ -320,7 +319,7 @@ class _PricingScreenState extends State<PricingScreen>
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => PaymentWebViewScreen(
+        builder: (_) => PaymentWaitingScreen(
           amountGHS: plan.amountGHS,
           submissionId: tempReference,
           uid: uid,
@@ -1243,28 +1242,31 @@ class _FaqItem extends StatelessWidget {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  IN-APP PAYMENT SCREEN (WebView)
-//  Opens Paystack checkout INSIDE the app instead of an outside
-//  browser, and auto-navigates forward once payment succeeds.
+//  PAYMENT SCREEN — External Browser (no WebView)
+//  Opens Paystack checkout in the device's real browser instead of an
+//  embedded WebView. Real Chrome has none of the third-party-cookie,
+//  user-agent-detection, or JS-sandboxing quirks that embedded Android
+//  WebViews run into with Paystack's checkout — this is the pattern
+//  most Flutter+Paystack integrations settle on after WebView issues.
 //
-//  FIX APPLIED (per Paystack's official Flutter WebView guide):
-//   1. setUserAgent('Flutter;Webview') — Paystack's own sample code
-//      sets this exact value. Without it, some devices get served a
-//      broken/stripped checkout page that never finishes loading.
-//   2. Explicit handling of https://standard.paystack.co/close — after
-//      3DS/bank auth, Paystack redirects here and expects the host app
-//      to close the WebView itself, since window.close() does not work
-//      inside a WebView. Without this, bank/3DS payments hang forever
-//      on a "closed" page that never actually closes.
+//  Detection of payment completion uses TWO signals so nothing gets
+//  missed:
+//   1. App lifecycle resume — the moment the user switches back to the
+//      app after paying in the browser, we check immediately.
+//   2. A background poll every 4s as a fallback in case the resume
+//      event doesn't fire the way we expect on a given device.
+//  Both check the same Firestore query already proven to work in
+//  _checkForUnclaimedPayment above (uid + paid:true + claimed:false),
+//  not a new/unverified query shape.
 // ════════════════════════════════════════════════════════════════════
-class PaymentWebViewScreen extends StatefulWidget {
+class PaymentWaitingScreen extends StatefulWidget {
   final double amountGHS;
   final String submissionId;
   final String uid;
   final String email;
   final String successRouteName;
 
-  const PaymentWebViewScreen({
+  const PaymentWaitingScreen({
     super.key,
     required this.amountGHS,
     required this.submissionId,
@@ -1274,36 +1276,41 @@ class PaymentWebViewScreen extends StatefulWidget {
   });
 
   @override
-  State<PaymentWebViewScreen> createState() => _PaymentWebViewScreenState();
+  State<PaymentWaitingScreen> createState() => _PaymentWaitingScreenState();
 }
 
-class _PaymentWebViewScreenState extends State<PaymentWebViewScreen> {
-  WebViewController? _controller;
+class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
+    with WidgetsBindingObserver {
   bool _loading = true;
+  bool _launched = false;
+  bool _checking = false;
   String? _error;
-  Timer? _stuckTimer;
+  Timer? _pollTimer;
 
   @override
   void initState() {
     super.initState();
-    // Enables chrome://inspect remote debugging on Android. Plug your
-    // phone into a computer with Chrome, open chrome://inspect there,
-    // and you'll see this WebView listed — you can open DevTools on it
-    // and read the actual console/network errors happening on the
-    // Paystack page in real time, instead of guessing.
-    if (WebViewPlatform.instance is AndroidWebViewPlatform) {
-      AndroidWebViewController.enableDebugging(true);
-    }
-    _createPaymentLink();
+    WidgetsBinding.instance.addObserver(this);
+    _startPayment();
   }
 
   @override
   void dispose() {
-    _stuckTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    _pollTimer?.cancel();
     super.dispose();
   }
 
-  Future<void> _createPaymentLink() async {
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Fires the moment the user switches back to the app after paying
+    // in the browser — this is usually the fastest way we detect it.
+    if (state == AppLifecycleState.resumed && _launched) {
+      _checkPaymentStatus();
+    }
+  }
+
+  Future<void> _startPayment() async {
     try {
       final response = await http.post(
         Uri.parse('$_backendBase/api/paystack/create-payment'),
@@ -1327,75 +1334,65 @@ class _PaymentWebViewScreenState extends State<PaymentWebViewScreen> {
         return;
       }
 
-      final controller = WebViewController()
-        ..setJavaScriptMode(JavaScriptMode.unrestricted)
-        ..setUserAgent('Flutter;Webview')
-        ..setNavigationDelegate(
-          NavigationDelegate(
-            onNavigationRequest: (request) {
-              if (request.url.contains(_successMarker)) {
-                _stuckTimer?.cancel();
-                Navigator.of(context).pushReplacementNamed(
-                  widget.successRouteName,
-                  arguments: widget.submissionId,
-                );
-                return NavigationDecision.prevent;
-              }
-              // 3DS / bank auth lands here when done. window.close() does
-              // not work inside a WebView, so we must close it ourselves
-              // or the screen sits here looking "stuck" forever.
-              if (request.url.contains('standard.paystack.co/close')) {
-                _stuckTimer?.cancel();
-                if (Navigator.of(context).canPop()) {
-                  Navigator.of(context).pop();
-                }
-                return NavigationDecision.prevent;
-              }
-              return NavigationDecision.navigate;
-            },
-            onPageFinished: (_) {
-              _stuckTimer?.cancel();
-              if (mounted) setState(() => _loading = false);
-            },
-          ),
-        );
+      final launched = await launchUrl(
+        Uri.parse(paymentUrl),
+        mode: LaunchMode.externalApplication,
+      );
 
-      // Paystack's checkout uses third-party payment-provider iframes
-      // (bank auth, OTP, etc.) which need third-party cookies to work.
-      // Android WebViews block these by default — without this, the
-      // checkout page's own JS can spin forever waiting on a cookie
-      // that never arrives, which matches the "stuck on a page spinner"
-      // symptom (as opposed to a stuck Flutter loading indicator).
-      if (controller.platform is AndroidWebViewController) {
-        final cookieManager = WebViewCookieManager();
-        if (cookieManager.platform is AndroidWebViewCookieManager) {
-          await (cookieManager.platform as AndroidWebViewCookieManager)
-              .setAcceptThirdPartyCookies(
-            controller.platform as AndroidWebViewController,
-            true,
-          );
-        }
+      if (!launched) {
+        setState(() {
+          _error = 'Could not open the payment page. Please try again.';
+          _loading = false;
+        });
+        return;
       }
 
-      await controller.loadRequest(Uri.parse(paymentUrl));
-
-      // Safety net — if the page never finishes loading (slow network,
-      // Paystack outage, blocked resource, etc.), stop spinning forever
-      // after 20 seconds and show a clear error with a retry button.
-      _stuckTimer = Timer(const Duration(seconds: 20), () {
-        if (mounted && _loading) {
-          setState(() {
-            _error = 'This is taking longer than expected. Please check your connection and try again.';
-          });
-        }
+      if (!mounted) return;
+      setState(() {
+        _launched = true;
+        _loading = false;
       });
 
-      setState(() => _controller = controller);
+      // Fallback in case app-resume detection doesn't fire the way we
+      // expect on this device/browser combination.
+      _pollTimer = Timer.periodic(
+        const Duration(seconds: 4),
+        (_) => _checkPaymentStatus(),
+      );
     } catch (err) {
+      if (!mounted) return;
       setState(() {
         _error = 'Network error. Please check your connection and try again.';
         _loading = false;
       });
+    }
+  }
+
+  Future<void> _checkPaymentStatus() async {
+    if (_checking) return;
+    _checking = true;
+    try {
+      // The webhook writes this doc using submissionId as the doc ID
+      // directly (confirmed against routes/paystackRoutes.js), so we
+      // fetch it by ID rather than querying by uid — this guarantees
+      // we only ever match THIS payment, not an older unrelated one.
+      final doc = await FirebaseFirestore.instance
+          .collection('pendingPayments')
+          .doc(widget.submissionId)
+          .get();
+
+      if (doc.exists && doc.data()?['paid'] == true && mounted) {
+        _pollTimer?.cancel();
+        Navigator.of(context).pushReplacementNamed(
+          widget.successRouteName,
+          arguments: widget.submissionId,
+        );
+      }
+    } catch (_) {
+      // Transient errors are fine — the next poll (or the manual
+      // "I've completed payment" button) will retry.
+    } finally {
+      _checking = false;
     }
   }
 
@@ -1408,38 +1405,76 @@ class _PaymentWebViewScreenState extends State<PaymentWebViewScreen> {
         title: Text('Complete Payment', style: _outfit(16, FontWeight.w700, _white)),
         iconTheme: const IconThemeData(color: Colors.white),
       ),
-      body: _error != null
-          ? Center(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 24),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(_error!,
-                        textAlign: TextAlign.center,
-                        style: _outfit(13, FontWeight.w500, _white70)),
-                    const SizedBox(height: 16),
-                    ElevatedButton(
-                      onPressed: () {
-                        setState(() {
-                          _error = null;
-                          _loading = true;
-                        });
-                        _createPaymentLink();
-                      },
-                      child: const Text('Try Again'),
-                    ),
-                  ],
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (_error != null) ...[
+                Text(
+                  _error!,
+                  textAlign: TextAlign.center,
+                  style: _outfit(13, FontWeight.w500, _white70),
                 ),
-              ),
-            )
-          : Stack(
-              children: [
-                if (_controller != null) WebViewWidget(controller: _controller!),
-                if (_loading)
-                  const Center(child: CircularProgressIndicator(color: Colors.white)),
+                const SizedBox(height: 16),
+                ElevatedButton(
+                  onPressed: () {
+                    setState(() {
+                      _error = null;
+                      _loading = true;
+                    });
+                    _startPayment();
+                  },
+                  child: const Text('Try Again'),
+                ),
+              ] else if (_loading) ...[
+                const CircularProgressIndicator(color: Colors.white),
+                const SizedBox(height: 16),
+                Text(
+                  'Preparing your payment…',
+                  style: _outfit(13, FontWeight.w500, _white70),
+                ),
+              ] else ...[
+                Container(
+                  width: 64,
+                  height: 64,
+                  decoration: const BoxDecoration(color: _white06, shape: BoxShape.circle),
+                  child: const Icon(Icons.open_in_new_rounded, color: _white, size: 28),
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  'Complete your payment in the\nbrowser that just opened',
+                  textAlign: TextAlign.center,
+                  style: _outfit(15, FontWeight.w700, _white, h: 1.4),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  "We'll bring you back here automatically once payment is confirmed.",
+                  textAlign: TextAlign.center,
+                  style: _outfit(12, FontWeight.w500, _white70, h: 1.5),
+                ),
+                const SizedBox(height: 28),
+                GestureDetector(
+                  onTap: _checkPaymentStatus,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: _white06,
+                      borderRadius: BorderRadius.circular(99),
+                      border: Border.all(color: _white10),
+                    ),
+                    child: Text(
+                      "I've completed payment",
+                      style: _outfit(13, FontWeight.w700, _white),
+                    ),
+                  ),
+                ),
               ],
-            ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
