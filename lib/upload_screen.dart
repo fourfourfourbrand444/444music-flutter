@@ -114,6 +114,11 @@ class _UploadScreenState extends State<UploadScreen>
   bool   _allDone     = false;
   String _globalError = '';
 
+  // ── NEW: carries the payment reference forward from Pricing (or the
+  // resume banner) so Release Info can mark this submission as paid ──
+  String? _paymentReference;
+  bool _paymentArgLoaded = false;
+
   late AnimationController _entranceCtrl;
   late Animation<double>   _entranceFade;
   late Animation<Offset>   _entranceSlide;
@@ -140,6 +145,21 @@ class _UploadScreenState extends State<UploadScreen>
         begin: const Offset(0, 0.04), end: Offset.zero).animate(
         CurvedAnimation(parent: _entranceCtrl, curve: Curves.easeOutCubic));
     _entranceCtrl.forward();
+  }
+
+  // ── NEW: reads the payment reference passed via Navigator arguments.
+  // didChangeDependencies is the correct place for this (not initState),
+  // since ModalRoute isn't available yet in initState.
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_paymentArgLoaded) {
+      final args = ModalRoute.of(context)?.settings.arguments;
+      if (args is String && args.isNotEmpty) {
+        _paymentReference = args;
+      }
+      _paymentArgLoaded = true;
+    }
   }
 
   @override
@@ -379,7 +399,14 @@ class _UploadScreenState extends State<UploadScreen>
     if (!anyError) {
       setState(() => _allDone = true);
       await Future.delayed(const Duration(milliseconds: 1800));
-      if (mounted) Navigator.pushReplacementNamed(context, '/release-info');
+      // ── CHANGED: carry the payment reference forward to Release Info ──
+      if (mounted) {
+        Navigator.pushReplacementNamed(
+          context,
+          '/release-info',
+          arguments: _paymentReference,
+        );
+      }
     } else {
       setState(() =>
       _globalError = 'Some tracks failed. Check errors and retry.');

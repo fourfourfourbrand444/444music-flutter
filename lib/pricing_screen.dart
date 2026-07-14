@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:http/http.dart' as http;
 
@@ -239,6 +240,10 @@ class _PricingScreenState extends State<PricingScreen>
 
   final Set<int> _openFaqs = {};
 
+  // ── NEW: resume-unclaimed-payment state ──
+  bool _checkingResume = true;
+  String? _resumeReference;
+
   @override
   void initState() {
     super.initState();
@@ -254,6 +259,7 @@ class _PricingScreenState extends State<PricingScreen>
         Tween<Offset>(begin: const Offset(0, 0.05), end: Offset.zero).animate(
             CurvedAnimation(parent: _entranceCtrl, curve: Curves.easeOutCubic));
     _entranceCtrl.forward();
+    _checkForUnclaimedPayment();
   }
 
   @override
@@ -262,27 +268,65 @@ class _PricingScreenState extends State<PricingScreen>
     super.dispose();
   }
 
+  // ── NEW: checks if this user already paid but never finished their
+  // release (app closed, connection dropped, etc.) ──
+  Future<void> _checkForUnclaimedPayment() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
+      setState(() => _checkingResume = false);
+      return;
+    }
+
+    try {
+      final query = await FirebaseFirestore.instance
+          .collection('pendingPayments')
+          .where('uid', isEqualTo: uid)
+          .where('paid', isEqualTo: true)
+          .where('claimed', isEqualTo: false)
+          .limit(1)
+          .get();
+
+      if (query.docs.isNotEmpty && mounted) {
+        setState(() {
+          _resumeReference = query.docs.first.id;
+          _checkingResume = false;
+        });
+      } else if (mounted) {
+        setState(() => _checkingResume = false);
+      }
+    } catch (err) {
+      // If this check fails for any reason (offline, etc.), fail silently —
+      // the user can still pay normally, we just don't show the resume banner
+      if (mounted) setState(() => _checkingResume = false);
+    }
+  }
+
+  void _resumeRelease() {
+    if (_resumeReference == null) return;
+    Navigator.pushReplacementNamed(
+      context,
+      '/upload',
+      arguments: _resumeReference,
+    );
+  }
+
   Future<void> _handlePlanTap(_Plan plan) async {
     if (plan.amountGHS == 0) {
       Navigator.pushNamed(context, plan.btnRoute);
       return;
     }
 
-    if (widget.submissionId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please submit your release details first.')),
-      );
-      return;
-    }
-
     final email = FirebaseAuth.instance.currentUser?.email ?? '';
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    final tempReference = '${uid.isEmpty ? 'guest' : uid}_${DateTime.now().millisecondsSinceEpoch}';
 
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => PaymentWebViewScreen(
           amountGHS: plan.amountGHS,
-          submissionId: widget.submissionId!,
+          submissionId: tempReference,
+          uid: uid,
           email: email,
           successRouteName: '/upload',
         ),
@@ -311,6 +355,9 @@ class _PricingScreenState extends State<PricingScreen>
                   onBack: () => Navigator.pop(context),
                 ),
               ),
+              // ── NEW: resume banner, only shows if an unclaimed paid record exists ──
+              if (!_checkingResume && _resumeReference != null)
+                SliverToBoxAdapter(child: _buildResumeBanner()),
               SliverToBoxAdapter(child: _buildHeader()),
               SliverToBoxAdapter(child: _buildTrustStrip()),
               SliverToBoxAdapter(
@@ -342,6 +389,56 @@ class _PricingScreenState extends State<PricingScreen>
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  // ── NEW: resume banner widget ──
+  Widget _buildResumeBanner() {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(22, 16, 22, 0),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: _greenDim,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _greenBorder),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.check_circle_rounded, color: _green, size: 22),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'You have a completed payment ready',
+                  style: _outfit(13, FontWeight.w800, _white),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Continue your release without paying again.',
+                  style: _outfit(12, FontWeight.w500, _white70),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          GestureDetector(
+            onTap: _resumeRelease,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: _green,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                'Continue',
+                style: _outfit(12, FontWeight.w800, _black),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -928,15 +1025,6 @@ class _StoreChipWidget extends StatelessWidget {
 }
 
 // ── PLAN BUTTON ───────────────────────────────────────────────────────
-class _PlanButton extends StatefulWidget {
-  final _Plan plan;
-  final VoidCallback onTap;
-  const _PlanButton({required this.plan, required this.onTap});
-
-  @override
-  State<_PlanButton> createState() => _PlanButtonState();
-}
-
 class _PlanButtonState extends State<_PlanButton> {
   bool _pressed = false;
 
@@ -991,6 +1079,15 @@ class _PlanButtonState extends State<_PlanButton> {
       ),
     );
   }
+}
+
+class _PlanButton extends StatefulWidget {
+  final _Plan plan;
+  final VoidCallback onTap;
+  const _PlanButton({required this.plan, required this.onTap});
+
+  @override
+  State<_PlanButton> createState() => _PlanButtonState();
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -1158,6 +1255,7 @@ class _FaqItem extends StatelessWidget {
 class PaymentWebViewScreen extends StatefulWidget {
   final double amountGHS;
   final String submissionId;
+  final String uid;
   final String email;
   final String successRouteName;
 
@@ -1165,6 +1263,7 @@ class PaymentWebViewScreen extends StatefulWidget {
     super.key,
     required this.amountGHS,
     required this.submissionId,
+    required this.uid,
     required this.email,
     required this.successRouteName,
   });
@@ -1193,6 +1292,7 @@ class _PaymentWebViewScreenState extends State<PaymentWebViewScreen> {
           'email': widget.email,
           'amountGHS': widget.amountGHS,
           'submissionId': widget.submissionId,
+          'uid': widget.uid,
         }),
       );
 
