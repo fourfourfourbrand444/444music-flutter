@@ -7,18 +7,24 @@
 //   • Copyright / License Issue → ONLY a license/proof upload field.
 //     Leaving it blank and going back is fine — release just stays
 //     'Rejected' until they come back with proof.
-//   • Other → re-upload audio file + artist name (prefilled). Nothing else.
+//   • Other → re-upload BOTH the audio file (MP3) AND cover art
+//     (JPG/PNG). Artist Name and Release Title are shown read-only —
+//     pulled from the original submission — and cannot be edited here.
 //
 //  On submit: uploads to Cloudinary (same unsigned preset as UploadScreen),
 //  updates the SAME submissions/{id} doc back to status: 'Review', clears
-//  rejectionReason/rejectionCategory, and pings the admin backend so you
-//  know a fix came in. paid / paymentVerified are never touched — no
-//  second payment is ever triggered.
+//  rejectionReason/rejectionCategory, writes the new file URL(s), and
+//  pings the admin backend so the fixed version is picked up — same
+//  notify pipeline used for new submissions, which already emails
+//  444musicdistro@gmail.com. paid / paymentVerified are never touched —
+//  no second payment is ever triggered.
 //
-//  NOTE — file_picker was replaced with file_selector for the PDF
-//  license/proof upload (file_picker previously caused a build
-//  incompatibility on this project). Everything downstream — Cloudinary
-//  upload, Firestore update, admin notify — is unchanged.
+//  NOTE — file_picker was replaced with file_selector for BOTH the PDF
+//  license/proof upload AND the audio re-upload. The audio picker used
+//  to call ImagePicker().pickMedia(), which only supports images/video
+//  and could never actually select an MP3 — that was why "Resubmit"
+//  looked stuck: the file was silently never picked, so submit always
+//  failed its "file required" check.
 // ═══════════════════════════════════════════════════════════════════
 import 'dart:convert';
 import 'dart:io';
@@ -67,11 +73,20 @@ class _RejectionFixScreenState extends State<RejectionFixScreen> {
   Map<String, dynamic> _data = {};
   bool _dataLoaded = false;
 
-  late TextEditingController _artistCtrl;
+  // ── License / proof (Copyright category) ──
+  File?   _pickedLicenseFile;
+  String? _pickedLicenseFileName;
+  int?    _pickedLicenseFileSize;
 
-  File?   _pickedFile;
-  String? _pickedFileName;
-  int?    _pickedFileSize;
+  // ── Audio re-upload (Other category) ──
+  File?   _pickedAudioFile;
+  String? _pickedAudioFileName;
+  int?    _pickedAudioFileSize;
+
+  // ── Cover art re-upload (Other category) ──
+  File?   _pickedCoverFile;
+  String? _pickedCoverFileName;
+  int?    _pickedCoverFileSize;
 
   bool   _submitting = false;
   bool   _done       = false;
@@ -84,6 +99,8 @@ class _RejectionFixScreenState extends State<RejectionFixScreen> {
       _category.toLowerCase().contains('license');
   String get _reason => (_data['rejectionReason'] ?? '').toString().trim();
   String get _id      => (_data['_id'] ?? '').toString();
+  String get _artistName   => (_data['artistName'] ?? '—').toString();
+  String get _releaseTitle => (_data['releaseTitle'] ?? '—').toString();
 
   @override
   void didChangeDependencies() {
@@ -91,8 +108,6 @@ class _RejectionFixScreenState extends State<RejectionFixScreen> {
     if (!_dataLoaded) {
       final args = ModalRoute.of(context)?.settings.arguments;
       if (args is Map<String, dynamic>) _data = args;
-      _artistCtrl = TextEditingController(
-          text: (_data['artistName'] ?? '').toString());
       _dataLoaded = true;
       setState(() {});
     }
@@ -107,15 +122,16 @@ class _RejectionFixScreenState extends State<RejectionFixScreen> {
     ));
   }
 
-  @override
-  void dispose() {
-    _artistCtrl.dispose();
-    super.dispose();
-  }
-
   // ── PICKERS ─────────────────────────────────────────────────────────
+  // NOTE — mimeTypes is required alongside extensions for file_selector
+  // to work reliably on Android. extensions-only can silently fail to
+  // launch or show nothing selectable on some Android versions.
   Future<void> _pickLicenseFile() async {
-    const typeGroup = XTypeGroup(label: 'PDF', extensions: ['pdf']);
+    const typeGroup = XTypeGroup(
+      label: 'PDF',
+      extensions: ['pdf'],
+      mimeTypes: ['application/pdf'],
+    );
     final XFile? result = await openFile(acceptedTypeGroups: [typeGroup]);
     if (result == null) return;
 
@@ -129,33 +145,71 @@ class _RejectionFixScreenState extends State<RejectionFixScreen> {
     final size = await file.length();
 
     setState(() {
-      _pickedFile     = file;
-      _pickedFileName = result.name;
-      _pickedFileSize = size;
+      _pickedLicenseFile     = file;
+      _pickedLicenseFileName = result.name;
+      _pickedLicenseFileSize = size;
       _error = '';
     });
   }
 
+  // ── AUDIO PICKER — mirrors upload_screen.dart's _pickMp3() exactly,
+  // since that flow is proven working in production. Uses ImagePicker's
+  // pickMedia(), which on this project's target Android versions opens
+  // a picker that also surfaces non-media files (unlike a strict
+  // media-only picker on some other configurations).
   Future<void> _pickAudioFile() async {
-    final result = await ImagePicker().pickMedia();
-    if (result == null) return;
-    final ext = result.path.split('.').last.toLowerCase();
-    if (ext != 'mp3') {
-      setState(() => _error = '.$ext is not accepted — MP3 only.');
-      return;
+    try {
+      final result = await ImagePicker().pickMedia();
+      if (result == null) return;
+
+      final ext = result.path.split('.').last.toLowerCase();
+      if (ext != 'mp3') {
+        setState(() => _error = '.$ext is not accepted — MP3 only.');
+        return;
+      }
+
+      final file = File(result.path);
+      final size = await file.length();
+      if (size > 50 * 1024 * 1024) {
+        setState(() => _error = 'Audio file exceeds 50 MB limit.');
+        return;
+      }
+
+      setState(() {
+        _pickedAudioFile     = file;
+        _pickedAudioFileName = result.name;
+        _pickedAudioFileSize = size;
+        _error = '';
+      });
+    } catch (e) {
+      setState(() => _error = 'Could not pick file. Try again.');
     }
-    final file = File(result.path);
-    final size = await file.length();
-    if (size > 50 * 1024 * 1024) {
-      setState(() => _error = 'File exceeds 50 MB limit.');
-      return;
+  }
+
+  // ── COVER PICKER — mirrors upload_screen.dart's _pickCover() exactly.
+  Future<void> _pickCoverFile() async {
+    try {
+      final picker = ImagePicker();
+      final picked = await picker.pickImage(
+          source: ImageSource.gallery, imageQuality: 95);
+      if (picked == null) return;
+
+      final file = File(picked.path);
+      final size = await file.length();
+      if (size > 15 * 1024 * 1024) {
+        setState(() => _error = 'Cover art exceeds 15 MB limit.');
+        return;
+      }
+
+      setState(() {
+        _pickedCoverFile     = file;
+        _pickedCoverFileName = picked.name;
+        _pickedCoverFileSize = size;
+        _error = '';
+      });
+    } catch (e) {
+      setState(() => _error = 'Could not pick file. Try again.');
     }
-    setState(() {
-      _pickedFile     = file;
-      _pickedFileName = result.name;
-      _pickedFileSize = size;
-      _error = '';
-    });
   }
 
   // ── CLOUDINARY UPLOAD ───────────────────────────────────────────────
@@ -177,11 +231,117 @@ class _RejectionFixScreenState extends State<RejectionFixScreen> {
     }
   }
 
+  // ── FORMAT HELPERS — mirror submissionController.js's mapSubmissionForEmail
+  // so the resubmission email renders identically to the original one. ──
+  String _fmtCreditList(dynamic list) {
+    if (list is! List) return 'None';
+    final filtered = list
+        .where((c) => c is Map && (c['name'] ?? '').toString().trim().isNotEmpty)
+        .toList();
+    if (filtered.isEmpty) return 'None';
+    return filtered.map((c) {
+      var line = '• ${c['name']}';
+      if ((c['role'] ?? '').toString().isNotEmpty) line += ' — ${c['role']}';
+      if ((c['ipi'] ?? '').toString().isNotEmpty)  line += ' (IPI: ${c['ipi']})';
+      return line;
+    }).join('\n');
+  }
+
+  String _fmtFeaturing() {
+    final list = _data['featuredArtists'];
+    if (list is! List || list.isEmpty) return 'None';
+    return list
+        .whereType<Map>()
+        .map((f) {
+          var line = '${f['name']} (${f['role']})';
+          if ((f['url'] ?? '').toString().trim().isNotEmpty) line += ' — ${f['url']}';
+          return line;
+        })
+        .join('\n');
+  }
+
   // ── NOTIFY ADMIN OF THE FIX ─────────────────────────────────────────
+  // Builds the SAME shape of payload the backend's notifySubmission()
+  // expects for a normal submission (email + snake_case metadata fields),
+  // pulling everything except the fixed file(s) from the original
+  // submission data already on hand — since the backend has no separate
+  // "resubmission" code path, sending anything less complete (as before)
+  // either got rejected for a missing 'email', or arrived without the
+  // fixed file actually rendering in the email body.
   Future<void> _notifyAdmin({
-    required String fileUrl,
-    required String kind, // 'license' or 'audio'
+    required String kind, // 'license' or 'audio_and_cover'
+    String? licenseUrl,
+    String? audioUrl,
+    String? coverUrl,
   }) async {
+    final credits = _data['credits'];
+    final producerList = credits is Map ? credits['producer'] : null;
+    final musicianList = credits is Map ? credits['musician'] : null;
+    final writerList   = credits is Map ? credits['writer']   : null;
+
+    final resolvedCoverUrl = coverUrl ?? (_data['coverURL'] ?? '').toString();
+
+    List<Map<String, String>> resolvedAudioFiles;
+    if (audioUrl != null) {
+      resolvedAudioFiles = [
+        {'title': _releaseTitle, 'url': audioUrl},
+      ];
+    } else {
+      final existing = _data['audioFiles'];
+      resolvedAudioFiles = existing is List
+          ? existing
+              .whereType<Map>()
+              .map((m) => {
+                    'title': (m['title'] ?? _releaseTitle).toString(),
+                    'url':   (m['url'] ?? '').toString(),
+                  })
+              .where((m) => (m['url'] ?? '').isNotEmpty)
+              .toList()
+          : <Map<String, String>>[];
+    }
+
+    final body = {
+      'type':           'resubmission',
+      'submissionId':   _id,
+      'is_resend':      true,
+      'email':          (_data['email'] ?? '').toString(),
+      'artist_name':    _artistName,
+      'release_title':  _releaseTitle,
+      'featuring':      _fmtFeaturing(),
+      'release_type':   (_data['releaseType'] ?? '').toString(),
+      'genre':          (_data['genre'] ?? '').toString(),
+      'language':       (_data['language'] ?? 'Not specified').toString(),
+      'release_date':   (_data['releaseDate'] ?? 'Not set').toString(),
+      'explicit':       (_data['explicit'] ?? '').toString(),
+      'country':        (_data['country'] ?? '').toString(),
+      'phone':          (_data['phone'] ?? 'Not provided').toString(),
+      'label':          (_data['label'] ?? 'Independent').toString(),
+      'copyright':      (_data['copyright'] ?? 'Not provided').toString(),
+      'isrc':           (_data['isrc'] ?? 'Not provided').toString(),
+      'upc':            (_data['upc'] ?? 'Auto-assign').toString(),
+      'catalog_number': (_data['catalogNumber'] ?? 'Not provided').toString(),
+      'version':               (_data['version'] ?? '').toString(),
+      'previously_released':   (_data['previouslyReleased'] ?? '').toString(),
+      'previous_release_date': (_data['previousReleaseDate'] ?? 'N/A').toString(),
+      'vocal_type':            (_data['vocalType'] ?? '').toString(),
+      'ownership_confirmed':   (_data['ownershipConfirmed'] == true)
+          ? 'Yes — confirmed original work'
+          : 'Not confirmed',
+      'producers':      _fmtCreditList(producerList),
+      'musicians':      _fmtCreditList(musicianList),
+      'songwriters':    _fmtCreditList(writerList),
+      'lyrics':         (_data['lyrics'] ?? 'Not provided').toString(),
+      'payment_status': (_data['paid'] ?? 'Not confirmed').toString(),
+      'category':        _category,
+      'previous_reason': _reason,
+      'fix_kind':        kind,
+      if (licenseUrl != null) 'fix_license_url': licenseUrl,
+      'cover_url':   resolvedCoverUrl,
+      'audio_files': resolvedAudioFiles,
+      'status':        'Review',
+      'submitted_at':  DateTime.now().toLocal().toString(),
+    };
+
     try {
       final res = await http.post(
         Uri.parse(_notifyUrl),
@@ -189,18 +349,7 @@ class _RejectionFixScreenState extends State<RejectionFixScreen> {
           'Content-Type': 'application/json',
           'x-app-secret': _appSecret,
         },
-        body: jsonEncode({
-          'type':            'resubmission',
-          'submissionId':    _id,
-          'artist_name':     _artistCtrl.text.trim(),
-          'release_title':   _data['releaseTitle'] ?? '',
-          'category':        _category,
-          'previous_reason': _reason,
-          'fix_kind':        kind,
-          'fix_file_url':    fileUrl,
-          'status':          'Review',
-          'submitted_at':    DateTime.now().toLocal().toString(),
-        }),
+        body: jsonEncode(body),
       ).timeout(const Duration(seconds: 15));
       debugPrint('[Notify resubmit] status=${res.statusCode} body=${res.body}');
     } catch (e) {
@@ -214,51 +363,71 @@ class _RejectionFixScreenState extends State<RejectionFixScreen> {
       setState(() => _error = 'Missing submission reference. Please go back and try again.');
       return;
     }
-    if (_pickedFile == null) {
-      setState(() => _error = _isCopyright
-          ? 'Please upload your license / proof document.'
-          : 'Please re-upload the audio file.');
-      return;
-    }
-    if (!_isCopyright && _artistCtrl.text.trim().isEmpty) {
-      setState(() => _error = 'Artist name is required.');
-      return;
+
+    if (_isCopyright) {
+      if (_pickedLicenseFile == null) {
+        setState(() => _error = 'Please upload your license / proof document.');
+        return;
+      }
+    } else {
+      if (_pickedAudioFile == null || _pickedCoverFile == null) {
+        setState(() => _error = 'Please upload both the fixed MP3 and cover art.');
+        return;
+      }
     }
 
     setState(() { _submitting = true; _error = ''; });
 
-    final folder = _isCopyright ? 'license-proofs' : 'tracks';
-    final url    = await _uploadToCloudinary(_pickedFile!, folder);
-
-    if (url == null) {
-      setState(() {
-        _submitting = false;
-        _error = 'Upload failed. Check your connection and try again.';
-      });
-      return;
-    }
-
     try {
-      final update = <String, dynamic>{
-        'status':            'Review',
-        'rejectionReason':   FieldValue.delete(),
-        'rejectionCategory': FieldValue.delete(),
-        'resubmittedAt':     FieldValue.serverTimestamp(),
-      };
-
       if (_isCopyright) {
-        update['licenseURL'] = url;
+        final url = await _uploadToCloudinary(_pickedLicenseFile!, 'license-proofs');
+        if (url == null) {
+          setState(() {
+            _submitting = false;
+            _error = 'Upload failed. Check your connection and try again.';
+          });
+          return;
+        }
+
+        await FirebaseFirestore.instance.collection('submissions').doc(_id).update({
+          'status':            'Review',
+          'rejectionReason':   FieldValue.delete(),
+          'rejectionCategory': FieldValue.delete(),
+          'resubmittedAt':     FieldValue.serverTimestamp(),
+          'licenseURL':        url,
+        });
+
+        await _notifyAdmin(kind: 'license', licenseUrl: url);
       } else {
-        update['artistName']       = _artistCtrl.text.trim();
-        update['resubmittedAudioURL'] = url;
+        final audioUrl = await _uploadToCloudinary(_pickedAudioFile!, 'tracks');
+        if (audioUrl == null) {
+          setState(() {
+            _submitting = false;
+            _error = 'Audio upload failed. Check your connection and try again.';
+          });
+          return;
+        }
+
+        final coverUrl = await _uploadToCloudinary(_pickedCoverFile!, 'covers');
+        if (coverUrl == null) {
+          setState(() {
+            _submitting = false;
+            _error = 'Cover art upload failed. Check your connection and try again.';
+          });
+          return;
+        }
+
+        await FirebaseFirestore.instance.collection('submissions').doc(_id).update({
+          'status':                 'Review',
+          'rejectionReason':        FieldValue.delete(),
+          'rejectionCategory':      FieldValue.delete(),
+          'resubmittedAt':          FieldValue.serverTimestamp(),
+          'resubmittedAudioURL':    audioUrl,
+          'resubmittedCoverURL':    coverUrl,
+        });
+
+        await _notifyAdmin(kind: 'audio_and_cover', audioUrl: audioUrl, coverUrl: coverUrl);
       }
-
-      await FirebaseFirestore.instance
-          .collection('submissions')
-          .doc(_id)
-          .update(update);
-
-      await _notifyAdmin(fileUrl: url, kind: _isCopyright ? 'license' : 'audio');
 
       setState(() { _submitting = false; _done = true; });
       await Future.delayed(const Duration(milliseconds: 1400));
@@ -302,6 +471,8 @@ class _RejectionFixScreenState extends State<RejectionFixScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         _buildReasonCard(),
+                        const SizedBox(height: 20),
+                        _buildTrackDetailsCard(),
                         const SizedBox(height: 24),
                         if (_isCopyright)
                           _buildLicenseSection()
@@ -416,6 +587,47 @@ class _RejectionFixScreenState extends State<RejectionFixScreen> {
     );
   }
 
+  // ── READ-ONLY TRACK DETAILS — cannot be edited here ──────────────
+  Widget _buildTrackDetailsCard() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: _black3,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _white10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('SUBMISSION DETAILS',
+              style: GoogleFonts.outfit(
+                  color: _greyDark, fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 1.5)),
+          const SizedBox(height: 12),
+          _detailRow('Artist Name', _artistName),
+          const SizedBox(height: 10),
+          _detailRow('Release Title', _releaseTitle),
+        ],
+      ),
+    );
+  }
+
+  Widget _detailRow(String label, String value) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 110,
+          child: Text(label,
+              style: GoogleFonts.nunito(color: _grey, fontSize: 12.5, fontWeight: FontWeight.w600)),
+        ),
+        Expanded(
+          child: Text(value,
+              style: GoogleFonts.nunito(color: _white, fontSize: 13, fontWeight: FontWeight.w700)),
+        ),
+      ],
+    );
+  }
+
   // ── COPYRIGHT/LICENSE MODE — one field only ──────────────────────
   Widget _buildLicenseSection() {
     return Column(
@@ -433,42 +645,18 @@ class _RejectionFixScreenState extends State<RejectionFixScreen> {
           icon: Icons.picture_as_pdf_outlined,
           hint: 'Tap to select a PDF',
           sub: 'PDF only',
+          fileName: _pickedLicenseFileName,
+          fileSize: _pickedLicenseFileSize,
         ),
       ],
     );
   }
 
-  // ── OTHER MODE — audio re-upload + artist name only ──────────────
+  // ── OTHER MODE — audio re-upload + cover art re-upload ───────────
   Widget _buildOtherSection() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Artist Name',
-            style: GoogleFonts.nunito(
-                color: _white, fontSize: 14, fontWeight: FontWeight.w800)),
-        const SizedBox(height: 8),
-        TextField(
-          controller: _artistCtrl,
-          style: GoogleFonts.nunito(color: _white, fontSize: 14),
-          decoration: InputDecoration(
-            hintText: 'e.g. Burna Boy',
-            hintStyle: GoogleFonts.nunito(color: _greyDark, fontSize: 13),
-            filled: true,
-            fillColor: _black3,
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-            border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(10),
-                borderSide: const BorderSide(color: _white10)),
-            enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(10),
-                borderSide: const BorderSide(color: _white10)),
-            focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(10),
-                borderSide: const BorderSide(color: _white40)),
-          ),
-        ),
-        const SizedBox(height: 20),
         Text('Re-upload Audio File',
             style: GoogleFonts.nunito(
                 color: _white, fontSize: 14, fontWeight: FontWeight.w800)),
@@ -481,6 +669,24 @@ class _RejectionFixScreenState extends State<RejectionFixScreen> {
           icon: Icons.audio_file_rounded,
           hint: 'Tap to select MP3',
           sub: 'MP3 only',
+          fileName: _pickedAudioFileName,
+          fileSize: _pickedAudioFileSize,
+        ),
+        const SizedBox(height: 20),
+        Text('Re-upload Cover Art',
+            style: GoogleFonts.nunito(
+                color: _white, fontSize: 14, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 4),
+        Text('Fixed cover artwork — JPG or PNG, square, max 15 MB.',
+            style: GoogleFonts.nunito(color: _grey, fontSize: 12, height: 1.5)),
+        const SizedBox(height: 12),
+        _buildFileZone(
+          onTap: _pickCoverFile,
+          icon: Icons.image_rounded,
+          hint: 'Tap to select JPG or PNG',
+          sub: 'JPG / PNG only',
+          fileName: _pickedCoverFileName,
+          fileSize: _pickedCoverFileSize,
         ),
       ],
     );
@@ -491,8 +697,10 @@ class _RejectionFixScreenState extends State<RejectionFixScreen> {
     required IconData icon,
     required String hint,
     required String sub,
+    required String? fileName,
+    required int? fileSize,
   }) {
-    final hasFile = _pickedFile != null;
+    final hasFile = fileName != null;
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -519,12 +727,12 @@ class _RejectionFixScreenState extends State<RejectionFixScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(_pickedFileName ?? 'File selected',
+                      Text(fileName,
                           style: GoogleFonts.nunito(
                               color: _white, fontSize: 13, fontWeight: FontWeight.w700),
                           overflow: TextOverflow.ellipsis),
-                      if (_pickedFileSize != null)
-                        Text(_fmtBytes(_pickedFileSize!),
+                      if (fileSize != null)
+                        Text(_fmtBytes(fileSize),
                             style: GoogleFonts.nunito(color: _grey, fontSize: 11)),
                     ],
                   ),
