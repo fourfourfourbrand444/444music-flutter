@@ -14,6 +14,11 @@
 //  rejectionReason/rejectionCategory, and pings the admin backend so you
 //  know a fix came in. paid / paymentVerified are never touched — no
 //  second payment is ever triggered.
+//
+//  NOTE — file_picker was replaced with file_selector for the PDF
+//  license/proof upload (file_picker previously caused a build
+//  incompatibility on this project). Everything downstream — Cloudinary
+//  upload, Firestore update, admin notify — is unchanged.
 // ═══════════════════════════════════════════════════════════════════
 import 'dart:convert';
 import 'dart:io';
@@ -22,7 +27,7 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:file_picker/file_picker.dart';
+import 'package:file_selector/file_selector.dart';
 import 'package:image_picker/image_picker.dart';
 
 // ─── PALETTE (matches releases_screen.dart) ──────────────────────────
@@ -110,21 +115,23 @@ class _RejectionFixScreenState extends State<RejectionFixScreen> {
 
   // ── PICKERS ─────────────────────────────────────────────────────────
   Future<void> _pickLicenseFile() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['pdf'],
-    );
-    if (result == null || result.files.single.path == null) return;
-    final path = result.files.single.path!;
-    final ext  = result.files.single.extension?.toLowerCase() ?? '';
+    const typeGroup = XTypeGroup(label: 'PDF', extensions: ['pdf']);
+    final XFile? result = await openFile(acceptedTypeGroups: [typeGroup]);
+    if (result == null) return;
+
+    final ext = result.name.split('.').last.toLowerCase();
     if (ext != 'pdf') {
       setState(() => _error = 'Only PDF files are accepted.');
       return;
     }
+
+    final file = File(result.path);
+    final size = await file.length();
+
     setState(() {
-      _pickedFile     = File(path);
-      _pickedFileName = result.files.single.name;
-      _pickedFileSize = result.files.single.size;
+      _pickedFile     = file;
+      _pickedFileName = result.name;
+      _pickedFileSize = size;
       _error = '';
     });
   }

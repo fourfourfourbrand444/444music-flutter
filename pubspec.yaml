@@ -26,6 +26,7 @@ dependencies:
   url_launcher: ^6.2.0
   google_sign_in: ^6.2.1
   cupertino_icons: ^1.0.8
+  file_selector: ^1.0.3
 
 flutter_launcher_icons:
   android: true
