@@ -80,8 +80,8 @@ bool _isPaidValue(dynamic paidField) =>
 // 'EP' / 'Album') already captures the same intent.
 double _priceForReleaseType(dynamic releaseType) {
   final t = (releaseType ?? '').toString().toLowerCase();
-  if (t == 'single') return 1; // TEMP — testing only, restore to 39.99 before going live
-  return 1; // TEMP — testing only, restore to 69.99 before going live
+  if (t == 'single') return 39.99;
+  return 69.99; // EP or Album (or unset — safer to default to the higher tier)
 }
 
 // ─── UPC GENERATOR ──────────────────────────────────────────────────
