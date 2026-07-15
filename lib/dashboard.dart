@@ -2,6 +2,8 @@
 //  444MUSIC — My Releases Dashboard  (rebuilt)
 //  Theme: Black & White Luxury  |  Font: Nunito
 //  Fixes: no ? btn, cover art displays, reject/approve buttons visible
+//  FIXED: paid status now reads the real 'paid' field ("Paid"/"Unpaid")
+//  instead of the never-set 'paymentVerified' boolean
 // ═══════════════════════════════════════════════════════════════════
 import 'package:url_launcher/url_launcher.dart';
 import 'dart:convert';
@@ -67,6 +69,11 @@ String _statusLabel(String s) {
     default:         return 'Processing';
   }
 }
+
+// NEW — shared helper so every place that checks payment status reads
+// the same real field ('paid' as text "Paid"/"Unpaid"), case-insensitively
+bool _isPaidValue(dynamic paidField) =>
+    (paidField ?? '').toString().toLowerCase() == 'paid';
 
 // ─── UPC GENERATOR ──────────────────────────────────────────────────
 String _generateUPC() {
@@ -202,10 +209,10 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
       for (final doc in snap.docs) {
         final data = Map<String, dynamic>.from(doc.data());
         data['_id'] = doc.id;
-        if (data['paymentVerified'] == null) {
-          await doc.reference.update({'paymentVerified': false});
-          data['paymentVerified'] = false;
-        }
+        // REMOVED — this used to write a 'paymentVerified: false' field that
+        // nothing in the real payment flow ever reads or sets. The actual
+        // payment result lives in the 'paid' field ("Paid"/"Unpaid" text),
+        // which is set once in release_info_screen.dart's _submit().
         final status = (data['status'] ?? 'Pending').toString().toLowerCase();
         if (status == 'approved' && (data['upc'] == null || data['smartLinkURL'] == null)) {
           final upc = _generateUPC();
@@ -239,7 +246,8 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
   int get _totalReleases => _releases.length;
   int get _pendingCount  => _releases.where((r) => (r['status'] ?? '').toString().toLowerCase() == 'pending').length;
   int get _approvedCount => _releases.where((r) => (r['status'] ?? '').toString().toLowerCase() == 'approved').length;
-  int get _paidCount     => _releases.where((r) => r['paymentVerified'] == true).length;
+  // FIXED — was checking 'paymentVerified' (never set), now checks the real 'paid' field
+  int get _paidCount     => _releases.where((r) => _isPaidValue(r['paid'])).length;
 
   String get _firstName {
     final name = _user?.displayName ?? 'Artist';
@@ -626,7 +634,9 @@ class _ReleaseCardState extends State<_ReleaseCard> with SingleTickerProviderSta
   String get _status     => (widget.data['status'] ?? 'Pending').toString().trim();
   bool   get _isApproved => _status.toLowerCase() == 'approved';
   bool   get _isRejected => _status.toLowerCase() == 'rejected';
-  bool   get _isPaid     => widget.data['paymentVerified'] == true;
+  // FIXED — was checking 'paymentVerified' (never set anywhere), now checks
+  // the real 'paid' field which release_info_screen.dart actually sets
+  bool   get _isPaid     => _isPaidValue(widget.data['paid']);
 
   @override
   void initState() {
@@ -1291,7 +1301,8 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
       spacing: 8, runSpacing: 8,
       children: [
         _StatusBadge(status: _status, small: true),
-        _PaidBadge(paid: _data['paymentVerified'] == true),
+        // FIXED — was checking 'paymentVerified' (never set), now checks real 'paid' field
+        _PaidBadge(paid: _isPaidValue(_data['paid'])),
         if (submittedAt.isNotEmpty)
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
