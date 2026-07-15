@@ -21,7 +21,7 @@ import 'release_info_screen.dart';
 import 'select_screen.dart';
 import 'legal_screen.dart';
 import 'confirm_screen.dart';
-import 'screens/rejection_fix_screen.dart';
+import 'rejection_fix_screen.dart';
 import 'verify_code_screen.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
