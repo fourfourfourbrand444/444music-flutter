@@ -13,6 +13,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:http/http.dart' as http;
+import 'payment_success_screen.dart';
 
 // ─── PALETTE (same as home) ──────────────────────────────────────────
 const _black      = Color(0xFF000000);
@@ -1259,6 +1260,19 @@ class _FaqItem extends StatelessWidget {
 //  _checkForUnclaimedPayment above (uid + paid:true + claimed:false),
 //  not a new/unverified query shape.
 // ════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════
+//  PAYMENT SCREEN — External Browser (no WebView)
+//  Opens Paystack checkout in the device's real browser instead of an
+//  embedded WebView.
+//
+//  Payment confirmation uses DIRECT VERIFICATION against Paystack's
+//  own /transaction/verify API (via our backend's /verify-payment
+//  route) — NOT the webhook. The webhook may never fire (misconfigured
+//  URL, delivery failure, etc.) and silently leaves the app with no
+//  way to know payment succeeded. Direct verification asks Paystack
+//  "did THIS transaction succeed?" right when we need the answer, so
+//  it never depends on an external dashboard setting working correctly.
+// ════════════════════════════════════════════════════════════════════
 class PaymentWaitingScreen extends StatefulWidget {
   final double amountGHS;
   final String submissionId;
@@ -1283,8 +1297,10 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
     with WidgetsBindingObserver {
   bool _loading = true;
   bool _launched = false;
-  bool _checking = false;
+  bool _checkingStatus = false;
   String? _error;
+  String? _statusMessage;
+  String? _paystackReference;
   Timer? _pollTimer;
 
   @override
@@ -1304,9 +1320,9 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // Fires the moment the user switches back to the app after paying
-    // in the browser — this is usually the fastest way we detect it.
+    // in the browser — usually the fastest way we detect completion.
     if (state == AppLifecycleState.resumed && _launched) {
-      _checkPaymentStatus();
+      _verifyPayment();
     }
   }
 
@@ -1325,14 +1341,17 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
 
       final data = jsonDecode(response.body);
       final paymentUrl = data['paymentUrl'];
+      final reference = data['reference'];
 
-      if (paymentUrl == null) {
+      if (paymentUrl == null || reference == null) {
         setState(() {
           _error = 'Could not start payment. Please try again.';
           _loading = false;
         });
         return;
       }
+
+      _paystackReference = reference;
 
       final launched = await launchUrl(
         Uri.parse(paymentUrl),
@@ -1356,8 +1375,8 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
       // Fallback in case app-resume detection doesn't fire the way we
       // expect on this device/browser combination.
       _pollTimer = Timer.periodic(
-        const Duration(seconds: 4),
-        (_) => _checkPaymentStatus(),
+        const Duration(seconds: 5),
+        (_) => _verifyPayment(),
       );
     } catch (err) {
       if (!mounted) return;
@@ -1368,31 +1387,51 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
     }
   }
 
-  Future<void> _checkPaymentStatus() async {
-    if (_checking) return;
-    _checking = true;
-    try {
-      // The webhook writes this doc using submissionId as the doc ID
-      // directly (confirmed against routes/paystackRoutes.js), so we
-      // fetch it by ID rather than querying by uid — this guarantees
-      // we only ever match THIS payment, not an older unrelated one.
-      final doc = await FirebaseFirestore.instance
-          .collection('pendingPayments')
-          .doc(widget.submissionId)
-          .get();
+  // manual = true when the user themselves tapped "I've completed
+  // payment" — in that case we show a spinner and a clear message,
+  // so the tap is never silent again.
+  Future<void> _verifyPayment({bool manual = false}) async {
+    if (_checkingStatus || _paystackReference == null) return;
 
-      if (doc.exists && doc.data()?['paid'] == true && mounted) {
+    setState(() {
+      _checkingStatus = true;
+      if (manual) _statusMessage = null;
+    });
+
+    try {
+      final response = await http.get(
+        Uri.parse('$_backendBase/api/paystack/verify-payment/$_paystackReference'),
+      );
+      final data = jsonDecode(response.body);
+
+      if (data['paid'] == true) {
         _pollTimer?.cancel();
-        Navigator.of(context).pushReplacementNamed(
-          widget.successRouteName,
-          arguments: widget.submissionId,
-        );
+        if (mounted) {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (_) => PaymentSuccessScreen(
+                paymentReference: widget.submissionId,
+              ),
+            ),
+          );
+        }
+        return;
+      }
+
+      if (manual && mounted) {
+        setState(() {
+          _statusMessage =
+              "We haven't received your payment yet. If you just paid, wait a few seconds and tap again.";
+        });
       }
     } catch (_) {
-      // Transient errors are fine — the next poll (or the manual
-      // "I've completed payment" button) will retry.
+      if (manual && mounted) {
+        setState(() {
+          _statusMessage = 'Could not check payment status. Check your connection and try again.';
+        });
+      }
     } finally {
-      _checking = false;
+      if (mounted) setState(() => _checkingStatus = false);
     }
   }
 
@@ -1456,7 +1495,7 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
                 ),
                 const SizedBox(height: 28),
                 GestureDetector(
-                  onTap: _checkPaymentStatus,
+                  onTap: _checkingStatus ? null : () => _verifyPayment(manual: true),
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                     decoration: BoxDecoration(
@@ -1464,12 +1503,34 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
                       borderRadius: BorderRadius.circular(99),
                       border: Border.all(color: _white10),
                     ),
-                    child: Text(
-                      "I've completed payment",
-                      style: _outfit(13, FontWeight.w700, _white),
-                    ),
+                    child: _checkingStatus
+                        ? Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(
+                                    color: Colors.white, strokeWidth: 2),
+                              ),
+                              const SizedBox(width: 10),
+                              Text('Checking…', style: _outfit(13, FontWeight.w700, _white)),
+                            ],
+                          )
+                        : Text(
+                            "I've completed payment",
+                            style: _outfit(13, FontWeight.w700, _white),
+                          ),
                   ),
                 ),
+                if (_statusMessage != null) ...[
+                  const SizedBox(height: 14),
+                  Text(
+                    _statusMessage!,
+                    textAlign: TextAlign.center,
+                    style: _outfit(12, FontWeight.w500, _white70, h: 1.4),
+                  ),
+                ],
               ],
             ],
           ),

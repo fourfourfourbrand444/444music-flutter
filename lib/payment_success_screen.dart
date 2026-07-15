@@ -28,7 +28,17 @@ const _greenDim   = Color(0x1F22C55E);
 const _greenBorder= Color(0x3322C55E);
 
 class PaymentSuccessScreen extends StatefulWidget {
-  const PaymentSuccessScreen({super.key});
+  // NEW — the pendingPayments doc ID (a.k.a. submissionId) for the
+  // payment that just succeeded. Passed in directly when we navigate
+  // here ourselves (from PaymentWaitingScreen). If this screen is
+  // instead reached via a named route (e.g. the app's deep-link
+  // handlers in main.dart), we fall back to reading it from the
+  // route arguments in didChangeDependencies below — so either path
+  // in still works, as long as whoever navigates here actually
+  // supplies a reference.
+  final String? paymentReference;
+
+  const PaymentSuccessScreen({super.key, this.paymentReference});
 
   @override
   State<PaymentSuccessScreen> createState() => _PaymentSuccessScreenState();
@@ -53,6 +63,11 @@ class _PaymentSuccessScreenState extends State<PaymentSuccessScreen>
   late Animation<double> _particleFade;
 
   final String _time = _formatTime();
+
+  // NEW — resolved reference: constructor param wins, falls back to
+  // route arguments if this screen was pushed by name instead.
+  String? _reference;
+  bool _referenceResolved = false;
 
   static String _formatTime() {
     final d = DateTime.now();
@@ -116,6 +131,25 @@ class _PaymentSuccessScreenState extends State<PaymentSuccessScreen>
       _contentCtrl.forward();
       _particleCtrl.forward();
     });
+  }
+
+  // NEW — resolve the reference once we have a BuildContext. Constructor
+  // param takes priority (that's how PaymentWaitingScreen gets here); if
+  // that's null, this screen was probably reached by a named-route push
+  // (e.g. a deep link), so fall back to route arguments if any exist.
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_referenceResolved) {
+      _reference = widget.paymentReference;
+      if (_reference == null) {
+        final args = ModalRoute.of(context)?.settings.arguments;
+        if (args is String && args.isNotEmpty) {
+          _reference = args;
+        }
+      }
+      _referenceResolved = true;
+    }
   }
 
   @override
@@ -439,9 +473,13 @@ class _PaymentSuccessScreenState extends State<PaymentSuccessScreen>
                           _PrimaryButton(
                             label: 'Submit Your Music',
                             icon: Icons.cloud_upload_rounded,
+                            // NEW — carry the payment reference forward into
+                            // the upload flow so it can eventually reach
+                            // ReleaseInfoScreen and get marked as claimed.
                             onTap: () =>
                                 Navigator.pushReplacementNamed(
-                                    context, '/upload-files'),
+                                    context, '/upload-files',
+                                    arguments: _reference),
                           ),
                           const SizedBox(height: 12),
                           // Secondary — Go Home
