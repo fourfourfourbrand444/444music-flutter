@@ -300,10 +300,12 @@ class _PricingScreenState extends State<PricingScreen>
 
   void _resumeRelease() {
     if (_resumeReference == null) return;
-    Navigator.pushReplacementNamed(
-      context,
-      '/upload',
-      arguments: _resumeReference,
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (_) => PaymentSuccessScreen(
+          paymentReference: _resumeReference!,
+        ),
+      ),
     );
   }
 
@@ -335,105 +337,148 @@ class _PricingScreenState extends State<PricingScreen>
   Widget build(BuildContext context) {
     final top = MediaQuery.of(context).padding.top;
     final bottom = MediaQuery.of(context).padding.bottom;
+    final hasLockedPayment = !_checkingResume && _resumeReference != null;
 
-    return Scaffold(
-      backgroundColor: _black,
-      body: FadeTransition(
-        opacity: _entranceFade,
-        child: SlideTransition(
-          position: _entranceSlide,
-          child: CustomScrollView(
-            physics: const BouncingScrollPhysics(),
-            slivers: [
-              SliverPersistentHeader(
-                pinned: true,
-                delegate: _TopBarDelegate(
-                  topPadding: top,
-                  onBack: () => Navigator.pop(context),
-                ),
-              ),
-              if (!_checkingResume && _resumeReference != null)
-                SliverToBoxAdapter(child: _buildResumeBanner()),
-              SliverToBoxAdapter(child: _buildHeader()),
-              SliverToBoxAdapter(child: _buildTrustStrip()),
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 4),
-                  child: Text(
-                    'CHOOSE YOUR PLAN',
-                    style: _outfit(11, FontWeight.w700, _grey, ls: 2),
-                  ),
-                ),
-              ),
-              SliverPadding(
-                padding: const EdgeInsets.fromLTRB(22, 12, 22, 0),
-                sliver: SliverList(
-                  delegate: SliverChildBuilderDelegate(
-                        (_, i) => _PlanCard(
-                      plan: _plans[i],
-                      index: i,
-                      onTap: () => _handlePlanTap(_plans[i]),
+    return WillPopScope(
+      // Block the back button while a completed payment is waiting —
+      // forces the user through "Continue" instead of getting stuck
+      // back on a pricing page they can't fully use anyway.
+      onWillPop: () async => !hasLockedPayment,
+      child: Scaffold(
+        backgroundColor: _black,
+        body: Stack(
+          children: [
+            FadeTransition(
+              opacity: _entranceFade,
+              child: SlideTransition(
+                position: _entranceSlide,
+                child: CustomScrollView(
+                  physics: const BouncingScrollPhysics(),
+                  slivers: [
+                    SliverPersistentHeader(
+                      pinned: true,
+                      delegate: _TopBarDelegate(
+                        topPadding: top,
+                        onBack: () => Navigator.pop(context),
+                      ),
                     ),
-                    childCount: _plans.length,
-                  ),
+                    SliverToBoxAdapter(child: _buildHeader()),
+                    SliverToBoxAdapter(child: _buildTrustStrip()),
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 4),
+                        child: Text(
+                          'CHOOSE YOUR PLAN',
+                          style: _outfit(11, FontWeight.w700, _grey, ls: 2),
+                        ),
+                      ),
+                    ),
+                    SliverPadding(
+                      padding: const EdgeInsets.fromLTRB(22, 12, 22, 0),
+                      sliver: SliverList(
+                        delegate: SliverChildBuilderDelegate(
+                              (_, i) => _PlanCard(
+                            plan: _plans[i],
+                            index: i,
+                            onTap: () => _handlePlanTap(_plans[i]),
+                          ),
+                          childCount: _plans.length,
+                        ),
+                      ),
+                    ),
+                    SliverToBoxAdapter(child: _buildCompareSection()),
+                    SliverToBoxAdapter(child: _buildFaqSection()),
+                    SliverToBoxAdapter(child: _buildBottomBanner()),
+                    SliverToBoxAdapter(child: SizedBox(height: bottom + 30)),
+                  ],
                 ),
               ),
-              SliverToBoxAdapter(child: _buildCompareSection()),
-              SliverToBoxAdapter(child: _buildFaqSection()),
-              SliverToBoxAdapter(child: _buildBottomBanner()),
-              SliverToBoxAdapter(child: SizedBox(height: bottom + 30)),
-            ],
-          ),
+            ),
+            // ── Blocking payment overlay ──
+            // Appears automatically whenever a paid-but-unclaimed payment
+            // exists. Blurs and blocks the entire pricing page — the only
+            // way past it is tapping Continue, which routes straight into
+            // the release flow. Nothing behind it is reachable.
+            if (hasLockedPayment) _buildPaymentLockOverlay(),
+          ],
         ),
       ),
     );
   }
 
-  Widget _buildResumeBanner() {
-    return Container(
-      margin: const EdgeInsets.fromLTRB(22, 16, 22, 0),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: _greenDim,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _greenBorder),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.check_circle_rounded, color: _green, size: 22),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'You have a completed payment ready',
-                  style: _outfit(13, FontWeight.w800, _white),
+  Widget _buildPaymentLockOverlay() {
+    return Positioned.fill(
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () {}, // absorbs all taps, nothing behind is reachable
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+          child: Container(
+            color: _black.withValues(alpha: 0.72),
+            padding: const EdgeInsets.symmetric(horizontal: 32),
+            child: Center(
+              child: Container(
+                padding: const EdgeInsets.all(28),
+                decoration: BoxDecoration(
+                  color: _black1,
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(color: _greenBorder, width: 1.5),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  'Continue your release without paying again.',
-                  style: _outfit(12, FontWeight.w500, _white70),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 60,
+                      height: 60,
+                      decoration: const BoxDecoration(
+                        color: _greenDim,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.check_circle_rounded,
+                          color: _green, size: 32),
+                    ),
+                    const SizedBox(height: 20),
+                    Text(
+                      'Payment Completed',
+                      textAlign: TextAlign.center,
+                      style: _outfit(18, FontWeight.w800, _white),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      "You've already paid for a release. Continue to finish submitting it before starting anything new.",
+                      textAlign: TextAlign.center,
+                      style: _outfit(13, FontWeight.w500, _white70, h: 1.5),
+                    ),
+                    const SizedBox(height: 24),
+                    GestureDetector(
+                      onTap: _resumeRelease,
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(vertical: 15),
+                        decoration: BoxDecoration(
+                          color: _green,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Text(
+                              'CONTINUE',
+                              style: _outfit(13, FontWeight.w800, _black, ls: 1.2),
+                            ),
+                            const SizedBox(width: 8),
+                            const Icon(Icons.arrow_forward_rounded,
+                                color: _black, size: 16),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
-          const SizedBox(width: 10),
-          GestureDetector(
-            onTap: _resumeRelease,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color: _green,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Text(
-                'Continue',
-                style: _outfit(12, FontWeight.w800, _black),
-              ),
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -1245,33 +1290,8 @@ class _FaqItem extends StatelessWidget {
 // ════════════════════════════════════════════════════════════════════
 //  PAYMENT SCREEN — External Browser (no WebView)
 //  Opens Paystack checkout in the device's real browser instead of an
-//  embedded WebView. Real Chrome has none of the third-party-cookie,
-//  user-agent-detection, or JS-sandboxing quirks that embedded Android
-//  WebViews run into with Paystack's checkout — this is the pattern
-//  most Flutter+Paystack integrations settle on after WebView issues.
-//
-//  Detection of payment completion uses TWO signals so nothing gets
-//  missed:
-//   1. App lifecycle resume — the moment the user switches back to the
-//      app after paying in the browser, we check immediately.
-//   2. A background poll every 4s as a fallback in case the resume
-//      event doesn't fire the way we expect on a given device.
-//  Both check the same Firestore query already proven to work in
-//  _checkForUnclaimedPayment above (uid + paid:true + claimed:false),
-//  not a new/unverified query shape.
-// ════════════════════════════════════════════════════════════════════
-// ════════════════════════════════════════════════════════════════════
-//  PAYMENT SCREEN — External Browser (no WebView)
-//  Opens Paystack checkout in the device's real browser instead of an
-//  embedded WebView.
-//
-//  Payment confirmation uses DIRECT VERIFICATION against Paystack's
-//  own /transaction/verify API (via our backend's /verify-payment
-//  route) — NOT the webhook. The webhook may never fire (misconfigured
-//  URL, delivery failure, etc.) and silently leaves the app with no
-//  way to know payment succeeded. Direct verification asks Paystack
-//  "did THIS transaction succeed?" right when we need the answer, so
-//  it never depends on an external dashboard setting working correctly.
+//  embedded WebView, and directly verifies payment status against
+//  Paystack's own API rather than depending only on the webhook.
 // ════════════════════════════════════════════════════════════════════
 class PaymentWaitingScreen extends StatefulWidget {
   final double amountGHS;
@@ -1319,8 +1339,6 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Fires the moment the user switches back to the app after paying
-    // in the browser — usually the fastest way we detect completion.
     if (state == AppLifecycleState.resumed && _launched) {
       _verifyPayment();
     }
@@ -1372,8 +1390,6 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
         _loading = false;
       });
 
-      // Fallback in case app-resume detection doesn't fire the way we
-      // expect on this device/browser combination.
       _pollTimer = Timer.periodic(
         const Duration(seconds: 5),
         (_) => _verifyPayment(),
@@ -1387,9 +1403,6 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
     }
   }
 
-  // manual = true when the user themselves tapped "I've completed
-  // payment" — in that case we show a spinner and a clear message,
-  // so the tap is never silent again.
   Future<void> _verifyPayment({bool manual = false}) async {
     if (_checkingStatus || _paystackReference == null) return;
 
@@ -1421,7 +1434,7 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
       if (manual && mounted) {
         setState(() {
           _statusMessage =
-              "We haven't received your payment yet. If you just paid, wait a few seconds and tap again.";
+              "Payment not confirmed yet. This can take a little while to settle — keep this screen open and it will move forward automatically once confirmed.";
         });
       }
     } catch (_) {
@@ -1489,7 +1502,7 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  "We'll bring you back here automatically once payment is confirmed.",
+                  "We'll bring you back here automatically once payment is confirmed. This can take a short moment to settle — no need to close this screen.",
                   textAlign: TextAlign.center,
                   style: _outfit(12, FontWeight.w500, _white70, h: 1.5),
                 ),
