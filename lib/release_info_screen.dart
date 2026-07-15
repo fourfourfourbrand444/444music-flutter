@@ -208,11 +208,15 @@ import 'dart:async';
    Timer?              _featSearchTimer;
    int                 _featSearchGen     = 0;
 
-   // NEW — payment verification state
-   String? _paymentReference;
-   bool    _paymentVerified  = false;
-   bool    _paymentArgLoaded = false;
+  // NEW — payment verification state
+     String? _paymentReference;
+     bool    _paymentVerified  = false;
+     bool    _paymentArgLoaded = false;
 
+     // NEW — files carried forward from Upload, saved onto the submission
+     // doc in Firestore so they're never only findable in a one-time email
+     String? _coverUrl;
+     List<Map<String, String>> _audioFiles = [];
    // producer, musician, writer only (no publishing)
    final Map<String, List<CreditEntry>> _credits = {
      'producer': [],
@@ -252,17 +256,39 @@ import 'dart:async';
    // NEW — reads the payment reference passed from Upload, then verifies it
    // against the pendingPayments collection written by the webhook.
    @override
-   void didChangeDependencies() {
-     super.didChangeDependencies();
-     if (!_paymentArgLoaded) {
-       final args = ModalRoute.of(context)?.settings.arguments;
-       if (args is String && args.isNotEmpty) {
-         _paymentReference = args;
-         _verifyPayment(args);
-       }
-       _paymentArgLoaded = true;
-     }
-   }
+      void didChangeDependencies() {
+        super.didChangeDependencies();
+        if (!_paymentArgLoaded) {
+          final args = ModalRoute.of(context)?.settings.arguments;
+          if (args is Map) {
+            final ref = args['paymentReference'];
+            if (ref is String && ref.isNotEmpty) {
+              _paymentReference = ref;
+              _verifyPayment(ref);
+            }
+            final cover = args['coverUrl'];
+            if (cover is String && cover.isNotEmpty) _coverUrl = cover;
+            final audio = args['audioFiles'];
+            if (audio is List) {
+              _audioFiles = audio
+                  .whereType<Map>()
+                  .map((m) => {
+                        'title':  (m['title']  ?? '').toString(),
+                        'artist': (m['artist'] ?? '').toString(),
+                        'url':    (m['url']    ?? '').toString(),
+                      })
+                  .where((m) => (m['url'] ?? '').isNotEmpty)
+                  .toList();
+            }
+          } else if (args is String && args.isNotEmpty) {
+            // Backward-compatible fallback in case anything still sends the
+            // old raw-string payment reference.
+            _paymentReference = args;
+            _verifyPayment(args);
+          }
+          _paymentArgLoaded = true;
+        }
+      }
 
    Future<void> _verifyPayment(String reference) async {
      try {
@@ -545,11 +571,15 @@ import 'dart:async';
        'publishers':     'N/A',
        'lyrics':         (data['lyrics'] as String).isEmpty
            ? 'Not provided' : data['lyrics'],
-       'submitted_at':   DateTime.now().toLocal().toString(),
-       'status':         'Pending',
-       // NEW — payment status, always shown to admin regardless of frontend state
-       'payment_status': _paymentVerified ? 'Paid' : 'Not confirmed',
-     };
+      'submitted_at':   DateTime.now().toLocal().toString(),
+             'status':         'Pending',
+             // NEW — payment status, always shown to admin regardless of frontend state
+             'payment_status': _paymentVerified ? 'Paid' : 'Not confirmed',
+             // NEW — cover art + audio links, embedded straight in the same
+             // admin email so nothing needs to be dug up separately later
+             'cover_url':   data['coverURL'] ?? '',
+             'audio_files': data['audioFiles'] ?? [],
+           };
 
      try {
        final response = await http
@@ -652,8 +682,14 @@ import 'dart:async';
            'url':  e.url.trim(),
          }).toList(),
          // NEW — payment status, recorded on the submission itself
-         'paid':             _paymentVerified ? 'Paid' : 'Unpaid',
-         'paymentReference': _paymentReference ?? '',
+         // NEW — payment status, recorded on the submission itself
+                  'paid':             _paymentVerified ? 'Paid' : 'Unpaid',
+                  'paymentReference': _paymentReference ?? '',
+                  // NEW — real Cloudinary URLs, saved permanently on the submission
+                  // so they're always findable later (Pay Now resend, admin lookup)
+                  // instead of only ever existing in a one-time email.
+                  'coverURL':   _coverUrl ?? '',
+                  'audioFiles': _audioFiles,
         'userId':    user?.uid ?? '',
                 'createdAt': DateTime.now().millisecondsSinceEpoch,
                 'status':    _paymentVerified ? 'Review' : 'Pending',

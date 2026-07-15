@@ -1,4 +1,3 @@
-// ═══════════════════════════════════════════════════════════════════
 //  444MUSIC — My Releases Dashboard  (rebuilt)
 //  Theme: Black & White Luxury  |  Font: Nunito
 //  Fixes: no ? btn, cover art displays, reject/approve buttons visible
@@ -16,8 +15,8 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:share_plus/share_plus.dart';
+import 'pricing_screen.dart'; // NEW — for PaymentWaitingScreen (Pay Now)
 
 // ─── PALETTE ────────────────────────────────────────────────────────
 const _black      = Color(0xFF000000);
@@ -74,6 +73,16 @@ String _statusLabel(String s) {
 // the same real field ('paid' as text "Paid"/"Unpaid"), case-insensitively
 bool _isPaidValue(dynamic paidField) =>
     (paidField ?? '').toString().toLowerCase() == 'paid';
+
+// NEW — auto-determine what a draft release should be charged based on
+// the releaseType the artist already picked in ReleaseInfoScreen. This
+// avoids needing a separate track-count field — releaseType ('Single' /
+// 'EP' / 'Album') already captures the same intent.
+double _priceForReleaseType(dynamic releaseType) {
+  final t = (releaseType ?? '').toString().toLowerCase();
+  if (t == 'single') return 1; // TEMP — testing only, restore to 39.99 before going live
+  return 1; // TEMP — testing only, restore to 69.99 before going live
+}
 
 // ─── UPC GENERATOR ──────────────────────────────────────────────────
 String _generateUPC() {
@@ -429,6 +438,9 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
                 db: _db,
                 onRefresh: _loadReleases,
                 onNavigate: (route) => Navigator.pushNamed(context, route),
+                onOpenRejection: (data) =>
+                    Navigator.pushNamed(context, '/rejection', arguments: data)
+                        .then((_) => _loadReleases()),
               ),
             ),
           );
@@ -620,7 +632,14 @@ class _ReleaseCard extends StatefulWidget {
   final FirebaseFirestore db;
   final VoidCallback onRefresh;
   final void Function(String) onNavigate;
-  const _ReleaseCard({required this.data, required this.db, required this.onRefresh, required this.onNavigate});
+  final void Function(Map<String, dynamic>) onOpenRejection;
+  const _ReleaseCard({
+    required this.data,
+    required this.db,
+    required this.onRefresh,
+    required this.onNavigate,
+    required this.onOpenRejection,
+  });
   @override
   State<_ReleaseCard> createState() => _ReleaseCardState();
 }
@@ -634,9 +653,13 @@ class _ReleaseCardState extends State<_ReleaseCard> with SingleTickerProviderSta
   String get _status     => (widget.data['status'] ?? 'Pending').toString().trim();
   bool   get _isApproved => _status.toLowerCase() == 'approved';
   bool   get _isRejected => _status.toLowerCase() == 'rejected';
+  // NEW — a release sitting in Pending with no payment yet is a draft
+  // waiting to be paid for.
+  bool   get _isPending   => _status.toLowerCase() == 'pending';
   // FIXED — was checking 'paymentVerified' (never set anywhere), now checks
   // the real 'paid' field which release_info_screen.dart actually sets
   bool   get _isPaid     => _isPaidValue(widget.data['paid']);
+  bool   get _needsPayment => _isPending && !_isPaid;
 
   @override
   void initState() {
@@ -679,6 +702,46 @@ class _ReleaseCardState extends State<_ReleaseCard> with SingleTickerProviderSta
     final base64Str  = base64Encode(bytes);
     final dataUrl    = 'data:image/jpeg;base64,$base64Str';
     await widget.db.collection('submissions').doc(_id).update({'coverURL': dataUrl});
+    widget.onRefresh();
+  }
+
+  // ── Pay Now — sends the REAL submission id (not a placeholder)
+  // into the same PaymentWaitingScreen your pay-first flow already uses.
+  // Price is auto-picked from releaseType, which was already saved when
+  // this draft was first submitted.
+  //
+  // FIXED — now passes isExistingSubmission: true, so:
+  //   1) the backend (create-payment / verify-payment / webhook) knows
+  //      to mark the pendingPayments doc as claimed:true right away,
+  //      instead of leaving it looking "still pending" and wrongly
+  //      triggering the Pricing screen's "Payment Completed" lock
+  //      screen the next time this artist starts a brand new release.
+  //   2) PaymentWaitingScreen knows to pop back to My Releases (this
+  //      screen) once payment succeeds, instead of routing into
+  //      PaymentSuccessScreen or Home, since there's no new release to
+  //      walk the artist into — this release already exists and the
+  //      backend has already flipped it to Review + Paid.
+  Future<void> _payNow() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null || _id.isEmpty) return;
+
+    final amount = _priceForReleaseType(widget.data['releaseType']);
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PaymentWaitingScreen(
+          amountGHS: amount,
+          submissionId: _id, // ← the real Firestore doc id, not a placeholder
+          uid: user.uid,
+          email: user.email ?? '',
+          successRouteName: '/releases',
+          isExistingSubmission: true, // NEW
+        ),
+      ),
+    );
+    // Whatever happened (paid, cancelled, backgrounded), refresh so the
+    // card reflects the latest Firestore state when we come back.
     widget.onRefresh();
   }
 
@@ -802,11 +865,13 @@ class _ReleaseCardState extends State<_ReleaseCard> with SingleTickerProviderSta
                     if (_isApproved) ...[const SizedBox(width: 6), const _LiveDot()],
                   ]),
 
-                  // ── REJECTED BUTTON — fully visible ─────────────
+                  // ── REJECTED BUTTON — fully visible, now carries the
+                  // full submission data so the fix screen knows which
+                  // doc to update and what reason/category to show ────
                   if (_isRejected) ...[
                     const SizedBox(height: 12),
                     GestureDetector(
-                      onTap: () => widget.onNavigate('/rejection'),
+                      onTap: () => widget.onOpenRejection(widget.data),
                       child: Container(
                         width: double.infinity,
                         padding: const EdgeInsets.symmetric(vertical: 13),
@@ -818,8 +883,36 @@ class _ReleaseCardState extends State<_ReleaseCard> with SingleTickerProviderSta
                         child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                           const Icon(Icons.info_rounded, color: _rose, size: 16),
                           const SizedBox(width: 8),
-                          Text('Check Reasons',
+                          Text('Check Reasons & Fix',
                               style: GoogleFonts.nunito(color: _rose, fontSize: 13, fontWeight: FontWeight.w800)),
+                        ]),
+                      ),
+                    ),
+                  ],
+
+                  // ── PAY NOW BUTTON — draft releases sitting in Pending
+                  // with no payment yet. Tapping sends the REAL submission
+                  // id into the payment flow so the webhook can flip this
+                  // exact doc to Paid + Review once payment clears. ────
+                  if (_needsPayment) ...[
+                    const SizedBox(height: 12),
+                    GestureDetector(
+                      onTap: _payNow,
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(vertical: 13),
+                        decoration: BoxDecoration(
+                          color: _cyan.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: _cyan, width: 1.5),
+                        ),
+                        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                          const Icon(Icons.credit_card_rounded, color: _cyan, size: 16),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Pay GHC ${_priceForReleaseType(widget.data['releaseType']).toStringAsFixed(2)} to Release',
+                            style: GoogleFonts.nunito(color: _cyan, fontSize: 13, fontWeight: FontWeight.w800),
+                          ),
                         ]),
                       ),
                     ),

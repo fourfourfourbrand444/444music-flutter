@@ -52,6 +52,11 @@ class TrackModel {
   String status;
   String errorMsg;
   Map<String, String> errors;
+  // NEW — the real Cloudinary URL once this track finishes uploading.
+  // Carried forward to Release Info so the submission doc (and any email)
+  // can always find the actual audio file, instead of relying on a
+  // one-time email sent at upload time.
+  String? fileUrl;
 
   TrackModel({
     required this.id,
@@ -64,6 +69,7 @@ class TrackModel {
     this.status        = 'idle',
     this.errorMsg      = '',
     Map<String, String>? errors,
+    this.fileUrl,
   }) : errors = errors ?? {};
 
   TrackModel copyWith({
@@ -76,6 +82,7 @@ class TrackModel {
     String? status,
     String? errorMsg,
     Map<String, String>? errors,
+    String? fileUrl,
   }) {
     return TrackModel(
       id:           id,
@@ -88,10 +95,10 @@ class TrackModel {
       status:       status       ?? this.status,
       errorMsg:     errorMsg     ?? this.errorMsg,
       errors:       errors       ?? this.errors,
+      fileUrl:      fileUrl      ?? this.fileUrl,
     );
   }
 }
-
 // ════════════════════════════════════════════════════════════════════
 //  UPLOAD SCREEN
 // ════════════════════════════════════════════════════════════════════
@@ -314,45 +321,6 @@ class _UploadScreenState extends State<UploadScreen>
   }
 
   // ── SEND EMAIL VIA EMAILJS ───────────────────────────────────────
-  Future<void> _sendEmail(
-      TrackModel track, String fileUrl, String? coverUrl) async {
-    try {
-      final now = DateTime.now();
-      final submissionTime =
-          '${now.year}-${now.month.toString().padLeft(2, '0')}-'
-          '${now.day.toString().padLeft(2, '0')} '
-          '${now.hour.toString().padLeft(2, '0')}:'
-          '${now.minute.toString().padLeft(2, '0')}';
-
-      final response = await http.post(
-        Uri.parse(_emailjsUrl),
-        headers: {
-          'Content-Type': 'application/json',
-          'origin': 'http://localhost',
-        },
-        body: jsonEncode({
-          'service_id':  _emailjsServiceId,
-          'template_id': _emailjsTemplateId,
-          'user_id':     _emailjsPublicKey,
-          'accessToken': _emailjsPublicKey,
-          'template_params': {
-            'artist_name':      track.artistName,
-            'release_title':    track.releaseTitle,
-            'featuring':        track.featuring.isEmpty ? 'None' : track.featuring,
-            'download_link':    fileUrl,
-            'cover_art_link':   coverUrl ?? '',
-            'submission_time':  submissionTime,
-          },
-        }),
-      );
-
-      if (response.statusCode != 200) {
-        debugPrint('EmailJS error ${response.statusCode}: ${response.body}');
-      }
-    } catch (e) {
-      debugPrint('EmailJS send failed: $e');
-    }
-  }
 
   // ── UPLOAD ALL ───────────────────────────────────────────────────
   Future<void> _uploadAll() async {
@@ -377,13 +345,15 @@ class _UploadScreenState extends State<UploadScreen>
           sim = (sim + 8).clamp(0, 85);
           _updateTrack(track.id, (t) => t.copyWith(progress: sim));
         });
-        final fileUrl = await _uploadToCloudinary(track.mp3File!, 'tracks');
-        await ticker.cancel();
-        if (fileUrl == null) throw Exception('Cloudinary returned no URL');
-        _updateTrack(track.id, (t) => t.copyWith(progress: 95));
-        await _sendEmail(track, fileUrl, coverUrl);
-        _updateTrack(track.id,
-                (t) => t.copyWith(progress: 100, status: 'success'));
+      final fileUrl = await _uploadToCloudinary(track.mp3File!, 'tracks');
+              await ticker.cancel();
+              if (fileUrl == null) throw Exception('Cloudinary returned no URL');
+              // CHANGED — no longer emails here. The URL is saved on the track
+              // and carried forward to Release Info, which sends ONE combined
+              // email (metadata + cover + audio links) via the Brevo backend —
+              // replacing this old per-track EmailJS call.
+              _updateTrack(track.id,
+                      (t) => t.copyWith(progress: 100, status: 'success', fileUrl: fileUrl));
       } catch (e) {
         anyError = true;
         _updateTrack(track.id, (t) => t.copyWith(
@@ -400,13 +370,28 @@ class _UploadScreenState extends State<UploadScreen>
       setState(() => _allDone = true);
       await Future.delayed(const Duration(milliseconds: 1800));
       // ── CHANGED: carry the payment reference forward to Release Info ──
-      if (mounted) {
-        Navigator.pushReplacementNamed(
-          context,
-          '/release-info',
-          arguments: _paymentReference,
-        );
-      }
+      // CHANGED — now carries the cover art URL and every track's real
+            // Cloudinary URL forward too, not just the payment reference, so
+            // Release Info can save them onto the submission doc in Firestore
+            // instead of them only ever existing in a one-time email.
+            if (mounted) {
+              Navigator.pushReplacementNamed(
+                context,
+                '/release-info',
+                arguments: {
+                  'paymentReference': _paymentReference,
+                  'coverUrl': coverUrl,
+                  'audioFiles': _tracks
+                      .where((t) => t.fileUrl != null && t.fileUrl!.isNotEmpty)
+                      .map((t) => {
+                            'title':  t.releaseTitle,
+                            'artist': t.artistName,
+                            'url':    t.fileUrl,
+                          })
+                      .toList(),
+                },
+              );
+            }
     } else {
       setState(() =>
       _globalError = 'Some tracks failed. Check errors and retry.');

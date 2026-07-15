@@ -1,4 +1,3 @@
-// ═══════════════════════════════════════════════════════════════════
 //  444MUSIC — Pricing Screen
 //  Matches home screen aesthetic: black/white, Nunito, same patterns
 //  Upload button → navigates here from home bottom nav
@@ -14,6 +13,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:http/http.dart' as http;
 import 'payment_success_screen.dart';
+import 'home_screen.dart';
 
 // ─── PALETTE (same as home) ──────────────────────────────────────────
 const _black      = Color(0xFF000000);
@@ -137,12 +137,12 @@ final _plans = [
     badgeIcon: 'fire',
     planName: 'Single',
     desc: 'Drop a track professionally with fast global delivery and store cover art.',
-    price: '1',
-    usdPrice: '3.41',
-    period: 'One-time per release',
-    btnLabel: 'Release Single',
-    btnRoute: '',
-    amountGHS: 1,
+   price: '1',
+       usdPrice: '3.49',
+       period: 'One-time per release',
+       btnLabel: 'Release Single',
+       btnRoute: '',
+       amountGHS: 1,
     isFeatured: true,
     style: PlanStyle.solid,
     features: [
@@ -167,12 +167,12 @@ final _plans = [
     badgeIcon: 'layers',
     planName: 'EP / Album',
     desc: 'Full project distribution with advanced reporting and priority support.',
-    price: '59',
-    usdPrice: '5.16',
+    price: '69.99',
+    usdPrice: '6.11',
     period: 'One-time per project',
     btnLabel: 'Release Project',
     btnRoute: '',
-    amountGHS: 59,
+    amountGHS: 69.99,
     style: PlanStyle.outline,
     features: [
       const _Feature('Up to 20 tracks per project'),
@@ -328,6 +328,10 @@ class _PricingScreenState extends State<PricingScreen>
           uid: uid,
           email: email,
           successRouteName: '/upload',
+          // Pricing-screen flow: no submission exists yet, so this stays
+          // false. This keeps the mandatory "Continue" lock screen working
+          // exactly as before — nothing in this flow changes.
+          isExistingSubmission: false,
         ),
       ),
     );
@@ -1292,6 +1296,18 @@ class _FaqItem extends StatelessWidget {
 //  Opens Paystack checkout in the device's real browser instead of an
 //  embedded WebView, and directly verifies payment status against
 //  Paystack's own API rather than depending only on the webhook.
+//
+//  isExistingSubmission — tells this screen which flow it's serving:
+//    false (default) = Pricing screen. No submission exists yet.
+//      Behaviour is UNCHANGED from before: "I've completed payment"
+//      always sends the user to HomeScreen, and successful background
+//      verification routes to PaymentSuccessScreen so the user can
+//      finish creating their release.
+//    true = Pay Now on an existing Pending draft (releases_screen.dart).
+//      There is nothing to "continue" — the submission already exists
+//      and gets flipped to Review by the backend directly. So instead
+//      of PaymentSuccessScreen or HomeScreen, this just returns to
+//      wherever the user came from (My Releases), refreshed.
 // ════════════════════════════════════════════════════════════════════
 class PaymentWaitingScreen extends StatefulWidget {
   final double amountGHS;
@@ -1299,6 +1315,7 @@ class PaymentWaitingScreen extends StatefulWidget {
   final String uid;
   final String email;
   final String successRouteName;
+  final bool isExistingSubmission;
 
   const PaymentWaitingScreen({
     super.key,
@@ -1307,6 +1324,7 @@ class PaymentWaitingScreen extends StatefulWidget {
     required this.uid,
     required this.email,
     required this.successRouteName,
+    this.isExistingSubmission = false,
   });
 
   @override
@@ -1319,7 +1337,6 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
   bool _launched = false;
   bool _checkingStatus = false;
   String? _error;
-  String? _statusMessage;
   String? _paystackReference;
   Timer? _pollTimer;
 
@@ -1354,6 +1371,10 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
           'amountGHS': widget.amountGHS,
           'submissionId': widget.submissionId,
           'uid': widget.uid,
+          // NEW — tells the backend which flow this is, so verify-payment
+          // and the webhook know whether to auto-claim the pendingPayments
+          // doc right away (Pay Now) or leave it for later (Pricing screen).
+          'isExistingSubmission': widget.isExistingSubmission,
         }),
       );
 
@@ -1403,13 +1424,13 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
     }
   }
 
-  Future<void> _verifyPayment({bool manual = false}) async {
+  // Automatic confirmation only — triggered by the app resuming or the
+  // background poll timer. This is NOT called by the "I've completed
+  // payment" button (see _goHome below).
+  Future<void> _verifyPayment() async {
     if (_checkingStatus || _paystackReference == null) return;
 
-    setState(() {
-      _checkingStatus = true;
-      if (manual) _statusMessage = null;
-    });
+    setState(() => _checkingStatus = true);
 
     try {
       final response = await http.get(
@@ -1420,31 +1441,58 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
       if (data['paid'] == true) {
         _pollTimer?.cancel();
         if (mounted) {
-          Navigator.of(context).pushReplacement(
-            MaterialPageRoute(
-              builder: (_) => PaymentSuccessScreen(
-                paymentReference: widget.submissionId,
+          if (widget.isExistingSubmission) {
+            // FIXED — Pay Now flow: the submission already exists and the
+            // backend has already flipped it to Review + Paid. There is
+            // nothing to "continue", so just pop back to wherever this
+            // screen was pushed from (My Releases), instead of sending
+            // the user into PaymentSuccessScreen, which is meant for
+            // finishing a brand-new release that doesn't exist yet.
+            Navigator.of(context).pop();
+          } else {
+            Navigator.of(context).pushReplacement(
+              MaterialPageRoute(
+                builder: (_) => PaymentSuccessScreen(
+                  paymentReference: widget.submissionId,
+                ),
               ),
-            ),
-          );
+            );
+          }
         }
         return;
       }
-
-      if (manual && mounted) {
-        setState(() {
-          _statusMessage =
-              "Payment not confirmed yet. This can take a little while to settle — keep this screen open and it will move forward automatically once confirmed.";
-        });
-      }
     } catch (_) {
-      if (manual && mounted) {
-        setState(() {
-          _statusMessage = 'Could not check payment status. Check your connection and try again.';
-        });
-      }
+      // Silent — this runs in the background. The next automatic poll
+      // will simply try again in 5 seconds.
     } finally {
       if (mounted) setState(() => _checkingStatus = false);
+    }
+  }
+
+  // "I've completed payment" button.
+  //
+  // Pricing-screen flow (isExistingSubmission == false): UNCHANGED —
+  // always sends the user to HomeScreen, regardless of payment status.
+  // Automatic confirmation (poll / app-resume) still runs in the
+  // background via the webhook and will route forward on its own if
+  // needed; if the user later taps Upload before that settles, the
+  // existing "Payment Completed" lock screen on Pricing correctly
+  // catches them.
+  //
+  // Pay Now flow (isExistingSubmission == true): pops back to wherever
+  // this screen was pushed from (My Releases) instead of Home, since
+  // there's no new release to walk the user into — Paystack's webhook
+  // updates the submission directly regardless of what screen the app
+  // is on, so it's safe to leave.
+  void _goHome() {
+    _pollTimer?.cancel();
+    if (widget.isExistingSubmission) {
+      Navigator.of(context).pop();
+    } else {
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const HomeScreen()),
+        (route) => false,
+      );
     }
   }
 
@@ -1508,7 +1556,7 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
                 ),
                 const SizedBox(height: 28),
                 GestureDetector(
-                  onTap: _checkingStatus ? null : () => _verifyPayment(manual: true),
+                  onTap: _goHome,
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                     decoration: BoxDecoration(
@@ -1516,34 +1564,12 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
                       borderRadius: BorderRadius.circular(99),
                       border: Border.all(color: _white10),
                     ),
-                    child: _checkingStatus
-                        ? Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const SizedBox(
-                                width: 14,
-                                height: 14,
-                                child: CircularProgressIndicator(
-                                    color: Colors.white, strokeWidth: 2),
-                              ),
-                              const SizedBox(width: 10),
-                              Text('Checking…', style: _outfit(13, FontWeight.w700, _white)),
-                            ],
-                          )
-                        : Text(
-                            "I've completed payment",
-                            style: _outfit(13, FontWeight.w700, _white),
-                          ),
+                    child: Text(
+                      "I've completed payment",
+                      style: _outfit(13, FontWeight.w700, _white),
+                    ),
                   ),
                 ),
-                if (_statusMessage != null) ...[
-                  const SizedBox(height: 14),
-                  Text(
-                    _statusMessage!,
-                    textAlign: TextAlign.center,
-                    style: _outfit(12, FontWeight.w500, _white70, h: 1.4),
-                  ),
-                ],
               ],
             ],
           ),

@@ -21,6 +21,7 @@ import 'release_info_screen.dart';
 import 'select_screen.dart';
 import 'legal_screen.dart';
 import 'confirm_screen.dart';
+import 'screens/rejection_fix_screen.dart';
 import 'verify_code_screen.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
@@ -107,6 +108,7 @@ class _MyAppState extends State<MyApp> {
        '/confirm':         (_) => const ConfirmScreen(),
        '/rejection':       (_) => const RejectionScreen(),
        '/legal':           (_) => const LegalScreen(),
+       '/rejection': (context) => const RejectionFixScreen(),
        '/withdrawal':      (context) => WithdrawalScreen(),
       '/verify-code': (context) {
                final args = ModalRoute.of(context)!.settings.arguments as Map;
