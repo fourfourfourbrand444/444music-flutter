@@ -1,8 +1,27 @@
-//  444MUSIC — My Releases Dashboard  (rebuilt)
+//  444MUSIC — My Releases Dashboard  (rebuilt to mirror web layout)
 //  Theme: Black & White Luxury  |  Font: Nunito
-//  Fixes: no ? btn, cover art displays, reject/approve buttons visible
-//  FIXED: paid status now reads the real 'paid' field ("Paid"/"Unpaid")
-//  instead of the never-set 'paymentVerified' boolean
+//
+//  LAYOUT CHANGE ONLY — mirrors the web dashboard (pricing/my-releases.html):
+//    - search bar (title/artist)
+//    - filter chips: All / Draft / In Review / Approved / Rejection
+//    - list rows (index, thumb, title/artist/meta, days-left countdown,
+//      chevron) instead of the old grid of big cards
+//    - status/paid badges and the Pay Now / Promote / Check Reasons & Fix
+//      actions now live inside the opened detail modal's top action bar,
+//      exactly like the web version, instead of inline on each card.
+//
+//  BEHAVIOR — UNCHANGED from the previous Flutter screen:
+//    - Pay Now still calls PaymentWaitingScreen with the real submission
+//      id and isExistingSubmission: true
+//    - paid/status still read from the real Firestore fields ('paid' as
+//      text "Paid"/"Unpaid", 'status' as text) — no paymentVerified bool
+//    - rejection flow still hands the full submission map to
+//      onOpenRejection exactly as before
+//    - cover art edit still base64-encodes and writes coverURL directly
+//    - Smart Link / UPC generation logic is untouched
+//
+//  SIDEBAR — the only change here: "Pay Now" nav item is replaced with
+//  "Watch Tutorials", linking to the YouTube channel.
 // ═══════════════════════════════════════════════════════════════════
 import 'package:url_launcher/url_launcher.dart';
 import 'dart:convert';
@@ -16,7 +35,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:share_plus/share_plus.dart';
-import 'pricing_screen.dart'; // NEW — for PaymentWaitingScreen (Pay Now)
+import 'pricing_screen.dart'; // for PaymentWaitingScreen (Pay Now)
 
 // ─── PALETTE ────────────────────────────────────────────────────────
 const _black      = Color(0xFF000000);
@@ -24,9 +43,7 @@ const _black1     = Color(0xFF080808);
 const _black2     = Color(0xFF0D0D0D);
 const _black3     = Color(0xFF111111);
 const _black4     = Color(0xFF161616);
-const _black5     = Color(0xFF1A1A1A);
 const _white      = Color(0xFFFFFFFF);
-const _white90    = Color(0xE6FFFFFF);
 const _white70    = Color(0xB3FFFFFF);
 const _white40    = Color(0x66FFFFFF);
 const _white20    = Color(0x33FFFFFF);
@@ -39,7 +56,7 @@ const _amber      = Color(0xFFF59E0B);
 const _rose       = Color(0xFFEF4444);
 const _cyan       = Color(0xFF06B6D4);
 
-// ─── STATUS HELPERS ─────────────────────────────────────────────────
+// ─── STATUS HELPERS (unchanged logic) ───────────────────────────────
 Color _statusColor(String s) {
   switch (s.toLowerCase()) {
     case 'approved': return _green;
@@ -49,42 +66,50 @@ Color _statusColor(String s) {
   }
 }
 
-int _statusProgress(String s) {
-  switch (s.toLowerCase()) {
-    case 'pending':  return 25;
-    case 'review':   return 60;
-    case 'approved': return 100;
-    case 'rejected': return 10;
-    default:         return 10;
-  }
+// Display-only label mapping — matches the web dashboard's
+// statusDisplayLabel(): Firestore keeps writing/reading "Pending" and
+// "Rejected" exactly as before; only what's SHOWN on screen changes.
+String _statusDisplayLabel(String rawStatus) {
+  final s = rawStatus.trim();
+  if (s.toLowerCase() == 'pending')  return 'Draft';
+  if (s.toLowerCase() == 'rejected') return 'Rejection';
+  return s.isEmpty ? 'Draft' : (s[0].toUpperCase() + s.substring(1));
 }
 
-String _statusLabel(String s) {
-  switch (s.toLowerCase()) {
-    case 'pending':  return 'Awaiting payment';
-    case 'review':   return 'Under review';
-    case 'approved': return 'Live on stores';
-    case 'rejected': return 'Action needed';
-    default:         return 'Processing';
-  }
-}
-
-// NEW — shared helper so every place that checks payment status reads
-// the same real field ('paid' as text "Paid"/"Unpaid"), case-insensitively
 bool _isPaidValue(dynamic paidField) =>
     (paidField ?? '').toString().toLowerCase() == 'paid';
 
-// NEW — auto-determine what a draft release should be charged based on
-// the releaseType the artist already picked in ReleaseInfoScreen. This
-// avoids needing a separate track-count field — releaseType ('Single' /
-// 'EP' / 'Album') already captures the same intent.
 double _priceForReleaseType(dynamic releaseType) {
   final t = (releaseType ?? '').toString().toLowerCase();
   if (t == 'single') return 39.99;
-  return 69.99; // EP or Album (or unset — safer to default to the higher tier)
+  return 69.99; // EP or Album (or unset — default to the higher tier)
 }
 
-// ─── UPC GENERATOR ──────────────────────────────────────────────────
+// Days-left countdown — mirrors the web dashboard's
+// releaseCountdownLabel() exactly: positive days only, nothing shown
+// on/after release day.
+String? _releaseCountdownLabel(dynamic releaseDateValue) {
+  if (releaseDateValue == null) return null;
+  DateTime releaseDate;
+  try {
+    if (releaseDateValue is Timestamp) {
+      releaseDate = releaseDateValue.toDate();
+    } else {
+      releaseDate = DateTime.parse(releaseDateValue.toString());
+    }
+  } catch (_) {
+    return null;
+  }
+  final now = DateTime.now();
+  final startOfToday   = DateTime(now.year, now.month, now.day);
+  final startOfRelease = DateTime(releaseDate.year, releaseDate.month, releaseDate.day);
+  final diffDays = startOfRelease.difference(startOfToday).inDays;
+  if (diffDays > 1) return '$diffDays days left';
+  if (diffDays == 1) return '1 day left';
+  return null; // releasing today or already out
+}
+
+// ─── UPC GENERATOR (unchanged) ───────────────────────────────────────
 String _generateUPC() {
   final rng  = Random();
   String code = '731';
@@ -104,13 +129,12 @@ String _formatUPC(String upc) {
 }
 
 String _buildSmartLinkURL(String artistName, String releaseTitle) {
-  // Keep hyphens, replace spaces with hyphens, lowercase
   String toSlug(String s) => s
       .toLowerCase()
-      .replaceAll(RegExp(r'[^a-z0-9\s\-]'), '') // keep letters, digits, spaces, hyphens
+      .replaceAll(RegExp(r'[^a-z0-9\s\-]'), '')
       .trim()
-      .replaceAll(RegExp(r'\s+'), '-')            // spaces → hyphens
-      .replaceAll(RegExp(r'-+'), '-');            // collapse multiple hyphens
+      .replaceAll(RegExp(r'\s+'), '-')
+      .replaceAll(RegExp(r'-+'), '-');
 
   final aSlug = toSlug(artistName);
   final tRaw  = toSlug(releaseTitle);
@@ -123,7 +147,17 @@ Future<void> _launch(String url) async {
   if (await canLaunchUrl(uri)) await launchUrl(uri, mode: LaunchMode.externalApplication);
 }
 
-// ─── STORE CONFIG ───────────────────────────────────────────────────
+String _formatDate(dynamic d) {
+  try {
+    DateTime dt;
+    if (d is Timestamp) dt = d.toDate();
+    else dt = DateTime.parse(d.toString());
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return '${dt.day.toString().padLeft(2,'0')} ${months[dt.month-1]} ${dt.year}';
+  } catch (_) { return d.toString(); }
+}
+
+// ─── STORE CONFIG (unchanged) ────────────────────────────────────────
 class _StoreInfo {
   final String key, name, sub;
   final Color color;
@@ -161,7 +195,10 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
   List<Map<String, dynamic>> _filtered = [];
   bool   _loading     = true;
   String _filter      = 'all';
+  String _searchQuery = '';
   bool   _sidebarOpen = false;
+
+  final TextEditingController _searchCtrl = TextEditingController();
 
   late AnimationController _entranceCtrl;
   late Animation<double>   _entranceFade;
@@ -169,13 +206,15 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
   late Animation<double>   _sidebarFade;
   late Animation<Offset>   _sidebarSlide;
 
-  final _filters      = ['all', 'pending', 'approved', 'review', 'rejected'];
+  // Same underlying status keys as before — only the visible labels
+  // changed, to match the web dashboard's chip wording.
+  final _filters      = ['all', 'pending', 'review', 'approved', 'rejected'];
   final _filterLabels = {
     'all':      'All',
-    'pending':  'Pending',
-    'approved': 'Approved',
+    'pending':  'Draft',
     'review':   'In Review',
-    'rejected': 'Rejected',
+    'approved': 'Approved',
+    'rejected': 'Rejection',
   };
 
   @override
@@ -191,6 +230,13 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
     _sidebarFade  = CurvedAnimation(parent: _sidebarCtrl, curve: Curves.easeOut);
     _sidebarSlide = Tween<Offset>(begin: const Offset(-1, 0), end: Offset.zero)
         .animate(CurvedAnimation(parent: _sidebarCtrl, curve: Curves.easeOutCubic));
+    _searchCtrl.addListener(() {
+      final q = _searchCtrl.text.trim().toLowerCase();
+      if (q != _searchQuery) {
+        _searchQuery = q;
+        _recomputeFiltered();
+      }
+    });
     _loadReleases();
   }
 
@@ -198,6 +244,7 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
   void dispose() {
     _entranceCtrl.dispose();
     _sidebarCtrl.dispose();
+    _searchCtrl.dispose();
     super.dispose();
   }
 
@@ -218,10 +265,6 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
       for (final doc in snap.docs) {
         final data = Map<String, dynamic>.from(doc.data());
         data['_id'] = doc.id;
-        // REMOVED — this used to write a 'paymentVerified: false' field that
-        // nothing in the real payment flow ever reads or sets. The actual
-        // payment result lives in the 'paid' field ("Paid"/"Unpaid" text),
-        // which is set once in release_info_screen.dart's _submit().
         final status = (data['status'] ?? 'Pending').toString().toLowerCase();
         if (status == 'approved' && (data['upc'] == null || data['smartLinkURL'] == null)) {
           final upc = _generateUPC();
@@ -233,9 +276,19 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
         list.add(data);
       }
 
+      // Newest first, same ordering the web dashboard uses.
+      list.sort((a, b) {
+        final aTime = a['createdAt'];
+        final bTime = b['createdAt'];
+        final aMs = aTime is Timestamp ? aTime.millisecondsSinceEpoch : (aTime is int ? aTime : 0);
+        final bMs = bTime is Timestamp ? bTime.millisecondsSinceEpoch : (bTime is int ? bTime : 0);
+        return bMs.compareTo(aMs);
+      });
+
       if (mounted) {
-        setState(() { _releases = list; _filtered = list; _loading = false; });
-        _applyFilter(_filter);
+        _releases = list;
+        _loading = false;
+        _recomputeFiltered();
         _entranceCtrl.forward();
       }
     } catch (e) {
@@ -244,19 +297,26 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
   }
 
   void _applyFilter(String f) {
-    setState(() {
-      _filter   = f;
-      _filtered = f == 'all'
-          ? List.from(_releases)
-          : _releases.where((r) => (r['status'] ?? 'Pending').toString().toLowerCase() == f).toList();
-    });
+    _filter = f;
+    _recomputeFiltered();
   }
 
-  int get _totalReleases => _releases.length;
-  int get _pendingCount  => _releases.where((r) => (r['status'] ?? '').toString().toLowerCase() == 'pending').length;
-  int get _approvedCount => _releases.where((r) => (r['status'] ?? '').toString().toLowerCase() == 'approved').length;
-  // FIXED — was checking 'paymentVerified' (never set), now checks the real 'paid' field
-  int get _paidCount     => _releases.where((r) => _isPaidValue(r['paid'])).length;
+  void _recomputeFiltered() {
+    setState(() {
+      Iterable<Map<String, dynamic>> base = _releases;
+      if (_filter != 'all') {
+        base = base.where((r) => (r['status'] ?? 'Pending').toString().toLowerCase() == _filter);
+      }
+      if (_searchQuery.isNotEmpty) {
+        base = base.where((r) {
+          final title  = (r['releaseTitle'] ?? '').toString().toLowerCase();
+          final artist = (r['artistName']  ?? '').toString().toLowerCase();
+          return title.contains(_searchQuery) || artist.contains(_searchQuery);
+        });
+      }
+      _filtered = base.toList();
+    });
+  }
 
   String get _firstName {
     final name = _user?.displayName ?? 'Artist';
@@ -302,7 +362,6 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
     );
   }
 
-  // ── TOP BAR — no ? button, New Release fits properly ────────────
   Widget _buildTopBar() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
@@ -336,31 +395,74 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const SizedBox(height: 22),
-          _buildStatsRow(),
-          const SizedBox(height: 22),
-          _buildFilterRow(),
-          const SizedBox(height: 20),
+          const SizedBox(height: 18),
+          _buildSearchBar(),
+          const SizedBox(height: 16),
           _buildSectionHeader(),
-          const SizedBox(height: 12),
-          _releases.isEmpty ? _buildEmptyState() : _buildCards(),
+          const SizedBox(height: 10),
+          _buildFilterRow(),
+          const SizedBox(height: 16),
+          _releases.isEmpty ? _buildEmptyState() : _buildRows(),
         ],
       ),
     );
   }
 
-  Widget _buildStatsRow() {
+  // ── SEARCH BAR — mirrors the web's search-bar-wrap ───────────────
+  Widget _buildSearchBar() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+        decoration: BoxDecoration(
+          color: _black2,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: _white10),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.search_rounded, color: _greyDark, size: 18),
+            const SizedBox(width: 10),
+            Expanded(
+              child: TextField(
+                controller: _searchCtrl,
+                style: GoogleFonts.nunito(color: _white, fontSize: 14, fontWeight: FontWeight.w600),
+                decoration: InputDecoration(
+                  isCollapsed: true,
+                  border: InputBorder.none,
+                  hintText: 'Search by title or artist...',
+                  hintStyle: GoogleFonts.nunito(color: _greyDark, fontWeight: FontWeight.w500),
+                ),
+              ),
+            ),
+            if (_searchCtrl.text.trim().isNotEmpty)
+              GestureDetector(
+                onTap: () { _searchCtrl.clear(); },
+                child: Container(
+                  width: 20, height: 20,
+                  margin: const EdgeInsets.only(left: 8),
+                  decoration: BoxDecoration(color: _white10, shape: BoxShape.circle),
+                  child: const Icon(Icons.close_rounded, color: _grey, size: 12),
+                ),
+              ),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSectionHeader() {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
       child: Row(
         children: [
-          Expanded(child: _StatCard(value: '$_totalReleases', label: 'Total',    sub: 'All time',       color: _white70)),
-          const SizedBox(width: 10),
-          Expanded(child: _StatCard(value: '$_pendingCount',  label: 'Pending',  sub: 'In queue',       color: _amber)),
-          const SizedBox(width: 10),
-          Expanded(child: _StatCard(value: '$_approvedCount', label: 'Approve', sub: 'Live', color: _green)),
-          const SizedBox(width: 10),
-          Expanded(child: _StatCard(value: '$_paidCount',     label: 'Paid',     sub: 'Confirmed',      color: _cyan)),
+          Container(width: 6, height: 6, decoration: BoxDecoration(color: _white, borderRadius: BorderRadius.circular(3))),
+          const SizedBox(width: 8),
+          Text('All Releases', style: GoogleFonts.nunito(color: _white, fontSize: 15, fontWeight: FontWeight.w800)),
+          const Spacer(),
+          Text('${_filtered.length} release${_filtered.length != 1 ? 's' : ''}',
+              style: GoogleFonts.nunito(color: _grey, fontSize: 12, fontWeight: FontWeight.w600)),
         ],
       ),
     );
@@ -402,46 +504,28 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
     );
   }
 
-  Widget _buildSectionHeader() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: Row(
-        children: [
-          Container(width: 6, height: 6, decoration: BoxDecoration(color: _white, borderRadius: BorderRadius.circular(3))),
-          const SizedBox(width: 8),
-          Text('All Releases', style: GoogleFonts.nunito(color: _white, fontSize: 15, fontWeight: FontWeight.w800)),
-          const Spacer(),
-          Text('${_filtered.length} release${_filtered.length != 1 ? 's' : ''}',
-              style: GoogleFonts.nunito(color: _grey, fontSize: 12, fontWeight: FontWeight.w600)),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildCards() {
+  // ── LIST ROWS — mirrors the web's release-row layout exactly ────
+  Widget _buildRows() {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
       child: Column(
         children: List.generate(_filtered.length, (i) {
           return TweenAnimationBuilder<double>(
             tween: Tween(begin: 0, end: 1),
-            duration: Duration(milliseconds: 400 + i * 80),
+            duration: Duration(milliseconds: 300 + i * 45),
             curve: Curves.easeOutCubic,
             builder: (_, v, child) => Transform.translate(
-              offset: Offset(0, 20 * (1 - v)),
+              offset: Offset(0, 8 * (1 - v)),
               child: Opacity(opacity: v, child: child),
             ),
-            child: Padding(
-              padding: const EdgeInsets.only(bottom: 14),
-              child: _ReleaseCard(
-                data: _filtered[i],
-                db: _db,
-                onRefresh: _loadReleases,
-                onNavigate: (route) => Navigator.pushNamed(context, route),
-                onOpenRejection: (data) =>
-                    Navigator.pushNamed(context, '/rejection', arguments: data)
-                        .then((_) => _loadReleases()),
-              ),
+            child: _ReleaseRow(
+              index: i,
+              data: _filtered[i],
+              db: _db,
+              onRefresh: _loadReleases,
+              onOpenRejection: (data) =>
+                  Navigator.pushNamed(context, '/rejection', arguments: data)
+                      .then((_) => _loadReleases()),
             ),
           );
         }),
@@ -491,15 +575,15 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
     return Padding(
       padding: const EdgeInsets.all(20),
       child: Column(
-        children: List.generate(3, (_) => Padding(
-          padding: const EdgeInsets.only(bottom: 14),
-          child: _SkeletonCard(),
+        children: List.generate(4, (_) => Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: _SkeletonRow(),
         )),
       ),
     );
   }
 
-  // ── SIDEBAR ─────────────────────────────────────────────────────
+  // ── SIDEBAR — unchanged except Pay Now -> Watch Tutorials ────────
   Widget _buildSidebar(double top, double bottom) {
     final w = MediaQuery.of(context).size.width * 0.78;
     return Container(
@@ -577,7 +661,8 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
                   _SidebarItem(icon: Icons.cloud_upload_rounded,  label: 'New Release',        onTap: () { _closeSidebar(); Future.delayed(const Duration(milliseconds: 300), () => Navigator.pushNamed(context, '/upload')); }),
                   _SidebarSection(label: 'Finance'),
                   _SidebarItem(icon: Icons.attach_money_rounded,  label: 'Royalties',          onTap: () { _closeSidebar(); Future.delayed(const Duration(milliseconds: 300), () => Navigator.pushNamed(context, '/earnings')); }),
-                  _SidebarItem(icon: Icons.credit_card_rounded,   label: 'Pay Now',            onTap: () { _closeSidebar(); _launch('https://444music-distribution.vercel.app/pay.html'); }),
+                  // ── CHANGED: was "Pay Now" -> pay.html; now "Watch Tutorials" -> YouTube channel.
+                  _SidebarItem(icon: Icons.ondemand_video_rounded, label: 'Watch Tutorials', onTap: () { _closeSidebar(); _launch('https://www.youtube.com/@444musicdistribution'); }),
                   _SidebarItem(icon: Icons.call_split_rounded,    label: 'Royalty Split',      onTap: () { _closeSidebar(); Future.delayed(const Duration(milliseconds: 300), () async {
                     final Uri url = Uri.parse('https://444music-distribution.vercel.app/splits');
                     if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
@@ -625,59 +710,31 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  RELEASE CARD
+//  RELEASE ROW — replaces the old big card; mirrors the web's
+//  release-row grid: index | thumb | title/artist/meta | countdown+chevron
 // ════════════════════════════════════════════════════════════════════
-class _ReleaseCard extends StatefulWidget {
+class _ReleaseRow extends StatefulWidget {
+  final int index;
   final Map<String, dynamic> data;
   final FirebaseFirestore db;
   final VoidCallback onRefresh;
-  final void Function(String) onNavigate;
   final void Function(Map<String, dynamic>) onOpenRejection;
-  const _ReleaseCard({
+  const _ReleaseRow({
+    required this.index,
     required this.data,
     required this.db,
     required this.onRefresh,
-    required this.onNavigate,
     required this.onOpenRejection,
   });
   @override
-  State<_ReleaseCard> createState() => _ReleaseCardState();
+  State<_ReleaseRow> createState() => _ReleaseRowState();
 }
 
-class _ReleaseCardState extends State<_ReleaseCard> with SingleTickerProviderStateMixin {
-  late AnimationController _progressCtrl;
-  late Animation<double>   _progressAnim;
+class _ReleaseRowState extends State<_ReleaseRow> {
   bool _pressed = false;
 
-  String get _id         => widget.data['_id'] ?? '';
-  String get _status     => (widget.data['status'] ?? 'Pending').toString().trim();
-  bool   get _isApproved => _status.toLowerCase() == 'approved';
-  bool   get _isRejected => _status.toLowerCase() == 'rejected';
-  // NEW — a release sitting in Pending with no payment yet is a draft
-  // waiting to be paid for.
-  bool   get _isPending   => _status.toLowerCase() == 'pending';
-  // FIXED — was checking 'paymentVerified' (never set anywhere), now checks
-  // the real 'paid' field which release_info_screen.dart actually sets
-  bool   get _isPaid     => _isPaidValue(widget.data['paid']);
-  bool   get _needsPayment => _isPending && !_isPaid;
-
-  @override
-  void initState() {
-    super.initState();
-    _progressCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 900));
-    final pct = _statusProgress(_status) / 100.0;
-    _progressAnim = Tween<double>(begin: 0, end: pct)
-        .animate(CurvedAnimation(parent: _progressCtrl, curve: Curves.easeOutCubic));
-    Future.delayed(const Duration(milliseconds: 300), () {
-      if (mounted) _progressCtrl.forward();
-    });
-  }
-
-  @override
-  void dispose() {
-    _progressCtrl.dispose();
-    super.dispose();
-  }
+  String get _status    => (widget.data['status'] ?? 'Pending').toString().trim();
+  bool   get _isPending => _status.toLowerCase() == 'pending';
 
   void _openModal() {
     showModalBottomSheet(
@@ -688,338 +745,194 @@ class _ReleaseCardState extends State<_ReleaseCard> with SingleTickerProviderSta
         data: widget.data,
         db: widget.db,
         onRefresh: widget.onRefresh,
-        onNavigate: widget.onNavigate,
+        onOpenRejection: widget.onOpenRejection,
       ),
     );
   }
 
-  // ── FIXED: proper base64 encoding ───────────────────────────────
-  Future<void> _editCoverArt() async {
-    final picker = ImagePicker();
-    final file   = await picker.pickImage(source: ImageSource.gallery, maxWidth: 1200, imageQuality: 85);
-    if (file == null) return;
-    final bytes      = await file.readAsBytes();
-    final base64Str  = base64Encode(bytes);
-    final dataUrl    = 'data:image/jpeg;base64,$base64Str';
-    await widget.db.collection('submissions').doc(_id).update({'coverURL': dataUrl});
-    widget.onRefresh();
-  }
-
-  // ── Pay Now — sends the REAL submission id (not a placeholder)
-  // into the same PaymentWaitingScreen your pay-first flow already uses.
-  // Price is auto-picked from releaseType, which was already saved when
-  // this draft was first submitted.
-  //
-  // FIXED — now passes isExistingSubmission: true, so:
-  //   1) the backend (create-payment / verify-payment / webhook) knows
-  //      to mark the pendingPayments doc as claimed:true right away,
-  //      instead of leaving it looking "still pending" and wrongly
-  //      triggering the Pricing screen's "Payment Completed" lock
-  //      screen the next time this artist starts a brand new release.
-  //   2) PaymentWaitingScreen knows to pop back to My Releases (this
-  //      screen) once payment succeeds, instead of routing into
-  //      PaymentSuccessScreen or Home, since there's no new release to
-  //      walk the artist into — this release already exists and the
-  //      backend has already flipped it to Review + Paid.
-  Future<void> _payNow() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null || _id.isEmpty) return;
-
-    final amount = _priceForReleaseType(widget.data['releaseType']);
-
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => PaymentWaitingScreen(
-          amountGHS: amount,
-          submissionId: _id, // ← the real Firestore doc id, not a placeholder
-          uid: user.uid,
-          email: user.email ?? '',
-          successRouteName: '/releases',
-          isExistingSubmission: true, // NEW
-        ),
+  Widget _buildThumb() {
+    final url = widget.data['coverURL']?.toString() ?? '';
+    const size = 62.0;
+    Widget child;
+    if (url.isEmpty) {
+      child = const Icon(Icons.music_note_rounded, color: _greyDark, size: 20);
+    } else if (url.startsWith('data:image')) {
+      try {
+        final bytes = base64Decode(url.split(',').last);
+        child = Image.memory(bytes, width: size, height: size, fit: BoxFit.cover);
+      } catch (_) {
+        child = const Icon(Icons.music_note_rounded, color: _greyDark, size: 20);
+      }
+    } else {
+      child = CachedNetworkImage(
+        imageUrl: url, width: size, height: size, fit: BoxFit.cover,
+        placeholder: (_, __) => Container(color: _black3),
+        errorWidget: (_, __, ___) => const Icon(Icons.music_note_rounded, color: _greyDark, size: 20),
+      );
+    }
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        width: size, height: size, color: _black3,
+        alignment: Alignment.center,
+        child: child,
       ),
     );
-    // Whatever happened (paid, cancelled, backgrounded), refresh so the
-    // card reflects the latest Firestore state when we come back.
-    widget.onRefresh();
   }
 
   @override
   Widget build(BuildContext context) {
-    final statusColor = _statusColor(_status);
     final releaseDate = widget.data['releaseDate'] != null ? _formatDate(widget.data['releaseDate']) : 'TBA';
+    final countdown    = _releaseCountdownLabel(widget.data['releaseDate']);
+    final releaseType  = (widget.data['releaseType'] ?? 'Single').toString().toUpperCase();
+    final featuring    = (widget.data['featuring'] ?? '').toString().trim();
 
     return GestureDetector(
       onTapDown:   (_) => setState(() => _pressed = true),
       onTapUp:     (_) { setState(() => _pressed = false); _openModal(); },
       onTapCancel: ()  => setState(() => _pressed = false),
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 130),
-        transform: Matrix4.identity()..scale(_pressed ? 0.984 : 1.0),
+        duration: const Duration(milliseconds: 120),
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
         decoration: BoxDecoration(
-          color: _black2,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: _isRejected ? _rose.withValues(alpha: 0.4) : _white10),
-          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.4), blurRadius: 16, offset: const Offset(0, 6))],
+          color: _pressed ? _black2 : Colors.transparent,
+          borderRadius: BorderRadius.circular(12),
+          border: const Border(bottom: BorderSide(color: _white10)),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            // Cover art
-            ClipRRect(
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(19)),
-              child: _buildCoverArt(),
+            SizedBox(
+              width: 24,
+              child: Text(
+                '${widget.index + 1}',
+                textAlign: TextAlign.center,
+                style: GoogleFonts.outfit(color: _greyDark, fontSize: 13, fontWeight: FontWeight.w800),
+              ),
             ),
-
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+            const SizedBox(width: 12),
+            _buildThumb(),
+            const SizedBox(width: 14),
+            Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Title + artist
+                  Text(
+                    widget.data['releaseTitle'] ?? 'Untitled Release',
+                    maxLines: 1, overflow: TextOverflow.ellipsis,
+                    style: GoogleFonts.outfit(color: _white, fontSize: 15, fontWeight: FontWeight.w800, letterSpacing: -0.1),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    featuring.isNotEmpty
+                        ? '${widget.data['artistName'] ?? 'Unknown Artist'} ft. $featuring'
+                        : (widget.data['artistName'] ?? 'Unknown Artist'),
+                    maxLines: 1, overflow: TextOverflow.ellipsis,
+                    style: GoogleFonts.nunito(color: _grey, fontSize: 13, fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 6),
                   Row(
                     children: [
-                      Expanded(child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            widget.data['releaseTitle'] ?? 'Untitled Release',
-                            style: GoogleFonts.nunito(color: _white, fontSize: 15, fontWeight: FontWeight.w800),
-                            maxLines: 1, overflow: TextOverflow.ellipsis,
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            widget.data['artistName'] ?? 'Unknown Artist',
-                            style: GoogleFonts.nunito(color: _grey, fontSize: 12, fontWeight: FontWeight.w600),
-                          ),
-                        ],
-                      )),
-                      Container(
-                        width: 36, height: 36,
-                        decoration: BoxDecoration(
-                          color: _white, shape: BoxShape.circle,
-                          boxShadow: [BoxShadow(color: _white.withValues(alpha: 0.12), blurRadius: 10)],
-                        ),
-                        child: const Icon(Icons.arrow_forward_ios_rounded, color: _black, size: 14),
-                      ),
-                    ],
-                  ),
-
-                  if ((widget.data['featuring'] ?? '').toString().trim().isNotEmpty) ...[
-                    const SizedBox(height: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-                      decoration: BoxDecoration(color: _black3, borderRadius: BorderRadius.circular(7), border: Border.all(color: _white10)),
-                      child: Text('ft. ${widget.data['featuring']}',
-                          style: GoogleFonts.nunito(color: _grey, fontSize: 11, fontWeight: FontWeight.w600)),
-                    ),
-                  ],
-
-                  const SizedBox(height: 10),
-
-                  Row(children: [
-                    const Icon(Icons.calendar_today_rounded, color: _greyDark, size: 12),
-                    const SizedBox(width: 5),
-                    Text('Release: ', style: GoogleFonts.nunito(color: _grey, fontSize: 11)),
-                    Text(releaseDate, style: GoogleFonts.nunito(color: _white70, fontSize: 11, fontWeight: FontWeight.w700)),
-                  ]),
-
-                  const SizedBox(height: 12),
-
-                  // Progress bar
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(_statusLabel(_status), style: GoogleFonts.nunito(color: _grey, fontSize: 10, fontWeight: FontWeight.w600)),
-                          Text('${_statusProgress(_status)}%', style: GoogleFonts.nunito(color: _grey, fontSize: 10, fontWeight: FontWeight.w600)),
-                        ],
-                      ),
-                      const SizedBox(height: 5),
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(3),
-                        child: SizedBox(
-                          height: 3,
-                          child: AnimatedBuilder(
-                            animation: _progressAnim,
-                            builder: (_, __) => LinearProgressIndicator(
-                              value: _progressAnim.value,
-                              backgroundColor: _black4,
-                              valueColor: AlwaysStoppedAnimation<Color>(_isRejected ? _rose : statusColor),
-                            ),
-                          ),
+                      Text(releaseType,
+                          style: GoogleFonts.nunito(color: _grey, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.4)),
+                      const SizedBox(width: 7),
+                      Container(width: 3, height: 3, decoration: BoxDecoration(color: _greyDark, borderRadius: BorderRadius.circular(2))),
+                      const SizedBox(width: 7),
+                      Flexible(
+                        child: Text(
+                          '${_isPending ? "Scheduled: " : "Release: "}$releaseDate',
+                          maxLines: 1, overflow: TextOverflow.ellipsis,
+                          style: GoogleFonts.nunito(color: _greyDark, fontSize: 11),
                         ),
                       ),
                     ],
                   ),
-
-                  const SizedBox(height: 12),
-
-                  Row(children: [
-                    _StatusBadge(status: _status, small: true),
-                    const SizedBox(width: 6),
-                    _PaidBadge(paid: _isPaid),
-                    if (_isApproved) ...[const SizedBox(width: 6), const _LiveDot()],
-                  ]),
-
-                  // ── REJECTED BUTTON — fully visible, now carries the
-                  // full submission data so the fix screen knows which
-                  // doc to update and what reason/category to show ────
-                  if (_isRejected) ...[
-                    const SizedBox(height: 12),
-                    GestureDetector(
-                      onTap: () => widget.onOpenRejection(widget.data),
-                      child: Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.symmetric(vertical: 13),
-                        decoration: BoxDecoration(
-                          color: _rose.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: _rose, width: 1.5),
-                        ),
-                        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                          const Icon(Icons.info_rounded, color: _rose, size: 16),
-                          const SizedBox(width: 8),
-                          Text('Check Reasons & Fix',
-                              style: GoogleFonts.nunito(color: _rose, fontSize: 13, fontWeight: FontWeight.w800)),
-                        ]),
-                      ),
-                    ),
-                  ],
-
-                  // ── PAY NOW BUTTON — draft releases sitting in Pending
-                  // with no payment yet. Tapping sends the REAL submission
-                  // id into the payment flow so the webhook can flip this
-                  // exact doc to Paid + Review once payment clears. ────
-                  if (_needsPayment) ...[
-                    const SizedBox(height: 12),
-                    GestureDetector(
-                      onTap: _payNow,
-                      child: Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.symmetric(vertical: 13),
-                        decoration: BoxDecoration(
-                          color: _cyan.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: _cyan, width: 1.5),
-                        ),
-                        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                          const Icon(Icons.credit_card_rounded, color: _cyan, size: 16),
-                          const SizedBox(width: 8),
-                          Text(
-                            'Pay GHC ${_priceForReleaseType(widget.data['releaseType']).toStringAsFixed(2)} to Release',
-                            style: GoogleFonts.nunito(color: _cyan, fontSize: 13, fontWeight: FontWeight.w800),
-                          ),
-                        ]),
-                      ),
-                    ),
-                  ],
-
-                  // ── APPROVED PROMOTE BUTTON — fully visible ──────
-                  if (_isApproved) ...[
-                    const SizedBox(height: 12),
-                    GestureDetector(
-                      onTap: () => _launch('https://444musicblog.vercel.app'),
-                      child: Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.symmetric(vertical: 13),
-                        decoration: BoxDecoration(
-                          color: _amber.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: _amber, width: 1.5),
-                        ),
-                        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                          const Icon(Icons.trending_up_rounded, color: _amber, size: 16),
-                          const SizedBox(width: 8),
-                          Text('Promote',
-                              style: GoogleFonts.nunito(color: _amber, fontSize: 13, fontWeight: FontWeight.w800)),
-                        ]),
-                      ),
-                    ),
-                  ],
-
-                  const SizedBox(height: 10),
-
-                  // Action row
-                  Row(children: [
-                    Expanded(child: _ActionBtn(icon: Icons.image_rounded, label: 'Edit Cover', onTap: _editCoverArt)),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: _isApproved
-                          ? _ActionBtn(icon: Icons.link_rounded, label: 'Smart Link', onTap: _openModal, highlight: true)
-                          : _ActionBtn(icon: Icons.add_rounded,  label: 'New Release', onTap: () => widget.onNavigate('/upload')),
-                    ),
-                  ]),
                 ],
               ),
+            ),
+            const SizedBox(width: 8),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                if (countdown != null)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: _amber.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: _amber.withValues(alpha: 0.3)),
+                    ),
+                    child: Text(countdown, style: GoogleFonts.nunito(color: _amber, fontSize: 11, fontWeight: FontWeight.w800)),
+                  ),
+                const SizedBox(height: 6),
+                const Icon(Icons.chevron_right_rounded, color: _greyDark, size: 18),
+              ],
             ),
           ],
         ),
       ),
     );
   }
+}
 
-  // ── FIXED: handles base64 and network URLs ───────────────────────
-  Widget _buildCoverArt() {
-    final url = widget.data['coverURL']?.toString() ?? '';
-    const h   = 200.0;
-
-    if (url.isEmpty) return _coverPlaceholder(h);
-
-    if (url.startsWith('data:image')) {
-      try {
-        final base64Str = url.split(',').last;
-        final bytes = base64Decode(base64Str);
-        return Image.memory(bytes, height: h, width: double.infinity, fit: BoxFit.cover);
-      } catch (_) {
-        return _coverPlaceholder(h);
-      }
-    }
-
-    return CachedNetworkImage(
-      imageUrl: url,
-      height: h, width: double.infinity,
-      fit: BoxFit.cover,
-      placeholder: (_, __) => Container(height: h, color: _black3),
-      errorWidget: (_, __, ___) => _coverPlaceholder(h),
+class _SkeletonRow extends StatefulWidget {
+  @override
+  State<_SkeletonRow> createState() => _SkeletonRowState();
+}
+class _SkeletonRowState extends State<_SkeletonRow> with SingleTickerProviderStateMixin {
+  late AnimationController _c;
+  late Animation<double> _a;
+  @override
+  void initState() {
+    super.initState();
+    _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 1400))..repeat();
+    _a = Tween<double>(begin: -2, end: 2).animate(_c);
+  }
+  @override
+  void dispose() { _c.dispose(); super.dispose(); }
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _a,
+      builder: (_, __) => Container(
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+        decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: _white10))),
+        child: Row(children: [
+          Container(width: 62, height: 62, decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            gradient: LinearGradient(begin: Alignment(_a.value - 1, 0), end: Alignment(_a.value + 1, 0), colors: [_black3, _black4, _black3]),
+          )),
+          const SizedBox(width: 14),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            _shimmerLine(0.6), const SizedBox(height: 8), _shimmerLine(0.4),
+          ])),
+        ]),
+      ),
     );
   }
-
-  Widget _coverPlaceholder(double h) => GestureDetector(
-    onTap: _editCoverArt,
-    child: Container(
-      height: h, width: double.infinity, color: _black3,
-      child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-        const Icon(Icons.add_photo_alternate_outlined, color: _greyDark, size: 34),
-        const SizedBox(height: 8),
-        Text('Tap to add cover art', style: GoogleFonts.nunito(color: _greyDark, fontSize: 12)),
-      ]),
-    ),
+  Widget _shimmerLine(double w) => FractionallySizedBox(
+    widthFactor: w,
+    child: Container(height: 12, decoration: BoxDecoration(color: _black3, borderRadius: BorderRadius.circular(6))),
   );
 }
 
-String _formatDate(dynamic d) {
-  try {
-    DateTime dt;
-    if (d is Timestamp) dt = d.toDate();
-    else dt = DateTime.parse(d.toString());
-    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    return '${dt.day.toString().padLeft(2,'0')} ${months[dt.month-1]} ${dt.year}';
-  } catch (_) { return d.toString(); }
-}
-
 // ════════════════════════════════════════════════════════════════════
-//  RELEASE DETAIL MODAL
+//  RELEASE DETAIL MODAL — same metadata/credits/smart-link content as
+//  before, PLUS a top action bar (Pay Now / Promote / Check Reasons &
+//  Fix) mirroring the web dashboard's modal-top-action, since those
+//  actions no longer live inline on the row.
 // ════════════════════════════════════════════════════════════════════
 class _ReleaseDetailModal extends StatefulWidget {
   final Map<String, dynamic> data;
   final FirebaseFirestore db;
   final VoidCallback onRefresh;
-  final void Function(String) onNavigate;
-  const _ReleaseDetailModal({required this.data, required this.db, required this.onRefresh, required this.onNavigate});
+  final void Function(Map<String, dynamic>) onOpenRejection;
+  const _ReleaseDetailModal({
+    required this.data,
+    required this.db,
+    required this.onRefresh,
+    required this.onOpenRejection,
+  });
   @override
   State<_ReleaseDetailModal> createState() => _ReleaseDetailModalState();
 }
@@ -1027,12 +940,18 @@ class _ReleaseDetailModal extends StatefulWidget {
 class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
   bool    _generatingLink = false;
   String? _copiedMsg;
+  bool    _coverUploading = false;
 
-  String get _id         => widget.data['_id'] ?? '';
-  String get _status     => (widget.data['status'] ?? 'Pending').toString().trim();
-  bool   get _isApproved => _status.toLowerCase() == 'approved';
+  String get _id          => widget.data['_id'] ?? '';
+  String get _status      => (widget.data['status'] ?? 'Pending').toString().trim();
+  bool   get _isApproved  => _status.toLowerCase() == 'approved';
+  bool   get _isRejected  => _status.toLowerCase() == 'rejected';
+  bool   get _isPending   => _status.toLowerCase() == 'pending';
 
   late Map<String, dynamic> _data;
+
+  bool get _isPaid       => _isPaidValue(_data['paid']);
+  bool get _needsPayment => _isPending && !_isPaid;
 
   @override
   void initState() {
@@ -1085,6 +1004,49 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
     Share.share('Listen to "$title" by $artist on all streaming platforms\n$url');
   }
 
+  // ── Pay Now — unchanged from the previous card's _payNow: real
+  // submission id, isExistingSubmission: true, price auto-picked from
+  // releaseType. ──
+  Future<void> _payNow() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null || _id.isEmpty) return;
+    final amount = _priceForReleaseType(_data['releaseType']);
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PaymentWaitingScreen(
+          amountGHS: amount,
+          submissionId: _id,
+          uid: user.uid,
+          email: user.email ?? '',
+          successRouteName: '/releases',
+          isExistingSubmission: true,
+        ),
+      ),
+    );
+    widget.onRefresh();
+  }
+
+  // ── Cover art edit — unchanged base64 logic, now reachable via the
+  // pencil control on the modal's cover strip. ──
+  Future<void> _editCoverArt() async {
+    final picker = ImagePicker();
+    final file   = await picker.pickImage(source: ImageSource.gallery, maxWidth: 1200, imageQuality: 85);
+    if (file == null) return;
+    setState(() => _coverUploading = true);
+    try {
+      final bytes     = await file.readAsBytes();
+      final base64Str = base64Encode(bytes);
+      final dataUrl   = 'data:image/jpeg;base64,$base64Str';
+      await widget.db.collection('submissions').doc(_id).update({'coverURL': dataUrl});
+      if (mounted) setState(() { _data['coverURL'] = dataUrl; _coverUploading = false; });
+      widget.onRefresh();
+    } catch (e) {
+      if (mounted) setState(() => _coverUploading = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final bottom = MediaQuery.of(context).padding.bottom;
@@ -1100,6 +1062,7 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
           Container(height: 1, decoration: const BoxDecoration(
             gradient: LinearGradient(colors: [Colors.transparent, _white40, Colors.transparent]),
           )),
+          _buildTopAction(),
           Expanded(
             child: SingleChildScrollView(
               physics: const BouncingScrollPhysics(),
@@ -1120,6 +1083,23 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
                   _MetaSectionLabel(label: 'Status', icon: Icons.info_outline_rounded),
                   const SizedBox(height: 10),
                   _buildStatusRow(),
+                  if (_isRejected && (_data['rejectionReason'] ?? '').toString().trim().isNotEmpty) ...[
+                    const SizedBox(height: 10),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(13),
+                      decoration: BoxDecoration(
+                        color: _rose.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: _rose.withValues(alpha: 0.25)),
+                      ),
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Text('REASON FOR REJECTION', style: GoogleFonts.nunito(color: _rose, fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 1)),
+                        const SizedBox(height: 5),
+                        Text(_data['rejectionReason'] ?? '', style: GoogleFonts.nunito(color: _white70, fontSize: 13, height: 1.5)),
+                      ]),
+                    ),
+                  ],
                   const SizedBox(height: 22),
 
                   _MetaSectionLabel(label: 'Artist & Release', icon: Icons.person_rounded),
@@ -1192,6 +1172,62 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
     );
   }
 
+  // ── TOP ACTION BAR — mirrors renderModalTopAction() on the web:
+  // Pay Now for pending+unpaid, Promote for approved, Check Reasons &
+  // Fix for rejected. Same underlying callbacks as before. ──
+  Widget _buildTopAction() {
+    if (_needsPayment) {
+      final price = _priceForReleaseType(_data['releaseType']);
+      return GestureDetector(
+        onTap: _payNow,
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          color: _cyan.withValues(alpha: 0.14),
+          child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            const Icon(Icons.credit_card_rounded, color: _cyan, size: 16),
+            const SizedBox(width: 8),
+            Text('Pay GHC ${price.toStringAsFixed(2)} to Release',
+                style: GoogleFonts.nunito(color: _cyan, fontSize: 13, fontWeight: FontWeight.w800)),
+          ]),
+        ),
+      );
+    }
+    if (_isApproved) {
+      return GestureDetector(
+        onTap: () => _launch('https://444musicblog.vercel.app'),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          color: _amber.withValues(alpha: 0.14),
+          child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            const Icon(Icons.trending_up_rounded, color: _amber, size: 16),
+            const SizedBox(width: 8),
+            Text('Promote This Release',
+                style: GoogleFonts.nunito(color: _amber, fontSize: 13, fontWeight: FontWeight.w800)),
+          ]),
+        ),
+      );
+    }
+    if (_isRejected) {
+      return GestureDetector(
+        onTap: () { Navigator.pop(context); widget.onOpenRejection(_data); },
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          color: _rose.withValues(alpha: 0.14),
+          child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            const Icon(Icons.info_rounded, color: _rose, size: 16),
+            const SizedBox(width: 8),
+            Text('Check Reasons & Fix',
+                style: GoogleFonts.nunito(color: _rose, fontSize: 13, fontWeight: FontWeight.w800)),
+          ]),
+        ),
+      );
+    }
+    return const SizedBox.shrink();
+  }
+
   bool get _hasCredits {
     final c = _data['credits'];
     if (c == null || c is! Map) return false;
@@ -1227,6 +1263,29 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
               decoration: BoxDecoration(
                 gradient: LinearGradient(begin: Alignment.bottomCenter, end: Alignment.topCenter,
                     colors: [_black2, Colors.transparent]),
+              ),
+            ),
+          ),
+          // ── Cover edit control — mirrors the web's meta-cover-edit-btn ──
+          Positioned(
+            bottom: 12, right: 14,
+            child: GestureDetector(
+              onTap: _coverUploading ? null : _editCoverArt,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.55),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: _white20),
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  _coverUploading
+                      ? const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2, color: _white))
+                      : const Icon(Icons.edit_rounded, color: _white, size: 12),
+                  const SizedBox(width: 6),
+                  Text(_coverUploading ? 'Uploading…' : 'Change Cover',
+                      style: GoogleFonts.nunito(color: _white, fontSize: 11, fontWeight: FontWeight.w800)),
+                ]),
               ),
             ),
           ),
@@ -1390,12 +1449,21 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
     final submittedAt = _data['createdAt'] is Timestamp
         ? _formatDate((_data['createdAt'] as Timestamp).toDate())
         : '';
+    final displayLabel = _statusDisplayLabel(_status);
+    final c = _statusColor(_status);
     return Wrap(
       spacing: 8, runSpacing: 8,
       children: [
-        _StatusBadge(status: _status, small: true),
-        // FIXED — was checking 'paymentVerified' (never set), now checks real 'paid' field
-        _PaidBadge(paid: _isPaidValue(_data['paid'])),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+          decoration: BoxDecoration(color: c.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(7), border: Border.all(color: c.withValues(alpha: 0.5))),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Container(width: 5, height: 5, decoration: BoxDecoration(color: c, borderRadius: BorderRadius.circular(3))),
+            const SizedBox(width: 5),
+            Text(displayLabel, style: GoogleFonts.nunito(color: c, fontSize: 11, fontWeight: FontWeight.w700)),
+          ]),
+        ),
+        _PaidBadge(paid: _isPaid),
         if (submittedAt.isNotEmpty)
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
@@ -1496,48 +1564,8 @@ class _MetaFieldWidget extends StatelessWidget {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  SHARED WIDGETS
+//  SHARED WIDGETS (unchanged)
 // ════════════════════════════════════════════════════════════════════
-class _StatCard extends StatelessWidget {
-  final String value, label, sub;
-  final Color color;
-  const _StatCard({required this.value, required this.label, required this.sub, required this.color});
-  @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 10),
-    decoration: BoxDecoration(color: _black2, borderRadius: BorderRadius.circular(14), border: Border.all(color: _white10)),
-    child: Column(children: [
-      Text(value, style: GoogleFonts.nunito(color: color, fontSize: 22, fontWeight: FontWeight.w800)),
-      const SizedBox(height: 2),
-      Text(label, style: GoogleFonts.nunito(color: _white, fontSize: 11, fontWeight: FontWeight.w700)),
-      const SizedBox(height: 1),
-      Text(sub, style: GoogleFonts.nunito(color: _greyDark, fontSize: 9, fontWeight: FontWeight.w500), textAlign: TextAlign.center),
-    ]),
-  );
-}
-
-class _StatusBadge extends StatelessWidget {
-  final String status;
-  final bool small;
-  const _StatusBadge({required this.status, this.small = false});
-  @override
-  Widget build(BuildContext context) {
-    final c = _statusColor(status);
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: small ? 9 : 12, vertical: small ? 4 : 6),
-      decoration: BoxDecoration(color: c.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(7), border: Border.all(color: c.withValues(alpha: 0.5))),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Container(width: 5, height: 5, decoration: BoxDecoration(color: c, borderRadius: BorderRadius.circular(3))),
-        const SizedBox(width: 5),
-        Text(
-          status.isEmpty ? 'Pending' : (status[0].toUpperCase() + status.substring(1)),
-          style: GoogleFonts.nunito(color: c, fontSize: small ? 11 : 12, fontWeight: FontWeight.w700, letterSpacing: 0.3),
-        ),
-      ]),
-    );
-  }
-}
-
 class _PaidBadge extends StatelessWidget {
   final bool paid;
   const _PaidBadge({required this.paid});
@@ -1573,31 +1601,6 @@ class _LiveDotState extends State<_LiveDot> with SingleTickerProviderStateMixin 
     const SizedBox(width: 5),
     Text('Live', style: GoogleFonts.nunito(color: _green, fontSize: 11, fontWeight: FontWeight.w700)),
   ]);
-}
-
-class _ActionBtn extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-  final bool highlight;
-  const _ActionBtn({required this.icon, required this.label, required this.onTap, this.highlight = false});
-  @override
-  Widget build(BuildContext context) => GestureDetector(
-    onTap: onTap,
-    child: Container(
-      padding: const EdgeInsets.symmetric(vertical: 10),
-      decoration: BoxDecoration(
-        color: highlight ? _white.withValues(alpha: 0.08) : Colors.transparent,
-        borderRadius: BorderRadius.circular(9),
-        border: Border.all(color: highlight ? _white40 : _white20),
-      ),
-      child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-        Icon(icon, color: highlight ? _white : _white70, size: 13),
-        const SizedBox(width: 6),
-        Text(label, style: GoogleFonts.nunito(color: highlight ? _white : _white70, fontSize: 12, fontWeight: FontWeight.w700)),
-      ]),
-    ),
-  );
 }
 
 class _SlBtn extends StatelessWidget {
@@ -1705,54 +1708,6 @@ class _TopBtn extends StatelessWidget {
         Text(label, style: GoogleFonts.nunito(color: _black, fontSize: 12, fontWeight: FontWeight.w800)),
       ]),
     ),
-  );
-}
-
-class _SkeletonCard extends StatefulWidget {
-  @override
-  State<_SkeletonCard> createState() => _SkeletonCardState();
-}
-class _SkeletonCardState extends State<_SkeletonCard> with SingleTickerProviderStateMixin {
-  late AnimationController _c;
-  late Animation<double> _a;
-  @override
-  void initState() {
-    super.initState();
-    _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 1400))..repeat();
-    _a = Tween<double>(begin: -2, end: 2).animate(_c);
-  }
-  @override
-  void dispose() { _c.dispose(); super.dispose(); }
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _a,
-      builder: (_, __) => Container(
-        decoration: BoxDecoration(color: _black2, borderRadius: BorderRadius.circular(20), border: Border.all(color: _white10)),
-        child: Column(children: [
-          Container(height: 180,
-            decoration: BoxDecoration(
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(19)),
-              gradient: LinearGradient(
-                begin: Alignment(_a.value - 1, 0), end: Alignment(_a.value + 1, 0),
-                colors: [_black3, _black4, _black3],
-              ),
-            ),
-          ),
-          Padding(padding: const EdgeInsets.all(16),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              _shimmerLine(0.7), const SizedBox(height: 8),
-              _shimmerLine(0.45), const SizedBox(height: 12),
-              _shimmerLine(0.3),
-            ]),
-          ),
-        ]),
-      ),
-    );
-  }
-  Widget _shimmerLine(double w) => FractionallySizedBox(
-    widthFactor: w,
-    child: Container(height: 12, decoration: BoxDecoration(color: _black3, borderRadius: BorderRadius.circular(6))),
   );
 }
 
