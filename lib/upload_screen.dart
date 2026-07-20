@@ -386,6 +386,7 @@ class _UploadScreenState extends State<UploadScreen>
                       .map((t) => {
                             'title':  t.releaseTitle,
                             'artist': t.artistName,
+                            'featuring': t.featuring,
                             'url':    t.fileUrl,
                           })
                       .toList(),
