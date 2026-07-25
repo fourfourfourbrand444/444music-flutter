@@ -9,7 +9,7 @@ import 'dart:convert';
 // ─────────────────────────────────────────
 //  BACKEND CONFIG
 // ─────────────────────────────────────────
-const String _backendBaseUrl = 'https://444music-backend.bonto.run';
+const String _backendBaseUrl = 'https://four44music-broadcast-backend.onrender.com';
 
 // ─────────────────────────────────────────
 //  COLOURS

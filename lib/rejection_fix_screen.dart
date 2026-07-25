@@ -60,7 +60,7 @@ const _cloudinaryUrl    = 'https://api.cloudinary.com/v1_1/dlbgqtvqg/auto/upload
 const _cloudinaryPreset = 'glmamp2y';
 
 // ─── ADMIN NOTIFY BACKEND — same one release_info_screen.dart uses ──
-const _notifyUrl = 'https://444music-backend.bonto.run/api/submissions/notify';
+const _notifyUrl = 'https://four44music-broadcast-backend.onrender.com/api/submissions/notify';
 const _appSecret = 'e993b17f0762667e27d5298839dacff4a7409bb74e11e9ecaf0bb2bb647120a8';
 
 class RejectionFixScreen extends StatefulWidget {

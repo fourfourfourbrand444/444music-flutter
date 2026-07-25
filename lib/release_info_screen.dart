@@ -601,7 +601,7 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
   }
 
   // ── NOTIFICATIONS (own backend) ────────────────────────────────────────
-  static const _notifyUrl = 'https://444music-backend.bonto.run/api/submissions/notify';
+ static const _notifyUrl = 'https://four44music-broadcast-backend.onrender.com/api/submissions/notify';
   static const _appSecret = 'e993b17f0762667e27d5298839dacff4a7409bb74e11e9ecaf0bb2bb647120a8';
 
   String _formatCredits(List<CreditEntry> list) {
