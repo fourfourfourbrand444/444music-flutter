@@ -39,6 +39,49 @@ const _greenBorder= Color(0x3322C55E);
 const _backendBase = 'https://four44music-broadcast-backend.onrender.com';
 const _successMarker = 'www.444musicdistro.com/payment-success';
 
+// ─── CURRENCY DISPLAY — cosmetic only, never affects the amount sent
+// to Paystack. plan.amountGHS is always the source of truth for payment;
+// these rates only change what's rendered on the card. Static snapshot
+// rates as of mid-2026 — refresh periodically, or swap for a live FX
+// API later if you want this to stay accurate automatically. Keep this
+// in sync with the same map on the web pricing.html if you update either. ──
+class _CurrencyInfo {
+  final String symbol;
+  final double rate; // GHC → this currency
+  const _CurrencyInfo({required this.symbol, required this.rate});
+}
+
+const Map<String, _CurrencyInfo> _currencyRates = {
+  'GHS': _CurrencyInfo(symbol: 'GHC',  rate: 1),
+  'NGN': _CurrencyInfo(symbol: '₦',    rate: 131),
+  'USD': _CurrencyInfo(symbol: '\$',   rate: 0.0873),
+  'EUR': _CurrencyInfo(symbol: '€',    rate: 0.0803),
+  'GBP': _CurrencyInfo(symbol: '£',    rate: 0.0690),
+  'ZAR': _CurrencyInfo(symbol: 'R',    rate: 1.615),
+  'KES': _CurrencyInfo(symbol: 'KSh',  rate: 11.26),
+  'CAD': _CurrencyInfo(symbol: 'CA\$', rate: 0.1187),
+  'XOF': _CurrencyInfo(symbol: 'CFA',  rate: 52.6),
+};
+
+const List<Map<String, String>> _currencyOptions = [
+  {'code': 'GHS', 'label': '🇬🇭 Ghana — GHS'},
+  {'code': 'NGN', 'label': '🇳🇬 Nigeria — NGN'},
+  {'code': 'USD', 'label': '🇺🇸 United States — USD'},
+  {'code': 'EUR', 'label': '🇪🇺 Europe — EUR'},
+  {'code': 'GBP', 'label': '🇬🇧 United Kingdom — GBP'},
+  {'code': 'ZAR', 'label': '🇿🇦 South Africa — ZAR'},
+  {'code': 'KES', 'label': '🇰🇪 Kenya — KES'},
+  {'code': 'CAD', 'label': '🇨🇦 Canada — CAD'},
+  {'code': 'XOF', 'label': '🌍 West Africa (CFA) — XOF'},
+];
+
+String _formatConvertedAmount(double baseGhc, String currencyCode) {
+  final info = _currencyRates[currencyCode] ?? _currencyRates['GHS']!;
+  final converted = baseGhc * info.rate;
+  final decimals = currencyCode == 'XOF' ? 0 : 2;
+  return converted.toStringAsFixed(decimals);
+}
+
 // ─── FONT HELPERS ────────────────────────────────────────────────────
 TextStyle _outfit(double size, FontWeight weight, Color color,
     {double ls = 0, double h = 1.4}) =>
@@ -211,8 +254,8 @@ const _faqs = [
     a: 'Yes. You can choose a different plan for each new release from your dashboard. Your existing releases remain active regardless of which plan you pick next.',
   ),
   _FAQ(
-    q: 'Can I pay in US Dollars instead of Cedis?',
-    a: 'Yes. Prices are shown in both Ghanaian Cedis (GHC) and US Dollars so international artists know exactly what they will be charged. Payment can be made in either currency at checkout.',
+    q: 'What currency will I actually be charged in?',
+    a: 'All payments are processed in Ghanaian Cedis (GHC) through Paystack. The currency dropdown above just shows you an approximate equivalent in your local currency so you know roughly what to expect before checkout.',
   ),
 ];
 
@@ -243,6 +286,9 @@ class _PricingScreenState extends State<PricingScreen>
 
   bool _checkingResume = true;
   String? _resumeReference;
+
+  // ── Currency preview — display only, defaults to Ghana ──
+  String _selectedCurrency = 'GHS';
 
   @override
   void initState() {
@@ -308,6 +354,8 @@ class _PricingScreenState extends State<PricingScreen>
     );
   }
 
+  // ── Payment logic UNCHANGED — always uses plan.amountGHS regardless
+  // of what currency is currently being previewed on screen. ──
   Future<void> _handlePlanTap(_Plan plan) async {
     if (plan.amountGHS == 0) {
       Navigator.pushNamed(context, plan.btnRoute);
@@ -366,6 +414,7 @@ class _PricingScreenState extends State<PricingScreen>
                       ),
                     ),
                     SliverToBoxAdapter(child: _buildHeader()),
+                    SliverToBoxAdapter(child: _buildCurrencySelector()),
                     SliverToBoxAdapter(child: _buildTrustStrip()),
                     SliverToBoxAdapter(
                       child: Padding(
@@ -383,6 +432,7 @@ class _PricingScreenState extends State<PricingScreen>
                               (_, i) => _PlanCard(
                             plan: _plans[i],
                             index: i,
+                            currencyCode: _selectedCurrency,
                             onTap: () => _handlePlanTap(_plans[i]),
                           ),
                           childCount: _plans.length,
@@ -523,10 +573,65 @@ class _PricingScreenState extends State<PricingScreen>
           ),
           const SizedBox(height: 6),
           Text(
-            'Prices shown in Ghana Cedis (GHC) with US Dollar equivalents for international artists.',
+            'Prices are charged in Ghana Cedis (GHC). Use the dropdown below to preview the equivalent in your local currency.',
             style: _outfit(12, FontWeight.w500, _greyDark, h: 1.5),
           ),
-          const SizedBox(height: 28),
+        ],
+      ),
+    );
+  }
+
+  // ── CURRENCY SELECTOR — display only, doesn't touch Paystack ──
+  Widget _buildCurrencySelector() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(22, 16, 22, 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(
+                'VIEW PRICES IN',
+                style: _outfit(10, FontWeight.w700, _grey, ls: 1.2),
+              ),
+              const SizedBox(width: 10),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+                decoration: BoxDecoration(
+                  color: _black2,
+                  borderRadius: BorderRadius.circular(99),
+                  border: Border.all(color: _white20),
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    value: _selectedCurrency,
+                    dropdownColor: _black2,
+                    isDense: true,
+                    icon: const Icon(Icons.keyboard_arrow_down_rounded,
+                        color: _grey, size: 16),
+                    style: _outfit(12, FontWeight.w700, _white),
+                    items: _currencyOptions
+                        .map((opt) => DropdownMenuItem(
+                              value: opt['code'],
+                              child: Text(opt['label']!,
+                                  overflow: TextOverflow.ellipsis),
+                            ))
+                        .toList(),
+                    onChanged: (v) {
+                      if (v != null) setState(() => _selectedCurrency = v);
+                    },
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            _selectedCurrency == 'GHS'
+                ? "You'll be charged the exact GHC amount shown below at checkout."
+                : "Approximate $_selectedCurrency preview — you'll still be charged the exact GHC amount shown next to it at checkout.",
+            style: _outfit(11, FontWeight.w500, _greyDark, h: 1.4),
+          ),
         ],
       ),
     );
@@ -763,9 +868,15 @@ class _TopBarDelegate extends SliverPersistentHeaderDelegate {
 class _PlanCard extends StatefulWidget {
   final _Plan plan;
   final int index;
+  final String currencyCode;
   final VoidCallback onTap;
 
-  const _PlanCard({required this.plan, required this.index, required this.onTap});
+  const _PlanCard({
+    required this.plan,
+    required this.index,
+    required this.currencyCode,
+    required this.onTap,
+  });
 
   @override
   State<_PlanCard> createState() => _PlanCardState();
@@ -800,6 +911,19 @@ class _PlanCardState extends State<_PlanCard>
   @override
   Widget build(BuildContext context) {
     final plan = widget.plan;
+
+    // ── Currency preview computation — display only ──
+    final baseGhc = double.tryParse(plan.price) ?? 0;
+    final info = _currencyRates[widget.currencyCode] ?? _currencyRates['GHS']!;
+    final isGhs = widget.currencyCode == 'GHS';
+    final displayCurrencyLabel = info.symbol;
+    final displayAmount = (baseGhc == 0)
+        ? '0'
+        : (isGhs ? plan.price : _formatConvertedAmount(baseGhc, widget.currencyCode));
+    final subLabel = isGhs
+        ? '/ \$${plan.usdPrice}'
+        : (baseGhc == 0 ? '/ GHC 0' : '/ GHC ${plan.price}');
+
     return FadeTransition(
       opacity: _fade,
       child: SlideTransition(
@@ -869,12 +993,12 @@ class _PlanCardState extends State<_PlanCard>
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Text(
-                              'GHC',
+                              displayCurrencyLabel,
                               style: _outfit(15, FontWeight.w700, _white70),
                             ),
                             const SizedBox(width: 4),
                             Text(
-                              plan.price,
+                              displayAmount,
                               style: _mono(44, FontWeight.w500, _white),
                             ),
                           ],
@@ -882,7 +1006,7 @@ class _PlanCardState extends State<_PlanCard>
                         Padding(
                           padding: const EdgeInsets.only(bottom: 8),
                           child: Text(
-                            '/ \$${plan.usdPrice}',
+                            subLabel,
                             style: _outfit(13, FontWeight.w600, _grey),
                           ),
                         ),

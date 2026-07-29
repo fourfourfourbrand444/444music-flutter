@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "734783502459",
+    "project_id": "usersubmissionsportal",
+    "storage_bucket": "usersubmissionsportal.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:734783502459:android:a20e4263553950b4b24ade",
+        "android_client_info": {
+          "package_name": "com.app444music.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "734783502459-ed0i09mb62u4srnbs3g0rhhvopj3v6dc.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDLkvM1_8f2MHNO-BIQbRD60u4anQkCd8M"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "734783502459-ed0i09mb62u4srnbs3g0rhhvopj3v6dc.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

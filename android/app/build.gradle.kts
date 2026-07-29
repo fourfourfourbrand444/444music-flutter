@@ -1,10 +1,11 @@
 plugins {
     id("com.android.application")
     id("dev.flutter.flutter-gradle-plugin")
+    id("com.google.gms.google-services")
 }
 
 android {
-    namespace = "com.example.music"
+    namespace = "com.app444music.app"
     compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
