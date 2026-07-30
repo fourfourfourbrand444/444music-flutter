@@ -1,13 +1,7 @@
-package com.example.music
-
-import android.content.Intent
-import android.os.Bundle
-import io.flutter.embedding.android.FlutterActivity
-import io.flutter.embedding.engine.FlutterEngine
-import io.flutter.plugin.common.MethodChannel
+package com.app444music.app
 
 class MainActivity : FlutterActivity() {
-    private val CHANNEL = "com.example.music/deeplink"
+    private val CHANNEL = "com.app444music.app/deeplink"
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
