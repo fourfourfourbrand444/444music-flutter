@@ -134,7 +134,11 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
 
       if (mounted) {
         setState(() {
-          _photoURL = userSnap.exists ? userSnap.data()?['photoURL'] : null;
+          if (userSnap.exists) {
+            _photoURL = userSnap.data()?['photoURL'];
+          } else {
+            _photoURL = null;
+          }
           _totalStreams = int_(aData['totalStreams']);
           _spotify = int_(aData['spotifyStreams']);
           _apple = int_(aData['appleStreams']);

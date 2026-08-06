@@ -710,7 +710,7 @@ class _LandingScreenState extends State<LandingScreen>
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
               children: _platforms.map((p) => Container(
-                decoration: const BoxDecoration(border: Border.all(color: _lightBorder)),
+                decoration: BoxDecoration(border: Border.all(color: _lightBorder)),
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
