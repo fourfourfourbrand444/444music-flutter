@@ -166,12 +166,12 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
           ? const Center(child: CircularProgressIndicator(color: _wht, strokeWidth: 2))
           : SlideTransition(
               position: _slide,
-              child: FadeTransition(opacity: _fade, child: _body()),
+              child: FadeTransition(opacity: _fade, child: _buildBody()),
             ),
     );
   }
 
-  Widget _body() {
+  Widget _buildBody() {
     final top = MediaQuery.of(context).padding.top;
     final bottom = MediaQuery.of(context).padding.bottom;
     return SingleChildScrollView(
