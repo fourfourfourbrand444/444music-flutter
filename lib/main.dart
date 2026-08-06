@@ -13,7 +13,7 @@ import 'rejection_screen.dart';
 import 'dashboard.dart';
 import 'profile_screen.dart';
 import 'earnings_screen.dart';
-import 'analytics_screen.dart';
+import 'Analytics_screen.dart';
 import 'tools_screen.dart';
 import 'pricing_screen.dart';
 import 'package:app_links/app_links.dart';

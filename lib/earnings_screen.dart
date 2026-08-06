@@ -199,7 +199,7 @@ class _EarningsScreenState extends State<EarningsScreen>
         else
           SlideTransition(
             position: _slide,
-            child: FadeTransition(opacity: _fade, child: _body()),
+            child: FadeTransition(opacity: _fade, child: _buildBody()),
           ),
         if (_showPopup) _popup(),
       ]),
@@ -207,7 +207,7 @@ class _EarningsScreenState extends State<EarningsScreen>
   }
 
   // ══════════════════════════════════════════════════════════════════
-  Widget _body() {
+  Widget _buildBody() {
     final top = MediaQuery.of(context).padding.top;
     final bottom = MediaQuery.of(context).padding.bottom;
     return SingleChildScrollView(
