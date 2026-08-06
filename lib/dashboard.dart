@@ -736,7 +736,27 @@ class _ReleaseRowState extends State<_ReleaseRow> {
   String get _status    => (widget.data['status'] ?? 'Pending').toString().trim();
   bool   get _isPending => _status.toLowerCase() == 'pending';
 
-  void _openModal() {
+  // ── Row tap now opens the Apple-style white showcase screen FIRST,
+  // mirroring the web dashboard's openAppleTemplate() -> click-through
+  // -> openMetaModal() chain. Tapping anywhere on the showcase (except
+  // its own close button) proceeds into the existing detail modal;
+  // the close button just dismisses back to the list, same as web.
+  void _openModal() async {
+    final proceed = await Navigator.of(context).push<bool>(
+      PageRouteBuilder(
+        opaque: true,
+        barrierColor: Colors.transparent,
+        transitionDuration: const Duration(milliseconds: 260),
+        reverseTransitionDuration: const Duration(milliseconds: 200),
+        pageBuilder: (_, __, ___) => _AppleShowcaseScreen(data: widget.data),
+        transitionsBuilder: (_, anim, __, child) =>
+            FadeTransition(opacity: anim, child: child),
+      ),
+    );
+    if (proceed == true && mounted) _showDetailModal();
+  }
+
+  void _showDetailModal() {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -869,6 +889,253 @@ class _ReleaseRowState extends State<_ReleaseRow> {
               ],
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  APPLE-STYLE APPROVED-RELEASE SHOWCASE — mirrors the web dashboard's
+//  .apple-tpl-overlay exactly: soft white/grey gradient, left-aligned
+//  "Title - Type" over a "Distributed by 444Music" lockup, then the
+//  artwork below. Opens first for EVERY status when a row is tapped
+//  (with a small black status pill on anything that isn't Approved,
+//  hidden on Approved — same as web), then tapping anywhere hands off
+//  into the existing metadata sheet underneath. The close button just
+//  dismisses back to the list.
+//
+//  Every element reveals in its own slow, staggered beat — never all
+//  at once — using the same cubic-bezier(0.22, 1, 0.36, 1) easing and
+//  timing as the web version's keyframes:
+//    status   -> fades up over 0.70s, starting at 0.20s
+//    title    -> fades up over 0.90s, starting at 0.55s
+//    subtitle -> fades up over 0.90s, starting at 1.00s
+//    distrib  -> fades up over 0.90s, starting at 1.45s
+//    artwork  -> fades/scales in over 1.10s, starting at 1.90s
+//    hint     -> fades up over 0.70s, starting at 2.90s
+// ════════════════════════════════════════════════════════════════════
+class _AppleShowcaseScreen extends StatefulWidget {
+  final Map<String, dynamic> data;
+  const _AppleShowcaseScreen({required this.data});
+
+  @override
+  State<_AppleShowcaseScreen> createState() => _AppleShowcaseScreenState();
+}
+
+class _AppleShowcaseScreenState extends State<_AppleShowcaseScreen>
+    with SingleTickerProviderStateMixin {
+  static const double _totalMs = 3600;
+  static const Cubic _ease = Cubic(0.22, 1, 0.36, 1);
+
+  late final AnimationController _ctrl;
+  late final Animation<double> _statusAnim;
+  late final Animation<double> _titleAnim;
+  late final Animation<double> _subtitleAnim;
+  late final Animation<double> _distribAnim;
+  late final Animation<double> _artworkAnim;
+  late final Animation<double> _hintAnim;
+
+  String get _status     => (widget.data['status'] ?? 'Pending').toString().trim();
+  bool   get _isApproved => _status.toLowerCase() == 'approved';
+
+  Animation<double> _interval(double startMs, double endMs) {
+    return CurvedAnimation(
+      parent: _ctrl,
+      curve: Interval(
+        (startMs / _totalMs).clamp(0.0, 1.0),
+        (endMs / _totalMs).clamp(0.0, 1.0),
+        curve: _ease,
+      ),
+    );
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 3600));
+    _statusAnim   = _interval(200, 900);
+    _titleAnim    = _interval(550, 1450);
+    _subtitleAnim = _interval(1000, 1900);
+    _distribAnim  = _interval(1450, 2350);
+    _artworkAnim  = _interval(1900, 3000);
+    _hintAnim     = _interval(2900, 3600);
+    WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _ctrl.forward(); });
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  Widget _fadeUp(Animation<double> anim, {required Widget child, double distance = 16}) {
+    return AnimatedBuilder(
+      animation: anim,
+      builder: (_, c) => Opacity(
+        opacity: anim.value.clamp(0.0, 1.0),
+        child: Transform.translate(offset: Offset(0, distance * (1 - anim.value)), child: c),
+      ),
+      child: child,
+    );
+  }
+
+  Widget _buildArtwork() {
+    final url = widget.data['coverURL']?.toString() ?? '';
+    Widget img;
+    if (url.isEmpty) {
+      img = Container(color: const Color(0xFFE3E2DD));
+    } else if (url.startsWith('data:image')) {
+      try {
+        img = Image.memory(base64Decode(url.split(',').last), fit: BoxFit.cover);
+      } catch (_) {
+        img = Container(color: const Color(0xFFE3E2DD));
+      }
+    } else {
+      img = CachedNetworkImage(
+        imageUrl: url, fit: BoxFit.cover,
+        placeholder: (_, __) => Container(color: const Color(0xFFE3E2DD)),
+        errorWidget: (_, __, ___) => Container(color: const Color(0xFFE3E2DD)),
+      );
+    }
+    return AnimatedBuilder(
+      animation: _artworkAnim,
+      builder: (_, c) => Opacity(
+        opacity: _artworkAnim.value.clamp(0.0, 1.0),
+        child: Transform.translate(
+          offset: Offset(0, 26 * (1 - _artworkAnim.value)),
+          child: Transform.scale(
+            scale: 0.96 + (0.04 * _artworkAnim.value),
+            child: c,
+          ),
+        ),
+      ),
+      child: AspectRatio(
+        aspectRatio: 1,
+        child: Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            boxShadow: [
+              BoxShadow(color: Colors.black.withValues(alpha: 0.20), blurRadius: 60, offset: const Offset(0, 30)),
+              BoxShadow(color: Colors.black.withValues(alpha: 0.10), blurRadius: 18, offset: const Offset(0, 8)),
+            ],
+          ),
+          child: ClipRRect(borderRadius: BorderRadius.circular(14), child: img),
+        ),
+      ),
+    );
+  }
+
+  void _proceed() => Navigator.of(context).pop(true);
+  void _dismiss() => Navigator.of(context).pop(false);
+
+  @override
+  Widget build(BuildContext context) {
+    final releaseType   = (widget.data['releaseType'] ?? 'Single').toString();
+    final title         = (widget.data['releaseTitle'] ?? 'Untitled Release').toString();
+    final displayStatus = _statusDisplayLabel(_status);
+    final top   = MediaQuery.of(context).padding.top;
+    final width = MediaQuery.of(context).size.width;
+    final hPad  = width > 480 ? (((width - 430) / 2) + 30).clamp(24.0, 400.0) : 24.0;
+
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      body: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: _proceed,
+        child: Container(
+          width: double.infinity,
+          height: double.infinity,
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment(-0.35, -1),
+              end: Alignment(0.35, 1),
+              colors: [Color(0xFFFAF9F6), Color(0xFFF1EFE9), Color(0xFFE7E4DB), Color(0xFFDEDBD0)],
+              stops: [0.0, 0.42, 0.78, 1.0],
+            ),
+          ),
+          child: Stack(
+            children: [
+              SingleChildScrollView(
+                padding: EdgeInsets.fromLTRB(hPad, top + 100, hPad, 60),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (!_isApproved)
+                      _fadeUp(_statusAnim, child: Container(
+                        margin: const EdgeInsets.only(bottom: 18),
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                        decoration: BoxDecoration(color: Colors.black, borderRadius: BorderRadius.circular(999)),
+                        child: Text(displayStatus.toUpperCase(),
+                            style: GoogleFonts.nunito(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.6)),
+                      )),
+                    _fadeUp(_titleAnim, child: Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: RichText(
+                        text: TextSpan(
+                          style: GoogleFonts.outfit(color: Colors.black, fontSize: 26, fontWeight: FontWeight.w800, letterSpacing: -0.3, height: 1.25),
+                          children: [
+                            TextSpan(text: title),
+                            TextSpan(
+                              text: '  - $releaseType',
+                              style: GoogleFonts.outfit(color: Colors.black.withValues(alpha: 0.55), fontWeight: FontWeight.w500),
+                            ),
+                          ],
+                        ),
+                      ),
+                    )),
+                    _fadeUp(_subtitleAnim, child: Padding(
+                      padding: const EdgeInsets.only(bottom: 28),
+                      child: Text('Distributed by',
+                          style: GoogleFonts.nunito(color: Colors.black.withValues(alpha: 0.48), fontSize: 16, fontWeight: FontWeight.w600)),
+                    )),
+                    _fadeUp(_distribAnim, child: Padding(
+                      padding: const EdgeInsets.only(bottom: 52),
+                      child: Row(children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: Image.network(
+                            'https://www.444musicdistro.com/black.png',
+                            height: 26,
+                            errorBuilder: (_, __, ___) => const SizedBox(width: 26, height: 26),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Text('444Music',
+                            style: GoogleFonts.outfit(color: Colors.black, fontSize: 18, fontWeight: FontWeight.w700, letterSpacing: -0.1)),
+                      ]),
+                    )),
+                    _buildArtwork(),
+                    _fadeUp(_hintAnim, child: Padding(
+                      padding: const EdgeInsets.only(top: 32),
+                      child: SizedBox(
+                        width: double.infinity,
+                        child: Center(
+                          child: Text('TAP ANYWHERE TO VIEW DETAILS',
+                              style: GoogleFonts.nunito(color: Colors.black.withValues(alpha: 0.32), fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 1.2)),
+                        ),
+                      ),
+                    )),
+                  ],
+                ),
+              ),
+              Positioned(
+                top: top + 20, right: 20,
+                child: GestureDetector(
+                  onTap: _dismiss,
+                  child: Container(
+                    width: 36, height: 36,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.black.withValues(alpha: 0.06),
+                      border: Border.all(color: Colors.black.withValues(alpha: 0.10)),
+                    ),
+                    child: Icon(Icons.close_rounded, color: Colors.black.withValues(alpha: 0.55), size: 16),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

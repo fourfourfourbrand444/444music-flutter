@@ -1,21 +1,80 @@
+import 'dart:async';
 import 'dart:math';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:video_player/video_player.dart';
 import 'login.dart';
 
 // ─────────────────────────────────────────
-//  COLOURS — refined black & white theme
+//  COLOURS — mirrors the web's monochrome system
 // ─────────────────────────────────────────
-const _bg       = Color(0xFF060606);
-const _surface  = Color(0xFF0F0F0F);
-const _surface2 = Color(0xFF141414);
-const _white    = Color(0xFFF8F8F8);
-const _dim      = Color(0xFF9A9A9A);
-const _dim2     = Color(0xFF4A4A4A);
-const _border   = Color(0x18FFFFFF);
-const _border2  = Color(0x0EFFFFFF);
+const _bg        = Color(0xFF020202);
+const _surface   = Color(0xFF0A0A0A);
+const _surface2  = Color(0xFF0E0E0E);
+const _surface3  = Color(0xFF131313);
+const _white     = Color(0xFFF5F5F5);
+const _text      = Color(0xFFF2F2F2);
+const _text2     = Color(0xFF8F8F8F);
+const _text3     = Color(0xFF454545);
+const _border    = Color(0x14FFFFFF);
+const _border2   = Color(0x0DFFFFFF);
+
+// "light-section" palette (the web's white blocks)
+const _lightBg     = Color(0xFFFFFFFF);
+const _lightText   = Color(0xFF0A0A0A);
+const _lightText2  = Color(0xFF545454);
+const _lightText3  = Color(0xFF6B6B6B);
+const _lightBorder = Color(0x17000000);
+const _lightSurf2  = Color(0xFFF3F3F3);
+
+const _logoBlack = 'https://www.444musicdistro.com/black.png';
+const _logoWhite = 'https://444music-distribution.vercel.app/white.png';
+
+class _HeroSlide {
+  final List<String>? lines;
+  final List<IconData>? icons;
+  final String? caption;
+  const _HeroSlide({this.lines, this.icons, this.caption});
+}
+
+class _ToolItem {
+  final IconData icon;
+  final String title;
+  final String desc;
+  const _ToolItem(this.icon, this.title, this.desc);
+}
+
+class _Testimonial {
+  final String initials, quote, name, role;
+  const _Testimonial(this.initials, this.quote, this.name, this.role);
+}
+
+class _FaqItem {
+  final String cat, q, a;
+  const _FaqItem(this.cat, this.q, this.a);
+}
+
+class _Platform {
+  final IconData icon;
+  final String label;
+  const _Platform(this.icon, this.label);
+}
+
+const List<_Platform> _platforms = [
+  _Platform(Icons.music_note, 'Spotify'),
+  _Platform(Icons.apple, 'Apple Music'),
+  _Platform(Icons.shopping_bag_outlined, 'Amazon'),
+  _Platform(Icons.play_circle_outline, 'YouTube'),
+  _Platform(Icons.video_collection_outlined, 'TikTok'),
+  _Platform(Icons.camera_alt_outlined, 'Instagram'),
+  _Platform(Icons.headphones, 'Boomplay'),
+  _Platform(Icons.hearing, 'Audiomack'),
+  _Platform(Icons.radio, 'Deezer'),
+  _Platform(Icons.search, 'Shazam'),
+  _Platform(Icons.language, 'Anghami'),
+  _Platform(Icons.album, 'Trebel'),
+];
 
 // ─────────────────────────────────────────
 //  LANDING SCREEN
@@ -29,96 +88,142 @@ class LandingScreen extends StatefulWidget {
 class _LandingScreenState extends State<LandingScreen>
     with TickerProviderStateMixin {
 
-  late VideoPlayerController _videoCtrl;
-  bool _videoReady = false;
-
-  late AnimationController _heroCtrl;
-  late Animation<double>   _heroFade;
-  late Animation<Offset>   _heroSlide;
-
-  late AnimationController _dotCtrl;
+  // ── Ticker
   late AnimationController _tickerCtrl;
 
-  late AnimationController _statsCtrl;
-  late Animation<double>   _statsFade;
+  // ── Hero title slideshow
+  final List<_HeroSlide> _heroSlides = const [
+    _HeroSlide(lines: ['We', 'amplify', 'creative', 'music', 'brands']),
+    _HeroSlide(lines: ['Upload once.', 'Reach every', 'platform.']),
+    _HeroSlide(lines: ['Your music.', 'Your money.', 'Your terms.']),
+    _HeroSlide(lines: ['Keep 100%', 'of your', 'royalties.']),
+    _HeroSlide(lines: ['From Accra', 'to the world.']),
+    _HeroSlide(lines: ['Distribution', 'without limits.']),
+    _HeroSlide(lines: ['Built for', 'independent', 'artists.']),
+    _HeroSlide(lines: ['Global reach.', 'Zero cuts.']),
+    _HeroSlide(
+      caption: 'LIVE ON 100+ STORES',
+      icons: [
+        Icons.music_note, Icons.apple, Icons.play_circle_outline,
+        Icons.shopping_bag_outlined, Icons.video_collection_outlined,
+        Icons.play_circle_fill,
+      ],
+    ),
+  ];
+  late List<int> _heroOrder;
+  int _heroPos = 0;
+  Timer? _heroTimer;
 
-  // ── Multiple fallback video URLs (tried in order until one works)
-  static const _videoUrls = [
-    // Pexels concert/nightclub – direct HD mp4 (confirmed working URL pattern)
-    'https://videos.pexels.com/video-files/2022395/2022395-hd_1920_1080_30fps.mp4',
-    // Secondary Pexels concert crowd
-    'https://videos.pexels.com/video-files/3941289/3941289-hd_1920_1080_25fps.mp4',
-    // Tertiary — music stage lights
-    'https://videos.pexels.com/video-files/3209828/3209828-hd_1280_720_25fps.mp4',
+  // ── Nav overlay
+  bool _navOpen = false;
+
+  // ── FAQ
+  String _faqFilter = 'all';
+  int? _faqOpenIndex;
+  final List<_FaqItem> _faqItems = const [
+    _FaqItem('distribution', 'How do I upload my music to 444Music?',
+        'Log in to your dashboard, create a new release, upload your audio file, cover art, and fill in the required details such as artist name, release date, and genre.'),
+    _FaqItem('distribution', 'Which stores will my music be sent to?',
+        'Your music can be delivered to major streaming platforms including Spotify, Apple Music, TikTok, YouTube Music, Audiomack, Boomplay, and many more global stores — 100+ in total.'),
+    _FaqItem('distribution', 'How long does it take for my release to go live?',
+        'Most releases are processed within 2–5 business days. We recommend submitting at least 7 days before your target release date.'),
+    _FaqItem('distribution', 'What audio format should I upload?',
+        'We recommend WAV files (16-bit or 24-bit) for best quality. FLAC is also accepted. We transcode to the required format for each store automatically.'),
+    _FaqItem('payments', 'How do I earn money from my music?',
+        "You earn royalties whenever people stream or download your music on supported platforms. Earnings are collected and shown in your dashboard — you keep 100% of what's yours."),
+    _FaqItem('payments', 'When will I receive my royalties?',
+        'Streaming platforms usually report earnings monthly, but some may take 2–3 months before the first royalties appear in your dashboard.'),
+    _FaqItem('account', 'Can labels use 444Music Distribution?',
+        'Yes. Labels can manage multiple artists and releases from a single dashboard, with separate royalty tracking for each artist.'),
+    _FaqItem('account', 'Is my music ownership protected?',
+        'Yes. You keep 100% ownership of your music. We only distribute your content to digital stores — we never claim any ownership or rights.'),
+    _FaqItem('referrals', 'How does the referral program work?',
+        'Share your referral link with new artists. When they join and release music through 444Music, you earn referral rewards from their activity — passively.'),
+    _FaqItem('referrals', 'Where can I find my referral link?',
+        'Your referral link is inside your dashboard under the Referrals section. You can share it directly or copy it for social media.'),
   ];
 
-  int _videoUrlIndex = 0;
-
-  void _initVideo() {
-    if (_videoUrlIndex >= _videoUrls.length) return; // all failed, use fallback bg
-
-    _videoCtrl = VideoPlayerController.networkUrl(
-      Uri.parse(_videoUrls[_videoUrlIndex]),
-    )..initialize().then((_) {
-      if (mounted) {
-        setState(() => _videoReady = true);
-        _videoCtrl.setLooping(true);
-        _videoCtrl.setVolume(0);
-        _videoCtrl.play();
-      }
-    }).catchError((e) {
-      debugPrint('Video URL ${_videoUrls[_videoUrlIndex]} failed: $e');
-      _videoCtrl.dispose();
-      _videoUrlIndex++;
-      if (mounted) _initVideo(); // try next URL
-    });
-  }
+  // ── Releases slideshow (from Firestore)
+  List<Map<String, dynamic>> _releases = [];
+  int _releaseIndex = 0;
+  Timer? _releaseTimer;
+  bool _releasesLoading = true;
 
   @override
   void initState() {
     super.initState();
+    _tickerCtrl =
+        AnimationController(vsync: this, duration: const Duration(seconds: 26))
+          ..repeat();
 
-    _initVideo();
-
-    _heroCtrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 1000));
-    _heroFade = Tween<double>(begin: 0, end: 1).animate(
-        CurvedAnimation(parent: _heroCtrl, curve: Curves.easeOut));
-    _heroSlide = Tween<Offset>(
-        begin: const Offset(0, 0.05), end: Offset.zero).animate(
-        CurvedAnimation(parent: _heroCtrl, curve: Curves.easeOutCubic));
-
-    _dotCtrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 2000))
-      ..repeat();
-
-    _tickerCtrl = AnimationController(
-        vsync: this, duration: const Duration(seconds: 22))
-      ..repeat();
-
-    _statsCtrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 800));
-    _statsFade = Tween<double>(begin: 0, end: 1).animate(
-        CurvedAnimation(parent: _statsCtrl, curve: Curves.easeOut));
-
-    _heroCtrl.forward();
-    Future.delayed(const Duration(milliseconds: 900), () {
-      if (mounted) _statsCtrl.forward();
+    _heroOrder = _shuffle(List.generate(_heroSlides.length, (i) => i));
+    _heroTimer = Timer.periodic(const Duration(milliseconds: 4200), (_) {
+      if (!mounted) return;
+      setState(() {
+        _heroPos++;
+        if (_heroPos >= _heroOrder.length) {
+          _heroPos = 0;
+          _heroOrder = _shuffle(List.generate(_heroSlides.length, (i) => i));
+        }
+      });
     });
+
+    _loadReleases();
   }
 
   @override
   void dispose() {
-    _videoCtrl.dispose();
-    _heroCtrl.dispose();
-    _dotCtrl.dispose();
     _tickerCtrl.dispose();
-    _statsCtrl.dispose();
+    _heroTimer?.cancel();
+    _releaseTimer?.cancel();
     super.dispose();
   }
 
-  Future<void> _openBlog() async {
-    final uri = Uri.parse('https://444musicblog.vercel.app');
+  List<int> _shuffle(List<int> list) {
+    final r = Random();
+    for (int i = list.length - 1; i > 0; i--) {
+      final j = r.nextInt(i + 1);
+      final tmp = list[i]; list[i] = list[j]; list[j] = tmp;
+    }
+    return list;
+  }
+
+  Future<void> _loadReleases() async {
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('submissions')
+          .limit(30)
+          .get();
+      final items = <Map<String, dynamic>>[];
+      for (final doc in snap.docs) {
+        final d = doc.data();
+        final cover = d['coverURL'];
+        if (cover == null || (cover is String && cover.trim().isEmpty)) continue;
+        items.add({
+          'cover': cover,
+          'title': d['releaseTitle'] ?? d['title'] ?? 'New Release',
+          'artist': d['artistName'] ?? d['artist'] ?? 'Artist',
+        });
+      }
+      if (!mounted) return;
+      setState(() {
+        _releases = items;
+        _releasesLoading = false;
+      });
+      if (_releases.length > 1) {
+        _releaseTimer = Timer.periodic(const Duration(milliseconds: 3200), (_) {
+          if (!mounted) return;
+          setState(() => _releaseIndex = (_releaseIndex + 1) % _releases.length);
+        });
+      }
+    } catch (e) {
+      debugPrint('Failed to load releases: $e');
+      if (mounted) setState(() => _releasesLoading = false);
+    }
+  }
+
+  Future<void> _launch(String url) async {
+    final uri = Uri.parse(url);
     await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 
@@ -136,430 +241,312 @@ class _LandingScreenState extends State<LandingScreen>
     transitionDuration: const Duration(milliseconds: 400),
   ));
 
+  // ══════════════════════════════════════
+  //  BUILD
+  // ══════════════════════════════════════
   @override
   Widget build(BuildContext context) {
     return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: SystemUiOverlayStyle.light,
+      value: SystemUiOverlayStyle.dark,
       child: Scaffold(
         backgroundColor: _bg,
-        body: SingleChildScrollView(
-          physics: const BouncingScrollPhysics(),
-          child: Column(
-            children: [
-              _buildHero(context),
-              _buildTicker(),
-              _buildStats(),
-              _buildPlatforms(),
-              _buildHowItWorks(),
-              _buildFeatureCard(),
-              _buildTools(),
-              _buildTestimonials(),
-              _buildPricing(),
-              _buildCTABanner(),
-              _buildFooter(),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  // ══════════════════════════════════════
-  //  HERO — video background
-  // ══════════════════════════════════════
-  Widget _buildHero(BuildContext context) {
-    final size = MediaQuery.of(context).size;
-    final top  = MediaQuery.of(context).padding.top;
-
-    return SizedBox(
-      height: size.height,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-
-          // ── Video background
-          if (_videoReady)
-            SizedBox.expand(
-              child: FittedBox(
-                fit: BoxFit.cover,
-                child: SizedBox(
-                  width:  _videoCtrl.value.size.width,
-                  height: _videoCtrl.value.size.height,
-                  child: VideoPlayer(_videoCtrl),
-                ),
-              ),
-            )
-          else
-          // Animated dark gradient fallback while video loads
-            Container(
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [Color(0xFF1C1C1C), Color(0xFF060606)],
-                ),
-              ),
-            ),
-
-          // ── Dark overlay for readability
-          Container(color: const Color(0xB2020202)),
-
-          // ── Left-heavy gradient for text legibility
-          Container(
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.centerLeft,
-                end: Alignment.centerRight,
-                colors: [
-                  Color(0xF0060606),
-                  Color(0x70060606),
-                  Color(0x10060606),
-                ],
-                stops: [0.0, 0.55, 1.0],
-              ),
-            ),
-          ),
-
-          // ── Bottom fade into page
-          Positioned(
-            bottom: 0, left: 0, right: 0,
-            height: size.height * 0.30,
-            child: Container(
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.bottomCenter,
-                  end: Alignment.topCenter,
-                  colors: [_bg, Colors.transparent],
-                ),
-              ),
-            ),
-          ),
-
-          // ── Top vignette
-          Positioned(
-            top: 0, left: 0, right: 0,
-            height: size.height * 0.25,
-            child: Container(
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [Color(0x88020202), Colors.transparent],
-                ),
-              ),
-            ),
-          ),
-
-          // ── Navbar
-          Positioned(
-            top: 0, left: 0, right: 0,
-            child: _buildNavbar(top),
-          ),
-
-          // ── Hero content — FIX: constrain width to avoid overflow
-          Positioned(
-            top: top + 90,
-            left: 24, right: 24,
-            child: FadeTransition(
-              opacity: _heroFade,
-              child: SlideTransition(
-                position: _heroSlide,
-                child: _buildHeroContent(),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildHeroContent() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-
-        // Live pill
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.07),
-            borderRadius: BorderRadius.circular(100),
-            border: Border.all(color: Colors.white.withOpacity(0.12)),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              AnimatedBuilder(
-                animation: _dotCtrl,
-                builder: (_, __) => Container(
-                  width: 7, height: 7,
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.white
-                            .withOpacity(0.5 * sin(_dotCtrl.value * pi).abs()),
-                        blurRadius: 8, spreadRadius: 1,
-                      ),
+        body: Stack(
+          children: [
+            SingleChildScrollView(
+              physics: const BouncingScrollPhysics(),
+              child: Column(
+                children: [
+                  _buildWhiteHeroBlock(context),
+                  _buildTicker(),
+                  _buildStatsLight(),
+                  _buildPhotoStrip(),
+                  _buildPlatformsLight(),
+                  _buildHowItWorks(),
+                  _buildFeatureSplit(
+                    imageUrl:
+                        'https://images.unsplash.com/photo-1525201548942-d8732f6617a0?w=900&q=80&auto=format&fit=crop',
+                    badgeIcon: Icons.podcasts,
+                    badgeText: 'Live on Spotify · Apple Music',
+                    label: 'Built for Creators',
+                    heading: 'Your music. Your money. Your terms.',
+                    body:
+                        '444Music puts independent artists first. Upload once and watch your tracks go live across every major platform — while every GHS earned stays in your account.',
+                    bullets: const [
+                      ('100% royalties', 'no cuts, no subscriptions taking your earnings'),
+                      ('Fast delivery', 'your release live within 2–5 business days'),
+                      ('ISRC & Barcode', 'auto-generated free with every release'),
+                      ('Withdraw anytime', 'no minimum thresholds or waiting periods'),
                     ],
                   ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              const Flexible(
-                child: Text(
-                  'Now live on 100+ global stores',
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: Color(0xCCFFFFFF),
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: 0.2,
+                  _buildFeatureSplit(
+                    imageUrl:
+                        'https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=900&q=80&auto=format&fit=crop',
+                    badgeIcon: Icons.shield_outlined,
+                    badgeText: 'Rights protected',
+                    label: 'Studio to Store',
+                    heading: 'From the booth to every speaker on earth',
+                    body:
+                        "Whether you're recording in Accra, Lagos, or London — 444Music delivers your sound to 100+ streaming stores worldwide with zero technical headaches.",
+                    bullets: const [
+                      ('WAV & FLAC support', 'professional quality, lossless delivery'),
+                      ('African platforms first', 'Boomplay, Audiomack, Mdundo & more'),
+                      ('Label & solo friendly', 'manage one artist or an entire roster'),
+                      ('Playlist pitching', 'editorial support on Pro plan'),
+                    ],
                   ),
-                ),
-              ),
-            ],
-          ),
-        ),
-
-        const SizedBox(height: 26),
-
-        // Headline
-        const Text(
-          'Distribution +\nIndustry',
-          style: TextStyle(
-            color: _white,
-            fontSize: 50,
-            fontWeight: FontWeight.w900,
-            letterSpacing: -2.2,
-            height: 0.93,
-          ),
-        ),
-
-        ShaderMask(
-          shaderCallback: (bounds) => const LinearGradient(
-            colors: [Color(0xFFFFFFFF), Color(0xFFAAAAAA)],
-          ).createShader(bounds),
-          child: const Text(
-            'Building',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 60,
-              fontWeight: FontWeight.w900,
-              letterSpacing: -3,
-              height: 1.0,
-            ),
-          ),
-        ),
-
-        const SizedBox(height: 22),
-
-        const Text(
-          '444Music Distribution powers independent\nartists with global streaming access,\nreal-time royalty tracking, and\nindustry-grade tools — all in one place.',
-          style: TextStyle(
-            color: Color(0xAAFFFFFF),
-            fontSize: 14.5,
-            height: 1.7,
-            fontWeight: FontWeight.w400,
-            letterSpacing: 0.1,
-          ),
-        ),
-
-        const SizedBox(height: 34),
-
-        // Create Account button
-        GestureDetector(
-          onTap: _goToRegister,
-          child: Container(
-            width: double.infinity,
-            height: 54,
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(14),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.white.withOpacity(0.12),
-                  blurRadius: 24,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-            child: const Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.rocket_launch_rounded, color: Colors.black, size: 17),
-                SizedBox(width: 9),
-                Text(
-                  'Create Account',
-                  style: TextStyle(
-                    color: Colors.black,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: -0.2,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-
-        const SizedBox(height: 12),
-
-        // Sign In button
-        GestureDetector(
-          onTap: _goToLogin,
-          child: Container(
-            width: double.infinity,
-            height: 54,
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.06),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: Colors.white.withOpacity(0.18)),
-            ),
-            child: const Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.arrow_forward_rounded, color: _white, size: 17),
-                SizedBox(width: 9),
-                Text(
-                  'Sign In',
-                  style: TextStyle(
-                    color: _white,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: -0.1,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-
-        const SizedBox(height: 32),
-
-        // ── Social proof — FIX: use Flexible + overflow-safe text
-        Row(
-          children: [
-            // Avatar stack — fixed overlap
-            SizedBox(
-              width: 5 * 32.0 - 4 * 9.0, // 5 avatars * 32 - 4 overlaps * 9
-              height: 32,
-              child: Stack(
-                children: ['A', 'K', 'M', 'J', 'T'].asMap().entries.map((e) =>
-                    Positioned(
-                      left: e.key * 23.0,
-                      child: Container(
-                        width: 32, height: 32,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: Color.lerp(
-                            const Color(0xFF2A2A2A),
-                            const Color(0xFF6A6A6A),
-                            e.key / 4,
-                          ),
-                          border: Border.all(color: _bg, width: 2),
-                        ),
-                        child: Center(
-                          child: Text(e.value,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 11,
-                                fontWeight: FontWeight.w800,
-                              )),
-                        ),
-                      ),
-                    ),
-                ).toList(),
+                  _buildUploadFlow(),
+                  _buildToolsGrid(),
+                  _buildTestimonialsLight(),
+                  _buildBentoGrid(),
+                  _buildReleasesSlideshow(),
+                  _buildFaqLight(),
+                  _buildCTA(),
+                  _buildFooter(),
+                ],
               ),
             ),
-            const SizedBox(width: 10),
-            // FIX: wrap in Flexible so text can't overflow
-            Flexible(
-              child: RichText(
-                overflow: TextOverflow.ellipsis,
-                text: const TextSpan(
-                  style: TextStyle(color: Color(0xAAFFFFFF), fontSize: 13),
-                  children: [
-                    TextSpan(
-                      text: '7,000+ ',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    TextSpan(text: 'artists distributing'),
-                  ],
-                ),
-              ),
-            ),
+            if (_navOpen) _buildNavOverlay(),
           ],
         ),
-      ],
+      ),
     );
   }
 
   // ══════════════════════════════════════
-  //  NAVBAR
+  //  WHITE HEADER + HERO
   // ══════════════════════════════════════
-  Widget _buildNavbar(double top) {
+  Widget _buildWhiteHeroBlock(BuildContext context) {
+    final top = MediaQuery.of(context).padding.top;
     return Container(
-      padding: EdgeInsets.fromLTRB(20, top + 14, 20, 14),
-      decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.45),
-        border: Border(
-          bottom: BorderSide(color: Colors.white.withOpacity(0.06)),
-        ),
-      ),
-      child: Row(
+      color: _lightBg,
+      padding: EdgeInsets.only(top: top),
+      child: Column(
         children: [
-          Image.network(
-            'https://444music-distribution.vercel.app/black.png',
-            height: 28,
-            color: Colors.white,
-            colorBlendMode: BlendMode.srcIn,
-            errorBuilder: (_, __, ___) => const Text(
-              '444',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 20,
-                fontWeight: FontWeight.w900,
-                letterSpacing: -1,
-              ),
-            ),
-          ),
-          const Spacer(),
-          GestureDetector(
-            onTap: _openBlog,
-            child: const Text(
-              'promo',
-              style: TextStyle(
-                color: Color(0xAAFFFFFF),
-                fontSize: 14,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ),
-          const SizedBox(width: 14),
-          GestureDetector(
-            onTap: _openBlog,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: const Text(
-                'visit Blog',
-                style: TextStyle(
-                  color: Colors.black,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
+          // header
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                GestureDetector(
+                  onTap: () => setState(() => _navOpen = true),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+                    child: Column(
+                      children: [
+                        Container(width: 30, height: 2.5, color: const Color(0xFF17171F)),
+                        const SizedBox(height: 7),
+                        Container(width: 30, height: 2.5, color: const Color(0xFF17171F)),
+                      ],
+                    ),
+                  ),
                 ),
-              ),
+                Image.network(
+                  _logoBlack, height: 34,
+                  errorBuilder: (_, __, ___) => const Text('444',
+                      style: TextStyle(color: Color(0xFF1a1a2e), fontSize: 20,
+                          fontWeight: FontWeight.w900)),
+                ),
+              ],
+            ),
+          ),
+          // hero title slideshow + buttons
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 56, 24, 60),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  height: MediaQuery.of(context).size.height * 0.30,
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 450),
+                    transitionBuilder: (child, anim) => FadeTransition(
+                      opacity: anim,
+                      child: SlideTransition(
+                        position: Tween<Offset>(
+                          begin: const Offset(0, 0.12), end: Offset.zero,
+                        ).animate(CurvedAnimation(parent: anim, curve: Curves.easeOutCubic)),
+                        child: child,
+                      ),
+                    ),
+                    child: _buildHeroSlideContent(
+                      key: ValueKey(_heroPos),
+                      slide: _heroSlides[_heroOrder[_heroPos]],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 28),
+                _whiteOutlineButton('LOGIN', wide: true, onTap: _goToLogin),
+                const SizedBox(height: 14),
+                _whiteOutlineButton('SIGN UP', wide: false, onTap: _goToRegister),
+              ],
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildHeroSlideContent({required Key key, required _HeroSlide slide}) {
+    if (slide.icons != null) {
+      return Column(
+        key: key,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          Wrap(
+            spacing: 22, runSpacing: 14,
+            children: slide.icons!
+                .map((ic) => Icon(ic, size: 46, color: const Color(0xFF1a1a2e)))
+                .toList(),
+          ),
+          const SizedBox(height: 14),
+          Text(slide.caption ?? '',
+              style: const TextStyle(
+                fontWeight: FontWeight.w700, fontSize: 12,
+                letterSpacing: 2.4, color: Color(0xFF5c5c62),
+              )),
+        ],
+      );
+    }
+    return Column(
+      key: key,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisAlignment: MainAxisAlignment.end,
+      children: (slide.lines ?? []).map((line) => Text(
+        line,
+        style: const TextStyle(
+          fontFamily: 'Outfit',
+          fontWeight: FontWeight.w900,
+          fontSize: 44,
+          height: 0.98,
+          letterSpacing: -1.4,
+          color: Color(0xFF1a1a2e),
+        ),
+      )).toList(),
+    );
+  }
+
+  Widget _whiteOutlineButton(String label, {required bool wide, required VoidCallback onTap}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: wide ? double.infinity : null,
+        padding: EdgeInsets.symmetric(horizontal: wide ? 0 : 40, vertical: 17),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          border: Border.all(color: const Color(0xFF1a1a2e), width: 1.5),
+          borderRadius: BorderRadius.circular(3),
+        ),
+        child: Text(label,
+            style: const TextStyle(
+              color: Color(0xFF1a1a2e), fontSize: 16, fontWeight: FontWeight.w500,
+              letterSpacing: 1.5,
+            )),
+      ),
+    );
+  }
+
+  // ══════════════════════════════════════
+  //  FULL-SCREEN NAV OVERLAY
+  // ══════════════════════════════════════
+  Widget _buildNavOverlay() {
+    final links = <(String, IconData, VoidCallback)>[
+      ('Pricing', Icons.arrow_forward, () => setState(() => _navOpen = false)),
+      ('About', Icons.arrow_forward, () => setState(() => _navOpen = false)),
+      ('FAQ', Icons.arrow_forward, () => setState(() => _navOpen = false)),
+      ('Watch Tutorials', Icons.play_circle_outline,
+          () { setState(() => _navOpen = false); _launch('https://www.youtube.com/@444musicdistribution'); }),
+      ('Contact', Icons.email_outlined,
+          () { setState(() => _navOpen = false); _launch('mailto:444musicdistro@gmail.com'); }),
+    ];
+    return Positioned.fill(
+      child: Material(
+        color: Colors.black.withOpacity(0.99),
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 30),
+            child: Column(
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('444MUSIC',
+                        style: TextStyle(color: _white, fontWeight: FontWeight.w800,
+                            fontSize: 17, letterSpacing: -0.3)),
+                    GestureDetector(
+                      onTap: () => setState(() => _navOpen = false),
+                      child: Container(
+                        width: 40, height: 40,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.06),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: _border),
+                        ),
+                        child: const Icon(Icons.close, color: _white, size: 18),
+                      ),
+                    ),
+                  ],
+                ),
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: links.map((l) => GestureDetector(
+                      onTap: l.$3,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 18),
+                        decoration: const BoxDecoration(
+                          border: Border(bottom: BorderSide(color: _border2)),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Flexible(
+                              child: Text(l.$1,
+                                  style: const TextStyle(
+                                    color: _white, fontFamily: 'Outfit',
+                                    fontWeight: FontWeight.w800, fontSize: 30,
+                                    letterSpacing: -1,
+                                  )),
+                            ),
+                            Icon(l.$2, color: _text2, size: 18),
+                          ],
+                        ),
+                      ),
+                    )).toList(),
+                  ),
+                ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    GestureDetector(
+                      onTap: () { setState(() => _navOpen = false); _goToRegister(); },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 26, vertical: 14),
+                        decoration: BoxDecoration(
+                          color: Colors.white, borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.north_east, size: 15, color: Colors.black),
+                            SizedBox(width: 9),
+                            Text('Create Account',
+                                style: TextStyle(color: Colors.black, fontWeight: FontWeight.w700,
+                                    fontSize: 14.5)),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const Text('444Music Distribution',
+                        style: TextStyle(color: _text3, fontSize: 12.5, fontWeight: FontWeight.w500)),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -568,11 +555,6 @@ class _LandingScreenState extends State<LandingScreen>
   //  TICKER
   // ══════════════════════════════════════
   Widget _buildTicker() {
-    final items = [
-      'Spotify', 'Apple Music', 'Amazon Music', 'YouTube Music',
-      'TikTok', 'Instagram', 'Boomplay', 'Audiomack',
-      'Deezer', 'Shazam', 'Anghami', 'Trebel',
-    ];
     return Container(
       height: 48,
       decoration: BoxDecoration(
@@ -587,19 +569,23 @@ class _LandingScreenState extends State<LandingScreen>
               maxWidth: double.infinity,
               alignment: Alignment.centerLeft,
               child: Transform.translate(
-                offset: Offset(-_tickerCtrl.value * 900, 0),
+                offset: Offset(-_tickerCtrl.value * 1400, 0),
                 child: Row(
-                  children: [...items, ...items].map((item) => Container(
+                  children: [..._platforms, ..._platforms].map((p) => Container(
                     padding: const EdgeInsets.symmetric(horizontal: 22),
-                    decoration: BoxDecoration(
+                    decoration: const BoxDecoration(
                       border: Border(right: BorderSide(color: _border2)),
                     ),
-                    child: Text(item,
-                        style: const TextStyle(
-                          color: _dim, fontSize: 12.5,
-                          fontWeight: FontWeight.w500,
-                          letterSpacing: 0.2,
-                        )),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(p.icon, size: 15, color: _text2),
+                        const SizedBox(width: 8),
+                        Text(p.label,
+                            style: const TextStyle(color: _text2, fontSize: 12.5,
+                                fontWeight: FontWeight.w500)),
+                      ],
+                    ),
                   )).toList(),
                 ),
               ),
@@ -611,123 +597,127 @@ class _LandingScreenState extends State<LandingScreen>
   }
 
   // ══════════════════════════════════════
-  //  STATS
+  //  STATS (light)
   // ══════════════════════════════════════
-  Widget _buildStats() {
+  Widget _buildStatsLight() {
     final stats = [
-      ('7K+',  'Artists Using\n444Music'),
-      ('50K+', 'Releases\nDistributed'),
-      ('100+', 'Digital\nStores'),
-      ('100%', 'Royalties\nKept'),
+      ('7K+', 'Artists Using 444Music'),
+      ('50K+', 'Releases Distributed'),
+      ('100+', 'Digital Stores'),
+      ('100%', 'Royalties Kept by Artists'),
     ];
-    return FadeTransition(
-      opacity: _statsFade,
-      child: Container(
-        margin: const EdgeInsets.fromLTRB(20, 28, 20, 0),
-        decoration: BoxDecoration(
-          color: _surface,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: _border2),
-        ),
-        child: Row(
-          children: stats.asMap().entries.map((e) => Expanded(
-            child: Container(
-              padding: const EdgeInsets.symmetric(vertical: 22, horizontal: 10),
-              decoration: BoxDecoration(
-                border: Border(
-                  right: e.key < 3
-                      ? BorderSide(color: _border2)
-                      : BorderSide.none,
+    return Container(
+      color: _lightBg,
+      padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 16),
+      child: Wrap(
+        children: stats.map((s) => FractionallySizedBox(
+          widthFactor: 0.5,
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 22, horizontal: 14),
+            decoration: const BoxDecoration(
+              border: Border(right: BorderSide(color: _lightBorder), bottom: BorderSide(color: _lightBorder)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(s.$1, style: const TextStyle(fontFamily: 'Outfit', fontSize: 34,
+                    fontWeight: FontWeight.w900, letterSpacing: -1.5, color: _lightText)),
+                const SizedBox(height: 6),
+                Text(s.$2, style: const TextStyle(fontSize: 12.5, color: _lightText2)),
+              ],
+            ),
+          ),
+        )).toList(),
+      ),
+    );
+  }
+
+  // ══════════════════════════════════════
+  //  PHOTO STRIP
+  // ══════════════════════════════════════
+  Widget _buildPhotoStrip() {
+    return Container(
+      color: _bg,
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: SizedBox(
+          height: 260,
+          width: double.infinity,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              Image.network(
+                'https://images.unsplash.com/photo-1516450360452-9312f5e86fc7?w=900&q=80&auto=format&fit=crop',
+                fit: BoxFit.cover,
+                color: Colors.black.withOpacity(0.25),
+                colorBlendMode: BlendMode.darken,
+                errorBuilder: (_, __, ___) => Container(color: _surface2),
+              ),
+              Positioned(
+                left: 0, right: 0, bottom: 0,
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(18, 40, 18, 16),
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.bottomCenter, end: Alignment.topCenter,
+                      colors: [Color(0xCC000000), Colors.transparent],
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: const [
+                      Text('From upload to stage',
+                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13)),
+                      SizedBox(height: 2),
+                      Text('Global reach in days',
+                          style: TextStyle(color: Color(0x99FFFFFF), fontSize: 11)),
+                    ],
+                  ),
                 ),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // FIX: use FittedBox so stat number never overflows
-                  FittedBox(
-                    fit: BoxFit.scaleDown,
-                    alignment: Alignment.centerLeft,
-                    child: Text(e.value.$1,
-                        style: const TextStyle(
-                          color: _white, fontSize: 22,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: -1, height: 1,
-                        )),
-                  ),
-                  const SizedBox(height: 5),
-                  Text(e.value.$2,
-                      style: const TextStyle(
-                        color: _dim, fontSize: 9.5,
-                        fontWeight: FontWeight.w400, height: 1.4,
-                      )),
-                ],
-              ),
-            ),
-          )).toList(),
+            ],
+          ),
         ),
       ),
     );
   }
 
   // ══════════════════════════════════════
-  //  PLATFORMS
+  //  PLATFORMS (light)
   // ══════════════════════════════════════
-  Widget _buildPlatforms() {
-    final platforms = [
-      (Icons.music_note,              'Spotify'),
-      (Icons.apple,                   'Apple'),
-      (Icons.shopping_bag_outlined,   'Amazon'),
-      (Icons.play_circle_outline,     'YouTube'),
-      (Icons.video_collection_outlined,'TikTok'),
-      (Icons.camera_alt_outlined,     'Instagram'),
-      (Icons.headphones,              'Boomplay'),
-      (Icons.hearing,                 'Audiomack'),
-      (Icons.radio,                   'Deezer'),
-      (Icons.search,                  'Shazam'),
-      (Icons.language,                'Anghami'),
-      (Icons.album,                   'Trebel'),
-    ];
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 44, 20, 0),
+  Widget _buildPlatformsLight() {
+    return Container(
+      color: _lightBg,
+      padding: const EdgeInsets.fromLTRB(20, 44, 20, 44),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          _sectionLabel('Distribution Network'),
+          _label('Distribution Network', light: true, centered: true),
           const SizedBox(height: 10),
-          const Text('Distribute to all major platforms',
-              style: TextStyle(color: _white, fontSize: 24,
-                  fontWeight: FontWeight.w800, letterSpacing: -0.8)),
+          _heading('Distribute to all major platforms', light: true, align: TextAlign.center),
           const SizedBox(height: 8),
-          const Text('One upload, infinite reach across 100+ global stores.',
-              style: TextStyle(color: _dim, fontSize: 13.5, height: 1.6)),
+          _para('Your music, everywhere your fans are. One upload, infinite reach across 100+ global stores.',
+              light: true, align: TextAlign.center),
           const SizedBox(height: 24),
           Container(
             decoration: BoxDecoration(
-              color: _surface,
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: _border2),
+              border: Border.all(color: _lightBorder),
+              borderRadius: BorderRadius.circular(16),
             ),
             child: GridView.count(
-              crossAxisCount: 4,
+              crossAxisCount: 3,
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
-              children: platforms.map((p) => Container(
-                decoration: BoxDecoration(border: Border.all(color: _border2)),
+              children: _platforms.map((p) => Container(
+                decoration: const BoxDecoration(border: Border.all(color: _lightBorder)),
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(p.$1, color: _dim, size: 22),
-                    const SizedBox(height: 6),
-                    // FIX: overflow-safe platform label
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
-                      child: Text(p.$2,
-                          textAlign: TextAlign.center,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              color: _dim, fontSize: 10.5,
-                              fontWeight: FontWeight.w500)),
-                    ),
+                    Icon(p.icon, color: _lightText3, size: 22),
+                    const SizedBox(height: 8),
+                    Text(p.label, style: const TextStyle(color: _lightText3, fontSize: 10.5,
+                        fontWeight: FontWeight.w500)),
                   ],
                 ),
               )).toList(),
@@ -743,28 +733,28 @@ class _LandingScreenState extends State<LandingScreen>
   // ══════════════════════════════════════
   Widget _buildHowItWorks() {
     final steps = [
-      ('01', 'Create Account',  'Sign up in minutes and access your full artist dashboard.'),
-      ('02', 'Upload Music',    'Add audio files, cover art, and metadata. ISRC codes auto-generated.'),
-      ('03', 'Select Platforms','Choose from 100+ stores. Set release date and schedule ahead.'),
-      ('04', 'Start Earning',   'Track streams and royalties in real-time. Withdraw anytime.'),
+      ('01', 'Create an Account', 'Sign up in minutes and access your full artist dashboard with all tools ready to use.'),
+      ('02', 'Upload Your Music', 'Add your audio files, cover artwork, and metadata. ISRC codes are included automatically.'),
+      ('03', 'Select Platforms', 'Choose from 100+ stores and streaming services. Set your release date and schedule ahead.'),
+      ('04', 'Start Earning', 'Track streams, downloads, and royalties in real-time. Withdraw your earnings anytime.'),
     ];
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 44, 20, 0),
+    return Container(
+      color: _bg,
+      padding: const EdgeInsets.fromLTRB(20, 44, 20, 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _sectionLabel('The Process'),
+          _label('The Process'),
           const SizedBox(height: 10),
-          const Text('How 444Music Works',
-              style: TextStyle(color: _white, fontSize: 24,
-                  fontWeight: FontWeight.w800, letterSpacing: -0.8)),
+          _heading('How 444Music Works'),
+          const SizedBox(height: 8),
+          _para('From upload to global — four simple steps to get your music everywhere.'),
           const SizedBox(height: 24),
           ...steps.map((s) => Container(
             margin: const EdgeInsets.only(bottom: 2),
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
-              color: _surface,
-              border: Border.all(color: _border2),
+              color: _surface, border: Border.all(color: _border2),
               borderRadius: BorderRadius.circular(14),
             ),
             child: Row(
@@ -772,15 +762,10 @@ class _LandingScreenState extends State<LandingScreen>
               children: [
                 Container(
                   width: 38, height: 38,
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
+                  decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10)),
                   child: Center(
-                    child: Text(s.$1,
-                        style: const TextStyle(
-                            color: Colors.black, fontSize: 13,
-                            fontWeight: FontWeight.w900)),
+                    child: Text(s.$1, style: const TextStyle(color: Colors.black, fontSize: 13,
+                        fontFamily: 'Outfit', fontWeight: FontWeight.w900)),
                   ),
                 ),
                 const SizedBox(width: 14),
@@ -788,13 +773,10 @@ class _LandingScreenState extends State<LandingScreen>
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(s.$2,
-                          style: const TextStyle(color: _white, fontSize: 15,
-                              fontWeight: FontWeight.w700, letterSpacing: -0.3)),
+                      Text(s.$2, style: const TextStyle(color: _white, fontSize: 15,
+                          fontFamily: 'Outfit', fontWeight: FontWeight.w700, letterSpacing: -0.3)),
                       const SizedBox(height: 5),
-                      Text(s.$3,
-                          style: const TextStyle(
-                              color: _dim, fontSize: 13, height: 1.55)),
+                      Text(s.$3, style: const TextStyle(color: _text2, fontSize: 13, height: 1.55)),
                     ],
                   ),
                 ),
@@ -807,68 +789,76 @@ class _LandingScreenState extends State<LandingScreen>
   }
 
   // ══════════════════════════════════════
-  //  FEATURE CARD
+  //  FEATURE SPLIT (reused for both split sections)
   // ══════════════════════════════════════
-  Widget _buildFeatureCard() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 44, 20, 0),
+  Widget _buildFeatureSplit({
+    required String imageUrl,
+    required IconData badgeIcon,
+    required String badgeText,
+    required String label,
+    required String heading,
+    required String body,
+    required List<(String, String)> bullets,
+  }) {
+    return Container(
+      color: _bg,
+      padding: const EdgeInsets.fromLTRB(20, 36, 20, 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _sectionLabel('Built for Creators'),
-          const SizedBox(height: 10),
-          const Text('Your music.\nYour money.\nYour terms.',
-              style: TextStyle(color: _white, fontSize: 26,
-                  fontWeight: FontWeight.w800, letterSpacing: -0.9, height: 1.1)),
-          const SizedBox(height: 16),
-          const Text(
-            '444Music puts independent artists first. Upload once and watch your tracks go live across every major platform — while every GHS earned stays in your account.',
-            style: TextStyle(color: _dim, fontSize: 13.5, height: 1.7),
-          ),
-          const SizedBox(height: 20),
           ClipRRect(
-            borderRadius: BorderRadius.circular(16),
-            child: Image.network(
-              'https://images.pexels.com/photos/1105666/pexels-photo-1105666.jpeg?auto=compress&cs=tinysrgb&w=900',
-              height: 200, width: double.infinity, fit: BoxFit.cover,
-              errorBuilder: (_, __, ___) =>
-                  Container(height: 200, color: _surface2),
+            borderRadius: BorderRadius.circular(20),
+            child: Stack(
+              children: [
+                Image.network(imageUrl, height: 220, width: double.infinity, fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => Container(height: 220, color: _surface2)),
+                Positioned(
+                  top: 14, left: 14,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 7),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.7),
+                      borderRadius: BorderRadius.circular(99),
+                      border: Border.all(color: _border),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(badgeIcon, size: 13, color: _text2),
+                        const SizedBox(width: 7),
+                        Text(badgeText, style: const TextStyle(color: _white, fontSize: 11.5,
+                            fontWeight: FontWeight.w600)),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: 20),
-          ...[
-            ('100% royalties',   'no cuts, no subscriptions taking your earnings'),
-            ('Fast delivery',    'your release live within 2–5 business days'),
-            ('ISRC & Barcode',   'auto-generated free with every release'),
-            ('Withdraw anytime', 'no minimum thresholds or waiting periods'),
-          ].map((b) => Padding(
+          const SizedBox(height: 22),
+          _label(label),
+          const SizedBox(height: 12),
+          Text(heading, style: const TextStyle(color: _white, fontFamily: 'Outfit', fontSize: 25,
+              fontWeight: FontWeight.w800, letterSpacing: -0.8, height: 1.15)),
+          const SizedBox(height: 14),
+          Text(body, style: const TextStyle(color: _text2, fontSize: 13.5, height: 1.7)),
+          const SizedBox(height: 18),
+          ...bullets.map((b) => Padding(
             padding: const EdgeInsets.only(bottom: 12),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  margin: const EdgeInsets.only(top: 3),
-                  width: 16, height: 16,
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: const Icon(Icons.check, size: 10, color: Colors.black),
+                const Padding(
+                  padding: EdgeInsets.only(top: 3),
+                  child: Icon(Icons.check, size: 13, color: Colors.white),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: RichText(
                     text: TextSpan(children: [
-                      TextSpan(
-                        text: '${b.$1} — ',
-                        style: const TextStyle(
-                            color: _white, fontSize: 13.5,
-                            fontWeight: FontWeight.w600),
-                      ),
-                      TextSpan(
-                        text: b.$2,
-                        style: const TextStyle(color: _dim, fontSize: 13.5),
-                      ),
+                      TextSpan(text: '${b.$1} — ',
+                          style: const TextStyle(color: _white, fontSize: 13.5, fontWeight: FontWeight.w600)),
+                      TextSpan(text: b.$2, style: const TextStyle(color: _text2, fontSize: 13.5)),
                     ]),
                   ),
                 ),
@@ -881,104 +871,163 @@ class _LandingScreenState extends State<LandingScreen>
   }
 
   // ══════════════════════════════════════
-  //  TOOLS — FIX: overflow in tool card text
+  //  UPLOAD FLOW — steps list only (form is hidden on mobile in the web version)
   // ══════════════════════════════════════
-  Widget _buildTools() {
-    final tools = [
-      (Icons.attach_money_rounded,     'Monetization',      'Earn from streaming platforms and digital services worldwide.'),
-      (Icons.shield_outlined,          'Rights Protection', 'Protect your music from unauthorized use globally.'),
-      (Icons.rocket_launch_outlined,   'Artist Growth',     'Promote releases and reach new fans with real analytics.'),
-      (Icons.bar_chart_rounded,        'Analytics',         'Track streams, saves, and audience demographics live.'),
-      (Icons.business_center_outlined, 'Label Tools',       'Manage multiple artists and releases from one dashboard.'),
-      (Icons.link_rounded,             'Referral Program',  'Invite artists and earn rewards passively.'),
+  Widget _buildUploadFlow() {
+    final steps = [
+      ('1', 'Add Track Info', 'Enter title, artist name, genre, release date, and credits. Auto-generate ISRC codes.'),
+      ('2', 'Upload Audio & Cover Art', 'Drop your WAV or FLAC file and a 3000×3000px cover image. Quality check included.'),
+      ('3', 'Choose Your Stores', 'Select from 100+ platforms or go global with one click. Territory restrictions available.'),
+      ('4', 'Review & Submit', 'Our team reviews your release and delivers it on schedule. Track status in dashboard.'),
     ];
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 44, 20, 0),
+    return Container(
+      color: _bg,
+      padding: const EdgeInsets.fromLTRB(20, 36, 20, 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _sectionLabel('Artist Tools'),
+          _label('Release Manager'),
           const SizedBox(height: 10),
-          const Text('Powerful tools for every artist',
-              style: TextStyle(color: _white, fontSize: 24,
-                  fontWeight: FontWeight.w800, letterSpacing: -0.8)),
-          const SizedBox(height: 24),
-          // FIX: replace GridView with manual wrapping Rows to avoid childAspectRatio clipping
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final cardWidth = (constraints.maxWidth - 12) / 2;
-              return Wrap(
-                spacing: 12,
-                runSpacing: 12,
-                children: tools.map((t) => SizedBox(
-                  width: cardWidth,
-                  child: Container(
-                    padding: const EdgeInsets.all(18),
-                    decoration: BoxDecoration(
-                      color: _surface,
-                      border: Border.all(color: _border2),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,   // ← key fix
-                      children: [
-                        Icon(t.$1, color: Colors.white, size: 26),
-                        const SizedBox(height: 10),
-                        Text(t.$2,
-                            style: const TextStyle(color: _white, fontSize: 14,
-                                fontWeight: FontWeight.w700, letterSpacing: -0.3)),
-                        const SizedBox(height: 5),
-                        Text(t.$3,
-                            style: const TextStyle(
-                                color: _dim, fontSize: 11.5, height: 1.5)),
-                      ],
-                    ),
+          _heading('The easiest release workflow'),
+          const SizedBox(height: 8),
+          _para('Upload once and we handle delivery, metadata, and store submission for you.'),
+          const SizedBox(height: 20),
+          ...steps.map((s) => Container(
+            margin: const EdgeInsets.only(bottom: 4),
+            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
+            decoration: BoxDecoration(
+              color: _surface, border: Border.all(color: _border2),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 32, height: 32,
+                  decoration: BoxDecoration(
+                    color: _surface3, border: Border.all(color: _border),
+                    borderRadius: BorderRadius.circular(8),
                   ),
-                )).toList(),
-              );
-            },
-          ),
+                  child: Center(
+                    child: Text(s.$1, style: const TextStyle(color: _text2, fontSize: 13,
+                        fontFamily: 'Outfit', fontWeight: FontWeight.w800)),
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(s.$2, style: const TextStyle(color: _white, fontSize: 14.5,
+                          fontWeight: FontWeight.w700, letterSpacing: -0.2)),
+                      const SizedBox(height: 5),
+                      Text(s.$3, style: const TextStyle(color: _text2, fontSize: 12.5, height: 1.55)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          )),
         ],
       ),
     );
   }
 
   // ══════════════════════════════════════
-  //  TESTIMONIALS
+  //  TOOLS
   // ══════════════════════════════════════
-  Widget _buildTestimonials() {
-    final cards = [
-      ('KA', '444Music got my EP on Spotify within 3 days. The dashboard is so clean.',
-      'Kwame Asante', 'Afrobeats · Accra'),
-      ('MA', 'I love that I keep 100% of my royalties. No hidden fees, no drama.',
-      'Maame Akosua', 'Gospel · Kumasi'),
-      ('JB', 'The analytics tool helped me understand where my fans are.',
-      'Jay Blaze', 'Hip-Hop · Lagos'),
-      ('DK', 'My single hit 100K streams in two weeks after uploading through them.',
-      'DJ Kofi', 'DJ/Producer · Tema'),
+  Widget _buildToolsGrid() {
+    final tools = const [
+      _ToolItem(Icons.attach_money_rounded, 'Music Monetization',
+          'Earn from streaming platforms, social media, and digital music services worldwide. Transparent royalty splits.'),
+      _ToolItem(Icons.shield_outlined, 'Rights Protection',
+          'Protect your music from unauthorized use and ensure you receive accurate royalties from every platform globally.'),
+      _ToolItem(Icons.show_chart_rounded, 'Artist Growth',
+          'Promote releases, pitch to editorial playlists, and reach new fans across global platforms with real analytics.'),
+      _ToolItem(Icons.bar_chart_rounded, 'Real-Time Analytics',
+          'Track streams, saves, playlists, and audience demographics live across all your releases and platforms.'),
+      _ToolItem(Icons.groups_outlined, 'Label Management',
+          'Manage multiple artists and releases from one dashboard. Perfect for labels, collectives, and managers.'),
+      _ToolItem(Icons.link_rounded, 'Referral Program',
+          'Invite other artists and earn rewards when they release music through 444Music. Build passive income.'),
     ];
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(0, 44, 0, 0),
+    return Container(
+      color: _bg,
+      padding: const EdgeInsets.fromLTRB(20, 36, 20, 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _label('Artist Tools'),
+          const SizedBox(height: 10),
+          _heading('Powerful tools for every artist'),
+          const SizedBox(height: 8),
+          _para('Everything you need to grow, protect, and monetize your music — in one platform.'),
+          const SizedBox(height: 20),
+          ...tools.map((t) => Container(
+            margin: const EdgeInsets.only(bottom: 2),
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: _surface, border: Border.all(color: _border2),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(t.icon, color: Colors.white, size: 24),
+                const SizedBox(height: 12),
+                Text(t.title, style: const TextStyle(color: _white, fontFamily: 'Outfit',
+                    fontSize: 16, fontWeight: FontWeight.w700, letterSpacing: -0.3)),
+                const SizedBox(height: 8),
+                Text(t.desc, style: const TextStyle(color: _text2, fontSize: 13, height: 1.6)),
+                const SizedBox(height: 12),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: const [
+                    Text('Learn more', style: TextStyle(color: _white, fontSize: 13, fontWeight: FontWeight.w600)),
+                    SizedBox(width: 6),
+                    Icon(Icons.arrow_forward, size: 13, color: _white),
+                  ],
+                ),
+              ],
+            ),
+          )),
+        ],
+      ),
+    );
+  }
+
+  // ══════════════════════════════════════
+  //  TESTIMONIALS (light)
+  // ══════════════════════════════════════
+  Widget _buildTestimonialsLight() {
+    final cards = const [
+      _Testimonial('KA', '444Music got my EP on Spotify and Apple Music within 3 days. The dashboard is so clean and easy to use.', 'Kwame Asante', 'Afrobeats Artist · Accra'),
+      _Testimonial('MA', 'I love that I keep 100% of my royalties. No hidden fees, no drama. Just pure distribution.', 'Maame Akosua', 'Gospel Artist · Kumasi'),
+      _Testimonial('JB', 'The analytics tool helped me understand where my fans are. Now I know exactly who to target.', 'Jay Blaze', 'Hip-Hop Artist · Lagos'),
+      _Testimonial('TA', 'Best music distribution for African artists. The Boomplay and Audiomack integration is top tier.', 'Temi A.', 'Afropop Artist · Abuja'),
+      _Testimonial('DK', 'My single hit 100K streams in two weeks after I uploaded through them.', 'DJ Kofi', 'DJ / Producer · Tema'),
+    ];
+    return Container(
+      color: _lightBg,
+      padding: const EdgeInsets.symmetric(vertical: 44),
+      child: Column(
         children: [
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _sectionLabel('Artist Stories'),
+                _label('Artist Stories', light: true, centered: true),
                 const SizedBox(height: 10),
-                const Text('Artists love 444Music',
-                    style: TextStyle(color: _white, fontSize: 24,
-                        fontWeight: FontWeight.w800, letterSpacing: -0.8)),
+                _heading('Artists love 444Music', light: true, align: TextAlign.center),
+                const SizedBox(height: 8),
+                _para('Thousands of independent artists trust us to get their music to the world.',
+                    light: true, align: TextAlign.center),
               ],
             ),
           ),
           const SizedBox(height: 24),
           SizedBox(
-            height: 185,
+            height: 190,
             child: ListView.builder(
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -986,38 +1035,32 @@ class _LandingScreenState extends State<LandingScreen>
               itemBuilder: (_, i) {
                 final c = cards[i];
                 return Container(
-                  width: 255,
+                  width: 260,
                   margin: const EdgeInsets.only(right: 12),
                   padding: const EdgeInsets.all(18),
                   decoration: BoxDecoration(
-                    color: _surface,
-                    borderRadius: BorderRadius.circular(18),
-                    border: Border.all(color: _border2),
+                    color: _lightSurf2, border: Border.all(color: _lightBorder),
+                    borderRadius: BorderRadius.circular(16),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('★★★★★',
-                          style: TextStyle(
-                              color: Colors.white, fontSize: 12, letterSpacing: 1)),
+                      const Text('★★★★★', style: TextStyle(color: _lightText, fontSize: 12, letterSpacing: 1)),
                       const SizedBox(height: 10),
                       Expanded(
-                        child: Text('"${c.$2}"',
-                            style: const TextStyle(
-                                color: _dim, fontSize: 12.5, height: 1.6)),
+                        child: Text('"${c.quote}"',
+                            style: const TextStyle(color: Color(0xFF4A4A4A), fontSize: 12.5, height: 1.55)),
                       ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 10),
                       Row(
                         children: [
                           Container(
                             width: 30, height: 30,
-                            decoration: const BoxDecoration(
-                                color: Color(0xFF2A2A2A), shape: BoxShape.circle),
+                            decoration: BoxDecoration(color: const Color(0xFFECECEC), shape: BoxShape.circle,
+                                border: Border.all(color: _lightBorder)),
                             child: Center(
-                              child: Text(c.$1,
-                                  style: const TextStyle(
-                                      color: Colors.white, fontSize: 11,
-                                      fontWeight: FontWeight.w700)),
+                              child: Text(c.initials, style: const TextStyle(color: _lightText,
+                                  fontSize: 11, fontWeight: FontWeight.w700)),
                             ),
                           ),
                           const SizedBox(width: 10),
@@ -1025,14 +1068,11 @@ class _LandingScreenState extends State<LandingScreen>
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(c.$3,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(color: _white,
-                                        fontSize: 12, fontWeight: FontWeight.w600)),
-                                Text(c.$4,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                        color: _dim2, fontSize: 10.5)),
+                                Text(c.name, overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(color: _lightText, fontSize: 12,
+                                        fontWeight: FontWeight.w600)),
+                                Text(c.role, overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(color: _lightText3, fontSize: 10.5)),
                               ],
                             ),
                           ),
@@ -1050,271 +1090,340 @@ class _LandingScreenState extends State<LandingScreen>
   }
 
   // ══════════════════════════════════════
-  //  PRICING
+  //  BENTO PHOTO GRID
   // ══════════════════════════════════════
-  Widget _buildPricing() {
-    final plans = [
-      (
-      false, 'FREE', 'Starter', 'GHS 0', 'No upfront payment',
-      ['1 free upload', '100+ stores', 'Free ISRC & Barcode', 'Keep 100% royalties'],
-      'Get Started',
-      ),
-      (
-      true, 'POPULAR', 'Single Release', 'GHS 39.99', 'Per single release',
-      ['Priority delivery', 'Global distribution', '100% royalties', 'Full analytics'],
-      'Release Single',
-      ),
-      (
-      false, 'PROJECT', 'EP / Album', 'GHS 59.55', 'Per project release',
-      ['Up to 20 tracks', 'Detailed reports', 'Priority support', 'Playlist pitching'],
-      'Release Project',
-      ),
-      (
-      false, 'BEST VALUE', 'Annual Pro', 'GHS 350.00', 'Per year · unlimited releases',
-      [
-        'Unlimited uploads',
-        'All 100+ stores',
-        '100% royalties kept',
-        'Advanced analytics',
-        'Priority 24/7 support',
-        'Playlist pitching',
-      ],
-      'Go Annual',
-      ),
+  Widget _buildBentoGrid() {
+    final items = const [
+      ('https://images.unsplash.com/photo-1598488035139-bdbb2231ce04?w=1000&q=80&auto=format&fit=crop', 'Upload & Distribute'),
+      ('https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=600&q=80&auto=format&fit=crop', 'Earn Royalties'),
+      ('https://images.unsplash.com/photo-1516450360452-9312f5e86fc7?w=600&q=80&auto=format&fit=crop', 'Grow Your Fanbase'),
+      ('https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=600&q=80&auto=format&fit=crop', 'Studio Quality'),
+      ('https://images.unsplash.com/photo-1614680376573-df3480f0c6ff?w=600&q=80&auto=format&fit=crop', 'Real-Time Analytics'),
     ];
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 44, 20, 0),
+    return Container(
+      color: _bg,
+      padding: const EdgeInsets.fromLTRB(20, 36, 20, 8),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          _sectionLabel('Pricing'),
+          _label('The Artist Journey', centered: true),
           const SizedBox(height: 10),
-          const Text('Simple & Transparent Pricing',
-              style: TextStyle(color: _white, fontSize: 24,
-                  fontWeight: FontWeight.w800, letterSpacing: -0.8)),
+          _heading('Built for every stage of your career', align: TextAlign.center),
           const SizedBox(height: 8),
-          const Text('No hidden fees. Keep 100% royalties on every plan.',
-              style: TextStyle(color: _dim, fontSize: 13.5)),
-          const SizedBox(height: 28),
-          ...plans.map((p) {
-            final isHighlight = p.$1;
-            final isAnnual    = p.$2 == 'BEST VALUE';
-            return Container(
-              margin: const EdgeInsets.only(bottom: 14),
-              padding: const EdgeInsets.all(24),
-              decoration: BoxDecoration(
-                color: isAnnual
-                    ? const Color(0xFF0A0A0A)
-                    : isHighlight ? _surface2 : _surface,
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(
-                  color: isAnnual
-                      ? Colors.white.withOpacity(0.22)
-                      : isHighlight
-                      ? Colors.white.withOpacity(0.18)
-                      : _border2,
-                  width: isAnnual ? 1.5 : 1,
-                ),
-                boxShadow: isAnnual
-                    ? [BoxShadow(
-                    color: Colors.white.withOpacity(0.04),
-                    blurRadius: 32, offset: const Offset(0, 8))]
-                    : null,
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Tag badges
-                  Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 4),
+          _para('From bedroom producer to festival headliner — 444Music scales with you.',
+              align: TextAlign.center),
+          const SizedBox(height: 20),
+          ...items.map((it) => Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(16),
+              child: SizedBox(
+                height: 190, width: double.infinity,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    Image.network(it.$1, fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => Container(color: _surface2)),
+                    Positioned(
+                      left: 12, bottom: 12,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 5),
                         decoration: BoxDecoration(
-                          color: isAnnual || isHighlight
-                              ? Colors.white
-                              : Colors.white.withOpacity(0.08),
-                          borderRadius: BorderRadius.circular(100),
+                          color: Colors.white.withOpacity(0.92),
+                          borderRadius: BorderRadius.circular(99),
                         ),
-                        child: Text(p.$2,
-                            style: TextStyle(
-                              color: isAnnual || isHighlight
-                                  ? Colors.black : _dim,
-                              fontSize: 9.5,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: 0.8,
-                            )),
-                      ),
-                      if (isAnnual) ...[
-                        const SizedBox(width: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.06),
-                            borderRadius: BorderRadius.circular(100),
-                            border: Border.all(color: _border),
-                          ),
-                          child: const Text('SAVE 40%',
-                              style: TextStyle(
-                                color: _white, fontSize: 9.5,
-                                fontWeight: FontWeight.w700, letterSpacing: 0.5,
-                              )),
-                        ),
-                      ],
-                    ],
-                  ),
-                  const SizedBox(height: 14),
-                  Text(p.$3,
-                      style: const TextStyle(color: _white, fontSize: 18,
-                          fontWeight: FontWeight.w800, letterSpacing: -0.4)),
-                  const SizedBox(height: 10),
-                  Text(p.$4,
-                      style: const TextStyle(color: _white, fontSize: 34,
-                          fontWeight: FontWeight.w900, letterSpacing: -1.5)),
-                  Text(p.$5,
-                      style: const TextStyle(color: _dim, fontSize: 12)),
-                  const SizedBox(height: 18),
-                  Divider(color: _border2),
-                  const SizedBox(height: 14),
-                  ...p.$6.map((f) => Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 16, height: 16,
-                          decoration: BoxDecoration(
-                            color: isAnnual || isHighlight
-                                ? Colors.white
-                                : Colors.white.withOpacity(0.12),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Icon(Icons.check, size: 10,
-                              color: isAnnual || isHighlight
-                                  ? Colors.black : Colors.white),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(f,
-                              style: const TextStyle(
-                                  color: _dim, fontSize: 13.5)),
-                        ),
-                      ],
-                    ),
-                  )),
-                  const SizedBox(height: 18),
-                  GestureDetector(
-                    onTap: _goToRegister,
-                    child: Container(
-                      width: double.infinity,
-                      height: 52,
-                      decoration: BoxDecoration(
-                        color: isAnnual || isHighlight
-                            ? Colors.white : Colors.transparent,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                            color: isAnnual || isHighlight
-                                ? Colors.white : _border),
-                      ),
-                      child: Center(
-                        child: Text(p.$7,
-                            style: TextStyle(
-                              color: isAnnual || isHighlight
-                                  ? Colors.black : _white,
-                              fontSize: 14,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: -0.2,
-                            )),
+                        child: Text(it.$2, style: const TextStyle(color: Color(0xFF0A0A0A),
+                            fontSize: 11.5, fontWeight: FontWeight.w700)),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            );
-          }),
+            ),
+          )),
         ],
       ),
     );
   }
 
   // ══════════════════════════════════════
-  //  CTA BANNER
+  //  RELEASES — single-cover slideshow with dots
   // ══════════════════════════════════════
-  Widget _buildCTABanner() {
+  Widget _buildReleasesSlideshow() {
     return Container(
-      margin: const EdgeInsets.fromLTRB(20, 44, 20, 0),
-      padding: const EdgeInsets.all(32),
-      decoration: BoxDecoration(
-        color: _surface,
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: _border),
-      ),
+      color: _bg,
+      padding: const EdgeInsets.fromLTRB(20, 36, 20, 8),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Ready to go global?',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: _white, fontSize: 28,
-                  fontWeight: FontWeight.w900, letterSpacing: -1)),
-          const SizedBox(height: 6),
-          ShaderMask(
-            shaderCallback: (bounds) => const LinearGradient(
-              colors: [Color(0xFFCCCCCC), Color(0xFF555555)],
-            ).createShader(bounds),
-            child: const Text('Start distributing today.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white, fontSize: 28,
-                    fontWeight: FontWeight.w900, letterSpacing: -1)),
-          ),
-          const SizedBox(height: 12),
-          const Text(
-            'Join 7,000+ independent artists who trust\n444Music to reach their fans worldwide.',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: _dim, fontSize: 14, height: 1.6),
-          ),
-          const SizedBox(height: 28),
-          GestureDetector(
-            onTap: _goToRegister,
-            child: Container(
-              width: double.infinity, height: 54,
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: const Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.rocket_launch_rounded, color: Colors.black, size: 16),
-                  SizedBox(width: 8),
-                  Text('Create Free Account',
-                      style: TextStyle(color: Colors.black, fontSize: 15,
-                          fontWeight: FontWeight.w800)),
-                ],
-              ),
-            ),
-          ),
+          _label('Latest'),
           const SizedBox(height: 10),
-          GestureDetector(
-            onTap: _goToLogin,
-            child: Container(
-              width: double.infinity, height: 54,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: _border),
-              ),
-              child: const Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.arrow_forward_rounded, color: _white, size: 16),
-                  SizedBox(width: 8),
-                  Text('Sign In',
-                      style: TextStyle(color: _white, fontSize: 15,
-                          fontWeight: FontWeight.w500)),
+          _heading('Latest Releases'),
+          const SizedBox(height: 8),
+          _para('Fresh music distributed through 444Music. Every day, new artists go global.'),
+          const SizedBox(height: 24),
+          Center(
+            child: Column(
+              children: [
+                Container(
+                  width: 260,
+                  decoration: BoxDecoration(
+                    color: _surface, border: Border.all(color: _border2),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: Column(
+                    children: [
+                      AspectRatio(
+                        aspectRatio: 1,
+                        child: _releasesLoading
+                            ? Container(color: _surface2,
+                                child: const Center(child: CircularProgressIndicator(
+                                    color: _white, strokeWidth: 2)))
+                            : _releases.isEmpty
+                                ? Container(color: _surface2,
+                                    child: const Center(child: Icon(Icons.album, color: _text2, size: 36)))
+                                : AnimatedSwitcher(
+                                    duration: const Duration(milliseconds: 400),
+                                    child: Image.network(
+                                      _releases[_releaseIndex]['cover'],
+                                      key: ValueKey(_releaseIndex),
+                                      fit: BoxFit.cover, width: double.infinity, height: double.infinity,
+                                      errorBuilder: (_, __, ___) => Container(color: _surface2),
+                                    ),
+                                  ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              _releases.isEmpty ? (_releasesLoading ? 'Loading...' : 'No releases yet')
+                                  : _releases[_releaseIndex]['title'],
+                              maxLines: 1, overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(color: _white, fontSize: 14.5, fontWeight: FontWeight.w700),
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              _releases.isEmpty ? (_releasesLoading ? 'Artist' : 'Be the first to upload')
+                                  : _releases[_releaseIndex]['artist'],
+                              style: const TextStyle(color: _text2, fontSize: 12.5),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (_releases.length > 1) ...[
+                  const SizedBox(height: 18),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: List.generate(_releases.length, (i) {
+                      final active = i == _releaseIndex;
+                      return GestureDetector(
+                        onTap: () => setState(() => _releaseIndex = i),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 300),
+                          margin: const EdgeInsets.symmetric(horizontal: 3),
+                          width: active ? 20 : 6, height: 6,
+                          decoration: BoxDecoration(
+                            color: active ? _white : _border,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                        ),
+                      );
+                    }),
+                  ),
                 ],
-              ),
+              ],
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  // ══════════════════════════════════════
+  //  FAQ (light)
+  // ══════════════════════════════════════
+  Widget _buildFaqLight() {
+    final filters = const [
+      ('all', 'All'), ('distribution', 'Distribution'), ('payments', 'Payments'),
+      ('account', 'Account'), ('referrals', 'Referrals'),
+    ];
+    final visible = _faqFilter == 'all'
+        ? _faqItems
+        : _faqItems.where((f) => f.cat == _faqFilter).toList();
+
+    return Container(
+      color: _lightBg,
+      padding: const EdgeInsets.symmetric(vertical: 44, horizontal: 20),
+      child: Column(
+        children: [
+          _label('FAQ', light: true, centered: true),
+          const SizedBox(height: 10),
+          _heading('Frequently Asked Questions', light: true, align: TextAlign.center),
+          const SizedBox(height: 8),
+          _para('Everything you need to know about releasing music with 444Music.',
+              light: true, align: TextAlign.center),
+          const SizedBox(height: 24),
+          SizedBox(
+            height: 42,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              children: filters.map((f) {
+                final active = _faqFilter == f.$1;
+                return Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: GestureDetector(
+                    onTap: () => setState(() { _faqFilter = f.$1; _faqOpenIndex = null; }),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+                      decoration: BoxDecoration(
+                        color: active ? const Color(0xFF0A0A0A) : Colors.transparent,
+                        borderRadius: BorderRadius.circular(99),
+                        border: Border.all(color: active ? const Color(0xFF0A0A0A) : _lightBorder),
+                      ),
+                      child: Text(f.$2, style: TextStyle(
+                          color: active ? Colors.white : const Color(0xFF555555),
+                          fontSize: 13, fontWeight: FontWeight.w500)),
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+          const SizedBox(height: 18),
+          Column(
+            children: List.generate(visible.length, (i) {
+              final item = visible[i];
+              final open = _faqOpenIndex == i;
+              return Container(
+                margin: const EdgeInsets.only(bottom: 6),
+                decoration: BoxDecoration(
+                  color: _lightSurf2,
+                  border: Border.all(color: open ? Colors.black.withOpacity(0.3) : _lightBorder),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  children: [
+                    GestureDetector(
+                      onTap: () => setState(() => _faqOpenIndex = open ? null : i),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(item.q, style: const TextStyle(
+                                  color: _lightText, fontSize: 14, fontWeight: FontWeight.w500)),
+                            ),
+                            const SizedBox(width: 10),
+                            AnimatedRotation(
+                              turns: open ? 0.125 : 0,
+                              duration: const Duration(milliseconds: 250),
+                              child: Container(
+                                width: 24, height: 24,
+                                decoration: BoxDecoration(
+                                  color: open ? const Color(0xFF0A0A0A) : const Color(0xFFECECEC),
+                                  borderRadius: BorderRadius.circular(7),
+                                ),
+                                child: Icon(Icons.add, size: 15,
+                                    color: open ? Colors.white : const Color(0xFF444444)),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    AnimatedCrossFade(
+                      duration: const Duration(milliseconds: 250),
+                      crossFadeState: open ? CrossFadeState.showFirst : CrossFadeState.showSecond,
+                      firstChild: Padding(
+                        padding: const EdgeInsets.fromLTRB(18, 0, 18, 16),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(item.a, style: const TextStyle(
+                              color: Color(0xFF4A4A4A), fontSize: 13, height: 1.6)),
+                        ),
+                      ),
+                      secondChild: const SizedBox(width: double.infinity),
+                    ),
+                  ],
+                ),
+              );
+            }),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ══════════════════════════════════════
+  //  CTA
+  // ══════════════════════════════════════
+  Widget _buildCTA() {
+    return Container(
+      color: _bg,
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+      child: Container(
+        padding: const EdgeInsets.all(28),
+        decoration: BoxDecoration(
+          color: _surface, border: Border.all(color: _border),
+          borderRadius: BorderRadius.circular(22),
+        ),
+        child: Column(
+          children: [
+            const Text('Ready to go global?', textAlign: TextAlign.center,
+                style: TextStyle(color: _white, fontFamily: 'Outfit', fontSize: 26,
+                    fontWeight: FontWeight.w900, letterSpacing: -0.8)),
+            const SizedBox(height: 4),
+            const Text('Start distributing today.', textAlign: TextAlign.center,
+                style: TextStyle(color: Color(0xFFCCCCCC), fontFamily: 'Outfit', fontSize: 26,
+                    fontWeight: FontWeight.w900, letterSpacing: -0.8)),
+            const SizedBox(height: 12),
+            const Text('Join 7,000+ independent artists who trust 444Music to reach their fans worldwide.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: _text2, fontSize: 13.5, height: 1.6)),
+            const SizedBox(height: 24),
+            GestureDetector(
+              onTap: _goToRegister,
+              child: Container(
+                width: double.infinity, height: 52,
+                decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)),
+                child: const Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.north_east, color: Colors.black, size: 16),
+                    SizedBox(width: 8),
+                    Text('Create Free Account', style: TextStyle(color: Colors.black, fontSize: 14.5,
+                        fontWeight: FontWeight.w800)),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            GestureDetector(
+              onTap: _goToLogin,
+              child: Container(
+                width: double.infinity, height: 52,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: _border),
+                ),
+                child: const Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.arrow_forward, color: _white, size: 16),
+                    SizedBox(width: 8),
+                    Text('Sign In', style: TextStyle(color: _white, fontSize: 14.5, fontWeight: FontWeight.w500)),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1323,56 +1432,155 @@ class _LandingScreenState extends State<LandingScreen>
   //  FOOTER
   // ══════════════════════════════════════
   Widget _buildFooter() {
+    final companyLinks = <(String, String?)>[
+      ('About', 'https://444music-distribution.vercel.app/about.html'),
+      ('Pricing', 'https://444music-distribution.vercel.app/login.html'),
+      ('Contact', 'https://444music-distribution.vercel.app/support.html'),
+      ('FAQ', 'https://444music-distribution.vercel.app/faq.html'),
+      ('Developer', 'https://ofbluhface.vercel.app/'),
+    ];
+    final legalLinks = <(String, String?)>[
+      ('Terms of Service', 'https://444music-distribution.vercel.app/legal.html'),
+      ('Privacy Policy', 'https://444music-distribution.vercel.app/legal.html'),
+      ('Cookie Policy', 'https://444music-distribution.vercel.app/legal.html'),
+    ];
     return Container(
-      margin: const EdgeInsets.only(top: 44),
-      padding: const EdgeInsets.fromLTRB(20, 32, 20, 40),
-      decoration: BoxDecoration(
-          border: Border(top: BorderSide(color: _border2))),
+      color: _bg,
+      padding: const EdgeInsets.fromLTRB(20, 44, 20, 30),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Image.network(
-            'https://444music-distribution.vercel.app/white.png',
-            height: 28,
-            errorBuilder: (_, __, ___) => const Text('444Music',
-                style: TextStyle(color: Colors.white, fontSize: 18,
-                    fontWeight: FontWeight.w900)),
-          ),
+          Image.network(_logoWhite, height: 26,
+              errorBuilder: (_, __, ___) => const Text('444Music',
+                  style: TextStyle(color: Colors.white, fontSize: 18, fontFamily: 'Outfit',
+                      fontWeight: FontWeight.w900))),
           const SizedBox(height: 12),
           const Text(
             'Global music distribution platform for independent artists. Upload once — distribute everywhere.',
-            style: TextStyle(color: _dim, fontSize: 13, height: 1.6),
+            style: TextStyle(color: _text2, fontSize: 13, height: 1.6),
           ),
-          const SizedBox(height: 24),
-          Wrap(
-            spacing: 20,
-            runSpacing: 8,
-            children: ['About', 'Pricing', 'FAQ', 'Contact']
-                .map((l) => Text(l,
-                style: const TextStyle(color: _dim, fontSize: 13)))
-                .toList(),
+          const SizedBox(height: 18),
+          Row(
+            children: [
+              _socialIcon(Icons.camera_alt_outlined, 'https://www.instagram.com/444music_distribution?igsh=cDdhbTJzYXdkd2lp'),
+              const SizedBox(width: 8),
+              _socialIcon(Icons.alternate_email, null),
+              const SizedBox(width: 8),
+              _socialIcon(Icons.facebook_outlined, 'https://www.facebook.com/share/g/1BogQQDH5P/'),
+              const SizedBox(width: 8),
+              _socialIcon(Icons.video_collection_outlined, 'https://www.tiktok.com/@444musicdistribution?_r=1&_t=ZS-957m4qSvgj2'),
+            ],
           ),
+          const SizedBox(height: 32),
+          _footerCol('Company', companyLinks),
           const SizedBox(height: 24),
-          const Divider(color: Color(0x0DFFFFFF)),
+          _footerCol('Legal', legalLinks),
+          const SizedBox(height: 24),
+          _footerColActions('Artists', [
+            ('Create Account', _goToRegister),
+            ('Login', _goToLogin),
+            ('Dashboard', _goToLogin),
+            ('Analytics', _goToLogin),
+          ]),
+          const SizedBox(height: 28),
+          const Divider(color: _border2),
           const SizedBox(height: 16),
-          const Text(
-            '© 2026 444Music Distribution. All rights reserved.',
-            style: TextStyle(color: _dim2, fontSize: 12),
+          const Text('© 2026 444Music Distribution. All rights reserved.',
+              style: TextStyle(color: _text3, fontSize: 11.5)),
+          const SizedBox(height: 8),
+          Row(
+            children: const [
+              Icon(Icons.shield_outlined, size: 13, color: _text2),
+              SizedBox(width: 6),
+              Text('Secured & Independent', style: TextStyle(color: _text2, fontSize: 11.5)),
+            ],
           ),
         ],
       ),
     );
   }
 
-  Widget _sectionLabel(String text) => Row(
-    children: [
-      Container(width: 18, height: 1.5, color: Colors.white),
-      const SizedBox(width: 8),
-      Text(text.toUpperCase(),
-          style: const TextStyle(
-            color: Colors.white, fontSize: 11,
-            fontWeight: FontWeight.w700, letterSpacing: 0.8,
-          )),
-    ],
-  );
+  Widget _socialIcon(IconData icon, String? url) {
+    return GestureDetector(
+      onTap: url != null ? () => _launch(url) : null,
+      child: Container(
+        width: 36, height: 36,
+        decoration: BoxDecoration(
+          color: _surface2, border: Border.all(color: _border2),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Icon(icon, size: 15, color: _text2),
+      ),
+    );
+  }
+
+  Widget _footerCol(String title, List<(String, String?)> links) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title, style: const TextStyle(color: _white, fontFamily: 'Outfit', fontSize: 14,
+            fontWeight: FontWeight.w700, letterSpacing: -0.2)),
+        const SizedBox(height: 14),
+        ...links.map((l) => Padding(
+          padding: const EdgeInsets.only(bottom: 11),
+          child: GestureDetector(
+            onTap: l.$2 != null ? () => _launch(l.$2!) : null,
+            child: Text(l.$1, style: const TextStyle(color: _text2, fontSize: 13.5)),
+          ),
+        )),
+      ],
+    );
+  }
+
+  Widget _footerColActions(String title, List<(String, VoidCallback)> links) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title, style: const TextStyle(color: _white, fontFamily: 'Outfit', fontSize: 14,
+            fontWeight: FontWeight.w700, letterSpacing: -0.2)),
+        const SizedBox(height: 14),
+        ...links.map((l) => Padding(
+          padding: const EdgeInsets.only(bottom: 11),
+          child: GestureDetector(
+            onTap: l.$2,
+            child: Text(l.$1, style: const TextStyle(color: _text2, fontSize: 13.5)),
+          ),
+        )),
+      ],
+    );
+  }
+
+  // ══════════════════════════════════════
+  //  SHARED TEXT HELPERS
+  // ══════════════════════════════════════
+  Widget _label(String text, {bool light = false, bool centered = false}) {
+    final color = light ? _lightText3 : _text2;
+    if (centered) {
+      return Text(text.toUpperCase(), textAlign: TextAlign.center,
+          style: TextStyle(color: color, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: 0.8));
+    }
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(width: 18, height: 1.5, color: color),
+        const SizedBox(width: 8),
+        Text(text.toUpperCase(),
+            style: TextStyle(color: color, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: 0.8)),
+      ],
+    );
+  }
+
+  Widget _heading(String text, {bool light = false, TextAlign align = TextAlign.left}) {
+    return Text(text, textAlign: align,
+        style: TextStyle(
+          color: light ? _lightText : _white,
+          fontFamily: 'Outfit', fontSize: 24, fontWeight: FontWeight.w800,
+          letterSpacing: -0.8, height: 1.15,
+        ));
+  }
+
+  Widget _para(String text, {bool light = false, TextAlign align = TextAlign.left}) {
+    return Text(text, textAlign: align,
+        style: TextStyle(color: light ? _lightText2 : _text2, fontSize: 13.5, height: 1.65));
+  }
 }

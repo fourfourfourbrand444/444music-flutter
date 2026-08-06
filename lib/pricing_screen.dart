@@ -1,6 +1,13 @@
 //  444MUSIC — Pricing Screen
-//  Matches home screen aesthetic: black/white, Nunito, same patterns
-//  Upload button → navigates here from home bottom nav
+//  Theme rebuilt to mirror pricing.html EXACTLY:
+//   - deep near-black page background (#020202 scale)
+//   - "Single" plan rendered as the WHITE featured card (like the web's
+//     .price-card.featured), with black text, black popular badge,
+//     light-grey store chips, and an inverted (black) solid button
+//   - Plan Comparison table rendered as a WHITE panel with the same
+//     light-grey header row as the web table, instead of a dark table
+//   - Header copy/pill matched to the web's plain h1 + p (no extra pill)
+//  Backend calls, routes, and button/payment flow are UNCHANGED.
 // ═══════════════════════════════════════════════════════════════════
 import 'dart:ui';
 import 'dart:async';
@@ -15,12 +22,12 @@ import 'package:http/http.dart' as http;
 import 'payment_success_screen.dart';
 import 'home_screen.dart';
 
-// ─── PALETTE (same as home) ──────────────────────────────────────────
-const _black      = Color(0xFF000000);
-const _black1     = Color(0xFF0A0A0A);
-const _black2     = Color(0xFF111111);
-const _black3     = Color(0xFF1A1A1A);
-const _black4     = Color(0xFF222222);
+// ─── PALETTE — matched 1:1 to the :root vars in pricing.html ────────
+const _black      = Color(0xFF020202); // --black
+const _black1     = Color(0xFF060606); // --black-1
+const _black2     = Color(0xFF0A0A0A); // --black-2
+const _black3     = Color(0xFF0E0E0E); // --black-3
+const _black4     = Color(0xFF131313); // --black-4
 const _white      = Color(0xFFFFFFFF);
 const _white90    = Color(0xE6FFFFFF);
 const _white70    = Color(0xB3FFFFFF);
@@ -32,10 +39,30 @@ const _grey       = Color(0xFF888888);
 const _greyLight  = Color(0xFFAAAAAA);
 const _greyDark   = Color(0xFF444444);
 const _green      = Color(0xFF22C55E);
-const _greenDim   = Color(0x1F22C55E);
-const _greenBorder= Color(0x3322C55E);
+const _greenDim   = Color(0x1F22C55E); // rgba(34,197,94,0.12)
+const _greenBorder= Color(0x3322C55E); // rgba(34,197,94,0.2)
+const _rose       = Color(0xFFEF4444); // --rose
 
-// ─── BACKEND CONFIG ───────────────────────────────────────────────────
+// ── Featured-card ("white section") palette — sampled from the web's
+// .price-card.featured overrides, which pull from the home page's
+// light-section treatment. Used ONLY for the Single (popular) card and
+// the Plan Comparison table, exactly like the web page. ──────────────
+const _paperBlack      = Color(0xFF0A0A0A); // #0a0a0a — headings on white
+const _paperBody       = Color(0xFF55555A); // #55555a — plan-desc on white
+const _paperMuted      = Color(0xFF6B6B6B); // #6b6b6b — price-usd on white
+const _paperFaint      = Color(0xFF8A8A8A); // #8a8a8a — price-period / table th
+const _paperFeature    = Color(0xFF4A4A4A); // #4a4a4a — feature-list li on white
+const _paperChipBg     = Color(0xFFF2F2F2); // store-chip bg on white
+const _paperChipText   = Color(0xFF555555); // store-chip text on white
+const _paperDivider    = Color(0x1A000000); // rgba(0,0,0,0.10)
+const _paperTableHead  = Color(0xFFF4F4F4); // compare-table th bg
+const _paperTableLine  = Color(0x0F000000); // rgba(0,0,0,0.06) row divider
+const _paperTableBorder= Color(0x14000000); // rgba(0,0,0,0.08)
+const _paperErrorBg    = Color(0x14EF4444); // rgba(239,68,68,0.08)
+const _paperErrorBorder= Color(0x59EF4444); // rgba(239,68,68,0.35)
+const _paperErrorText  = Color(0xFFC62828);
+
+// ─── BACKEND CONFIG — UNCHANGED ───────────────────────────────────────
 const _backendBase = 'https://four44music-broadcast-backend.onrender.com';
 const _successMarker = 'www.444musicdistro.com/payment-success';
 
@@ -175,17 +202,22 @@ final _plans = [
       _StoreChip(Icons.music_video_rounded, 'TikTok'),
     ],
   ),
+  // ── "Single" — this is the web's WHITE FEATURED card. isFeatured:true
+  // is what flips _PlanCard / _Badge / _FeatureRow / _StoreChipWidget /
+  // _PlanButton over to the light "paper" palette, exactly matching
+  // .price-card.featured on pricing.html. ──────────────────────────────
   _Plan(
     badge: 'Most Popular',
     badgeIcon: 'fire',
     planName: 'Single',
     desc: 'Drop a track professionally with fast global delivery and store cover art.',
-   price: '39.99',
-       usdPrice: '3.49',
-       period: 'One-time per release',
-       btnLabel: 'Release Single',
-       btnRoute: '',
-       amountGHS: 39.99,
+    price: '39.99',
+    usdPrice: '3.49',
+    period: 'One-time per release',
+    btnLabel: 'Release Single',
+    btnRoute: '',
+    amountGHS: 39.99,
+    isFeatured: true,
     style: PlanStyle.solid,
     features: [
       const _Feature('1 single release (1–2 tracks)'),
@@ -421,7 +453,7 @@ class _PricingScreenState extends State<PricingScreen>
                         padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 4),
                         child: Text(
                           'CHOOSE YOUR PLAN',
-                          style: _outfit(11, FontWeight.w700, _grey, ls: 2),
+                          style: _outfit(11, FontWeight.w800, _grey, ls: 2),
                         ),
                       ),
                     ),
@@ -467,7 +499,7 @@ class _PricingScreenState extends State<PricingScreen>
         child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
           child: Container(
-            color: _black.withValues(alpha: 0.72),
+            color: _black.withValues(alpha: 0.85),
             padding: const EdgeInsets.symmetric(horizontal: 32),
             child: Center(
               child: Container(
@@ -536,45 +568,22 @@ class _PricingScreenState extends State<PricingScreen>
     );
   }
 
+  // ── Header — matched to pricing.html's plain h1 + p (no extra pill,
+  // no "DISTRIBUTION PLANS" badge — the web page doesn't have one). ──
   Widget _buildHeader() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(22, 28, 22, 0),
+      padding: const EdgeInsets.fromLTRB(22, 32, 22, 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: _white06,
-              borderRadius: BorderRadius.circular(99),
-              border: Border.all(color: _white10),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.bolt_rounded, color: _white70, size: 12),
-                const SizedBox(width: 6),
-                Text(
-                  'DISTRIBUTION PLANS',
-                  style: _outfit(10, FontWeight.w800, _white70, ls: 2),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 18),
           Text(
-            'Simple pricing.\nSerious distribution.',
-            style: _outfit(34, FontWeight.w800, _white, h: 1.1),
+            'Simple, serious\npricing.',
+            style: _outfit(34, FontWeight.w800, _white, h: 1.12, ls: -0.3),
           ),
           const SizedBox(height: 12),
           Text(
-            'Upload once. Reach millions. Keep every cent you earn — no hidden cuts, no annual surprises.',
+            'Upload once, reach 100+ stores, and keep every cent you earn.',
             style: _outfit(14, FontWeight.w500, _grey, h: 1.6),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            'Prices are charged in Ghana Cedis (GHC). Use the dropdown below to preview the equivalent in your local currency.',
-            style: _outfit(12, FontWeight.w500, _greyDark, h: 1.5),
           ),
         ],
       ),
@@ -584,7 +593,7 @@ class _PricingScreenState extends State<PricingScreen>
   // ── CURRENCY SELECTOR — display only, doesn't touch Paystack ──
   Widget _buildCurrencySelector() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(22, 16, 22, 24),
+      padding: const EdgeInsets.fromLTRB(22, 20, 22, 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -592,7 +601,7 @@ class _PricingScreenState extends State<PricingScreen>
             children: [
               Text(
                 'VIEW PRICES IN',
-                style: _outfit(10, FontWeight.w700, _grey, ls: 1.2),
+                style: _outfit(11, FontWeight.w700, _grey, ls: 0.5),
               ),
               const SizedBox(width: 10),
               Container(
@@ -608,8 +617,8 @@ class _PricingScreenState extends State<PricingScreen>
                     dropdownColor: _black2,
                     isDense: true,
                     icon: const Icon(Icons.keyboard_arrow_down_rounded,
-                        color: _grey, size: 16),
-                    style: _outfit(12, FontWeight.w700, _white),
+                        color: _greyLight, size: 16),
+                    style: _outfit(13, FontWeight.w700, _white),
                     items: _currencyOptions
                         .map((opt) => DropdownMenuItem(
                               value: opt['code'],
@@ -639,10 +648,10 @@ class _PricingScreenState extends State<PricingScreen>
 
   Widget _buildTrustStrip() {
     final items = [
-      (Icons.check_circle_outline_rounded, '100% Royalties'),
+      (Icons.check_circle_rounded, '100% Royalties'),
       (Icons.store_rounded, '100+ Stores'),
       (Icons.qr_code_rounded, 'Free ISRC & UPC'),
-      (Icons.cancel_outlined, 'Cancel Anytime'),
+      (Icons.cancel_rounded, 'Cancel Anytime'),
     ];
     return Container(
       margin: const EdgeInsets.fromLTRB(22, 0, 22, 28),
@@ -659,7 +668,7 @@ class _PricingScreenState extends State<PricingScreen>
           return Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(item.$1, color: _green, size: 14),
+              Icon(item.$1, color: _green, size: 12),
               const SizedBox(width: 6),
               Text(
                 item.$2,
@@ -672,22 +681,33 @@ class _PricingScreenState extends State<PricingScreen>
     );
   }
 
+  // ── Plan Comparison — rendered as a WHITE panel, matching
+  // .compare-table-wrap on pricing.html (light grey header row, black
+  // text on white, on top of the black page background). ──────────────
   Widget _buildCompareSection() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(22, 36, 22, 0),
+      padding: const EdgeInsets.fromLTRB(22, 40, 22, 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
             'Plan Comparison',
+            textAlign: TextAlign.left,
             style: _outfit(22, FontWeight.w800, _white),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 18),
           Container(
             decoration: BoxDecoration(
-              color: _black2,
+              color: _white,
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: _white10),
+              border: Border.all(color: _paperTableBorder),
+              boxShadow: [
+                BoxShadow(
+                  color: _black.withValues(alpha: 0.5),
+                  blurRadius: 60,
+                  offset: const Offset(0, 24),
+                ),
+              ],
             ),
             clipBehavior: Clip.hardEdge,
             child: SingleChildScrollView(
@@ -751,12 +771,12 @@ class _PricingScreenState extends State<PricingScreen>
               children: [
                 Text(
                   'Ready to get your\nmusic heard?',
-                  style: _outfit(20, FontWeight.w800, _black, h: 1.15),
+                  style: _outfit(20, FontWeight.w800, _paperBlack, h: 1.15),
                 ),
                 const SizedBox(height: 8),
                 Text(
                   'Join thousands of independent artists already distributing with 444Music.',
-                  style: _outfit(12, FontWeight.w500, const Color(0xFF666666), h: 1.5),
+                  style: _outfit(12, FontWeight.w500, _paperBody, h: 1.5),
                 ),
                 const SizedBox(height: 16),
                 GestureDetector(
@@ -764,7 +784,7 @@ class _PricingScreenState extends State<PricingScreen>
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
                     decoration: BoxDecoration(
-                      color: _black,
+                      color: _paperBlack,
                       borderRadius: BorderRadius.circular(99),
                     ),
                     child: Row(
@@ -785,10 +805,10 @@ class _PricingScreenState extends State<PricingScreen>
           ),
           const SizedBox(width: 16),
           Container(
-            width: 60,
-            height: 60,
-            decoration: const BoxDecoration(color: _black, shape: BoxShape.circle),
-            child: const Icon(Icons.headphones_rounded, color: _white, size: 26),
+            width: 56,
+            height: 56,
+            decoration: const BoxDecoration(color: _paperBlack, shape: BoxShape.circle),
+            child: const Icon(Icons.headphones_rounded, color: _white, size: 22),
           ),
         ],
       ),
@@ -816,7 +836,7 @@ class _TopBarDelegate extends SliverPersistentHeaderDelegate {
       child: BackdropFilter(
         filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
         child: Container(
-          color: _black.withValues(alpha: 0.88),
+          color: _black.withValues(alpha: 0.9),
           padding: EdgeInsets.only(top: topPadding),
           child: Container(
             height: 64,
@@ -842,13 +862,8 @@ class _TopBarDelegate extends SliverPersistentHeaderDelegate {
                 ),
                 const SizedBox(width: 14),
                 Text(
-                  'Pricing',
-                  style: _outfit(18, FontWeight.w800, _white),
-                ),
-                const Spacer(),
-                Text(
                   '444Music',
-                  style: _outfit(13, FontWeight.w700, _grey),
+                  style: _outfit(18, FontWeight.w800, _white),
                 ),
               ],
             ),
@@ -864,6 +879,9 @@ class _TopBarDelegate extends SliverPersistentHeaderDelegate {
 
 // ════════════════════════════════════════════════════════════════════
 //  PLAN CARD
+//  isFeatured cards (Single) flip to the light "paper" palette exactly
+//  like .price-card.featured on pricing.html — everything else keeps
+//  the dark card treatment used by the other two plans.
 // ════════════════════════════════════════════════════════════════════
 class _PlanCard extends StatefulWidget {
   final _Plan plan;
@@ -911,6 +929,7 @@ class _PlanCardState extends State<_PlanCard>
   @override
   Widget build(BuildContext context) {
     final plan = widget.plan;
+    final bool featured = plan.isFeatured;
 
     // ── Currency preview computation — display only ──
     final baseGhc = double.tryParse(plan.price) ?? 0;
@@ -924,6 +943,19 @@ class _PlanCardState extends State<_PlanCard>
         ? '/ \$${plan.usdPrice}'
         : (baseGhc == 0 ? '/ GHC 0' : '/ GHC ${plan.price}');
 
+    // ── Theme tokens — dark card vs. white "paper" featured card ──
+    final Color cardBg = featured ? _white : _black1;
+    final Color cardBorder = featured ? _paperTableBorder : _white10;
+    final double cardBorderWidth = featured ? 1.5 : 1;
+    final Color nameColor = featured ? _paperBlack : _white;
+    final Color descColor = featured ? _paperBody : _grey;
+    final Color currencyLabelColor = featured ? const Color(0xA60A0A0A) : _white70;
+    final Color amountColor = featured ? _paperBlack : _white;
+    final Color subLabelColor = featured ? _paperMuted : _grey;
+    final Color periodColor = featured ? _paperFaint : _greyDark;
+    final Color dividerColor = featured ? _paperDivider : _white10;
+    final Color featuresLabelColor = featured ? const Color(0xFF7A7A7A) : _greyDark;
+
     return FadeTransition(
       opacity: _fade,
       child: SlideTransition(
@@ -931,56 +963,50 @@ class _PlanCardState extends State<_PlanCard>
         child: Container(
           margin: const EdgeInsets.only(bottom: 16),
           decoration: BoxDecoration(
-            color: plan.isFeatured ? _black2 : _black1,
+            color: cardBg,
             borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-              color: plan.isFeatured ? _white40 : _white10,
-              width: plan.isFeatured ? 1.5 : 1,
-            ),
+            border: Border.all(color: cardBorder, width: cardBorderWidth),
+            boxShadow: featured
+                ? [
+                    BoxShadow(
+                      color: _black.withValues(alpha: 0.55),
+                      blurRadius: 60,
+                      offset: const Offset(0, 24),
+                    ),
+                  ]
+                : null,
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (plan.isFeatured)
-                Container(
-                  height: 1,
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [Colors.transparent, _white70, Colors.transparent],
-                      stops: const [0.0, 0.5, 1.0],
-                    ),
-                    borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+              Container(
+                height: 1,
+                margin: const EdgeInsets.symmetric(horizontal: 0),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: featured
+                        ? [Colors.transparent, _black.withValues(alpha: 0.3), Colors.transparent]
+                        : [Colors.transparent, _white70, Colors.transparent],
+                    stops: const [0.0, 0.5, 1.0],
                   ),
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
                 ),
+              ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(22, 24, 22, 24),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      children: [
-                        _Badge(plan: plan),
-                        const Spacer(),
-                        if (plan.isFeatured)
-                          Container(
-                            width: 36,
-                            height: 36,
-                            decoration: const BoxDecoration(
-                                color: _white, shape: BoxShape.circle),
-                            child: const Icon(Icons.star_rounded,
-                                color: _black, size: 18),
-                          ),
-                      ],
-                    ),
+                    _Badge(plan: plan, featured: featured),
                     const SizedBox(height: 14),
                     Text(
                       plan.planName,
-                      style: _outfit(22, FontWeight.w800, _white, ls: 0.3),
+                      style: _outfit(22, FontWeight.w800, nameColor, ls: 0.1),
                     ),
                     const SizedBox(height: 6),
                     Text(
                       plan.desc,
-                      style: _outfit(13, FontWeight.w500, _grey, h: 1.55),
+                      style: _outfit(13, FontWeight.w500, descColor, h: 1.55),
                     ),
                     const SizedBox(height: 22),
                     Wrap(
@@ -994,12 +1020,12 @@ class _PlanCardState extends State<_PlanCard>
                           children: [
                             Text(
                               displayCurrencyLabel,
-                              style: _outfit(15, FontWeight.w700, _white70),
+                              style: _outfit(15, FontWeight.w700, currencyLabelColor),
                             ),
                             const SizedBox(width: 4),
                             Text(
                               displayAmount,
-                              style: _mono(44, FontWeight.w500, _white),
+                              style: _mono(40, FontWeight.w500, amountColor),
                             ),
                           ],
                         ),
@@ -1007,7 +1033,7 @@ class _PlanCardState extends State<_PlanCard>
                           padding: const EdgeInsets.only(bottom: 8),
                           child: Text(
                             subLabel,
-                            style: _outfit(13, FontWeight.w600, _grey),
+                            style: _outfit(13, FontWeight.w600, subLabelColor),
                           ),
                         ),
                         if (plan.saveBadge != null)
@@ -1032,30 +1058,35 @@ class _PlanCardState extends State<_PlanCard>
                     const SizedBox(height: 4),
                     Text(
                       plan.period,
-                      style: _outfit(12, FontWeight.w500, _greyDark),
+                      style: _outfit(12, FontWeight.w500, periodColor),
                     ),
                     const SizedBox(height: 22),
-                    Container(height: 1, color: _white10),
+                    Container(height: 1, color: dividerColor),
                     const SizedBox(height: 20),
                     Text(
                       "WHAT'S INCLUDED",
-                      style: _outfit(10, FontWeight.w800, _greyDark, ls: 1.5),
+                      style: _outfit(10, FontWeight.w800, featuresLabelColor, ls: 1.5),
                     ),
                     const SizedBox(height: 12),
-                    ...plan.features.map((f) => _FeatureRow(feature: f)),
+                    ...plan.features.map(
+                      (f) => _FeatureRow(feature: f, featured: featured),
+                    ),
                     const SizedBox(height: 18),
                     Wrap(
                       spacing: 6,
                       runSpacing: 6,
                       children: [
-                        ...plan.stores.map((s) => _StoreChipWidget(chip: s)),
+                        ...plan.stores.map(
+                          (s) => _StoreChipWidget(chip: s, featured: featured),
+                        ),
                         _StoreChipWidget(
                           chip: const _StoreChip(Icons.add_rounded, '96 more'),
+                          featured: featured,
                         ),
                       ],
                     ),
                     const SizedBox(height: 22),
-                    _PlanButton(plan: plan, onTap: widget.onTap),
+                    _PlanButton(plan: plan, featured: featured, onTap: widget.onTap),
                   ],
                 ),
               ),
@@ -1068,9 +1099,13 @@ class _PlanCardState extends State<_PlanCard>
 }
 
 // ── BADGE ─────────────────────────────────────────────────────────────
+// On a featured (white) card, the "Most Popular" badge inverts to a
+// solid black pill with white text — matching
+// .price-card.featured .plan-badge.popular on pricing.html.
 class _Badge extends StatelessWidget {
   final _Plan plan;
-  const _Badge({required this.plan});
+  final bool featured;
+  const _Badge({required this.plan, this.featured = false});
 
   @override
   Widget build(BuildContext context) {
@@ -1079,9 +1114,15 @@ class _Badge extends StatelessWidget {
 
     switch (plan.style) {
       case PlanStyle.solid:
-        bg = _white20;
-        textColor = _white;
-        borderColor = _white40;
+        if (featured) {
+          bg = _paperBlack;
+          textColor = _white;
+          borderColor = _paperBlack;
+        } else {
+          bg = _white20;
+          textColor = _white;
+          borderColor = _white40;
+        }
         icon = Icons.local_fire_department_rounded;
         break;
       case PlanStyle.green:
@@ -1123,12 +1164,21 @@ class _Badge extends StatelessWidget {
 }
 
 // ── FEATURE ROW ───────────────────────────────────────────────────────
+// On a featured (white) card, checks/text go dark — matching
+// .price-card.featured .feature-list li on pricing.html.
 class _FeatureRow extends StatelessWidget {
   final _Feature feature;
-  const _FeatureRow({required this.feature});
+  final bool featured;
+  const _FeatureRow({required this.feature, this.featured = false});
 
   @override
   Widget build(BuildContext context) {
+    final Color includedColor = featured ? _paperBlack : _white70;
+    final Color excludedColor = featured ? const Color(0xFFBFBFBF) : _greyDark;
+    final Color bubbleColor = featured
+        ? (feature.included ? const Color(0x140A0A0A) : Colors.transparent)
+        : (feature.included ? _white10 : Colors.transparent);
+
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
@@ -1139,12 +1189,12 @@ class _FeatureRow extends StatelessWidget {
             height: 18,
             margin: const EdgeInsets.only(top: 1),
             decoration: BoxDecoration(
-              color: feature.included ? _white10 : Colors.transparent,
+              color: bubbleColor,
               shape: BoxShape.circle,
             ),
             child: Icon(
               feature.included ? Icons.check_rounded : Icons.close_rounded,
-              color: feature.included ? _white70 : _greyDark,
+              color: feature.included ? includedColor : excludedColor,
               size: 11,
             ),
           ),
@@ -1153,7 +1203,10 @@ class _FeatureRow extends StatelessWidget {
             child: Text(
               feature.text,
               style: _outfit(13, FontWeight.w600,
-                  feature.included ? _white70 : _greyDark, h: 1.4),
+                  feature.included
+                      ? (featured ? _paperFeature : _white70)
+                      : excludedColor,
+                  h: 1.4),
             ),
           ),
         ],
@@ -1163,27 +1216,35 @@ class _FeatureRow extends StatelessWidget {
 }
 
 // ── STORE CHIP ────────────────────────────────────────────────────────
+// On a featured (white) card, chips go light-grey with dark text —
+// matching .price-card.featured .store-chip on pricing.html.
 class _StoreChipWidget extends StatelessWidget {
   final _StoreChip chip;
-  const _StoreChipWidget({required this.chip});
+  final bool featured;
+  const _StoreChipWidget({required this.chip, this.featured = false});
 
   @override
   Widget build(BuildContext context) {
+    final Color bg = featured ? _paperChipBg : _black3;
+    final Color border = featured ? _paperTableBorder : _white10;
+    final Color iconColor = featured ? _paperChipText : _grey;
+    final Color textColor = featured ? _paperChipText : _grey;
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: _black3,
+        color: bg,
         borderRadius: BorderRadius.circular(99),
-        border: Border.all(color: _white10),
+        border: Border.all(color: border),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(chip.icon, color: _grey, size: 11),
+          Icon(chip.icon, color: iconColor, size: 11),
           const SizedBox(width: 5),
           Text(
             chip.label,
-            style: _outfit(11, FontWeight.w600, _grey),
+            style: _outfit(11, FontWeight.w600, textColor),
           ),
         ],
       ),
@@ -1192,6 +1253,9 @@ class _StoreChipWidget extends StatelessWidget {
 }
 
 // ── PLAN BUTTON ───────────────────────────────────────────────────────
+// On a featured (white) card, the solid button inverts to black-bg /
+// white-text — matching .price-card.featured .plan-btn.solid on
+// pricing.html (the white card's CTA stays dark, not white-on-white).
 class _PlanButtonState extends State<_PlanButton> {
   bool _pressed = false;
 
@@ -1200,9 +1264,15 @@ class _PlanButtonState extends State<_PlanButton> {
     Color bg, textColor, borderColor;
     switch (widget.plan.style) {
       case PlanStyle.solid:
-        bg = _white;
-        textColor = _black;
-        borderColor = _white;
+        if (widget.featured) {
+          bg = _paperBlack;
+          textColor = _white;
+          borderColor = _paperBlack;
+        } else {
+          bg = _white;
+          textColor = _black;
+          borderColor = _white;
+        }
         break;
       case PlanStyle.green:
         bg = Colors.transparent;
@@ -1211,9 +1281,15 @@ class _PlanButtonState extends State<_PlanButton> {
         break;
       case PlanStyle.outline:
       default:
-        bg = Colors.transparent;
-        textColor = _white70;
-        borderColor = _white20;
+        if (widget.featured) {
+          bg = Colors.transparent;
+          textColor = _paperBlack;
+          borderColor = _paperTableBorder;
+        } else {
+          bg = Colors.transparent;
+          textColor = _white70;
+          borderColor = _white20;
+        }
     }
 
     return GestureDetector(
@@ -1250,15 +1326,19 @@ class _PlanButtonState extends State<_PlanButton> {
 
 class _PlanButton extends StatefulWidget {
   final _Plan plan;
+  final bool featured;
   final VoidCallback onTap;
-  const _PlanButton({required this.plan, required this.onTap});
+  const _PlanButton({required this.plan, this.featured = false, required this.onTap});
 
   @override
   State<_PlanButton> createState() => _PlanButtonState();
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  COMPARISON TABLE
+//  COMPARISON TABLE — WHITE panel, matching .compare-table on
+//  pricing.html exactly: light-grey header row (#f4f4f4), grey uppercase
+//  header labels, black bold labels in the highlighted "Single" column,
+//  green check icons, thin hairline row dividers.
 // ════════════════════════════════════════════════════════════════════
 class _CompareTable extends StatelessWidget {
   static const _headers = ['Feature', 'Starter', 'Single', 'EP / Album'];
@@ -1278,36 +1358,37 @@ class _CompareTable extends StatelessWidget {
     return Table(
       columnWidths: const {
         0: FixedColumnWidth(130),
-        1: FixedColumnWidth(72),
-        2: FixedColumnWidth(72),
-        3: FixedColumnWidth(88),
+        1: FixedColumnWidth(76),
+        2: FixedColumnWidth(76),
+        3: FixedColumnWidth(92),
       },
       children: [
         TableRow(
-          decoration: const BoxDecoration(
-            color: _black3,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-          ),
+          decoration: const BoxDecoration(color: _paperTableHead),
           children: _headers.asMap().entries.map((e) {
             final isHighlighted = e.key == 2;
             return TableCell(
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 13),
                 child: Text(
                   e.value.toUpperCase(),
-                  style: _outfit(9, FontWeight.w800,
-                      isHighlighted ? _white : _greyDark, ls: 1.5),
+                  style: _outfit(10, FontWeight.w800,
+                      isHighlighted ? _paperBlack : _paperFaint, ls: 1.2),
                   textAlign: e.key == 0 ? TextAlign.left : TextAlign.center,
                 ),
               ),
             );
           }).toList(),
         ),
-        ..._rows.map((row) {
+        ..._rows.asMap().entries.map((rowEntry) {
+          final isLast = rowEntry.key == _rows.length - 1;
+          final row = rowEntry.value;
           return TableRow(
             decoration: BoxDecoration(
-              border: Border(
-                  bottom: BorderSide(color: _white.withValues(alpha: 0.03))),
+              color: _white,
+              border: isLast
+                  ? null
+                  : const Border(bottom: BorderSide(color: _paperTableLine)),
             ),
             children: row.asMap().entries.map((e) {
               final isHighlighted = e.key == 2;
@@ -1318,18 +1399,23 @@ class _CompareTable extends StatelessWidget {
                   child: Icon(Icons.check_rounded, color: _green, size: 16),
                 );
               } else if (val == 'no') {
-                child = Center(
-                  child: Icon(Icons.close_rounded, color: _greyDark, size: 16),
+                child = const Center(
+                  child: Icon(Icons.close_rounded, color: _paperFaint, size: 16),
+                );
+              } else if (e.key == 0) {
+                child = Text(
+                  val,
+                  style: _outfit(13, FontWeight.w700, _paperBlack),
+                  textAlign: TextAlign.left,
+                  overflow: TextOverflow.ellipsis,
                 );
               } else {
                 child = Text(
                   val,
-                  style: e.key == 0
-                      ? _outfit(12, isHighlighted ? FontWeight.w700 : FontWeight.w500,
-                      isHighlighted ? _white : _white70)
-                      : _mono(11, FontWeight.w500,
-                      isHighlighted ? _white : _white70),
-                  textAlign: e.key == 0 ? TextAlign.left : TextAlign.center,
+                  style: _outfit(13,
+                      isHighlighted ? FontWeight.w700 : FontWeight.w600,
+                      isHighlighted ? _paperBlack : _paperFeature),
+                  textAlign: TextAlign.center,
                   overflow: TextOverflow.ellipsis,
                 );
               }
@@ -1360,9 +1446,8 @@ class _FaqItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      decoration: BoxDecoration(
-        border: Border(
-            bottom: BorderSide(color: _white.withValues(alpha: 0.06))),
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: _white10)),
       ),
       child: Column(
         children: [
@@ -1370,7 +1455,7 @@ class _FaqItem extends StatelessWidget {
             onTap: onTap,
             behavior: HitTestBehavior.opaque,
             child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 16),
+              padding: const EdgeInsets.symmetric(vertical: 17),
               child: Row(
                 children: [
                   Expanded(
@@ -1387,7 +1472,7 @@ class _FaqItem extends StatelessWidget {
                     child: Icon(
                       Icons.add_rounded,
                       color: isOpen ? _white : _greyDark,
-                      size: 20,
+                      size: 18,
                     ),
                   ),
                 ],
@@ -1397,7 +1482,7 @@ class _FaqItem extends StatelessWidget {
           AnimatedCrossFade(
             firstChild: const SizedBox(width: double.infinity, height: 0),
             secondChild: Padding(
-              padding: const EdgeInsets.only(bottom: 16),
+              padding: const EdgeInsets.only(bottom: 17),
               child: Text(
                 faq.a,
                 style: _outfit(13, FontWeight.w500, _grey, h: 1.65),
@@ -1431,6 +1516,9 @@ class _FaqItem extends StatelessWidget {
 //      and gets flipped to Review by the backend directly. So instead
 //      of PaymentSuccessScreen or HomeScreen, this just returns to
 //      wherever the user came from (My Releases), refreshed.
+//
+//  NOTE: this class's logic is UNCHANGED — only touched to keep it
+//  compiling against the same palette constants above.
 // ════════════════════════════════════════════════════════════════════
 class PaymentWaitingScreen extends StatefulWidget {
   final double amountGHS;
