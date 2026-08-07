@@ -1,23 +1,23 @@
 // ═══════════════════════════════════════════════════════════════════
-//  444MUSIC — Premium Home Screen v3
+//  444MUSIC — Premium Home Screen v4 (Professional Distro Layout)
 //  Font: Outfit (bold, clean, heavy — matches select screen)
-//  Banner buttons → https://444musicblog.vercel.app/visit.html
+//  Home = welcome / overview / value prop. Dashboard = live data (separate screen, unchanged).
 // ═══════════════════════════════════════════════════════════════════
+import 'dart:async';
+import 'dart:convert';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:smooth_page_indicator/smooth_page_indicator.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 // ─── PALETTE ────────────────────────────────────────────────────────
 const _black      = Color(0xFF000000);
 const _black1     = Color(0xFF0A0A0A);
 const _black2     = Color(0xFF111111);
 const _black3     = Color(0xFF1A1A1A);
-const _black4     = Color(0xFF222222);
 const _white      = Color(0xFFFFFFFF);
 const _white90    = Color(0xE6FFFFFF);
 const _white70    = Color(0xB3FFFFFF);
@@ -26,131 +26,10 @@ const _white20    = Color(0x33FFFFFF);
 const _white10    = Color(0x1AFFFFFF);
 const _white06    = Color(0x0FFFFFFF);
 const _grey       = Color(0xFF888888);
-const _greyLight  = Color(0xFFAAAAAA);
 const _greyDark   = Color(0xFF444444);
-
-// ─── URL LAUNCHER ───────────────────────────────────────────────────
-Future<void> _launchVisitUrl() async {
-  final uri = Uri.parse('https://444musicblog.vercel.app/visit.html');
-  if (await canLaunchUrl(uri)) {
-    await launchUrl(uri, mode: LaunchMode.externalApplication);
-  }
-}
-
-// ─── FEATURED BANNER DATA ───────────────────────────────────────────
-const _banners = [
-  _Banner(
-    image: 'https://images.pexels.com/photos/9008843/pexels-photo-9008843.jpeg?auto=compress&cs=tinysrgb&w=800&dpr=2',
-    tag:   'NEW RELEASE',
-    title: 'Distribute\nYour Music',
-    sub:   'Go live on 30+ platforms in days',
-    accent: Color(0xFF2A2A2A),
-  ),
-  _Banner(
-    image: 'https://images.pexels.com/photos/17413080/pexels-photo-17413080.jpeg?auto=compress&cs=tinysrgb&w=800&dpr=2',
-    tag:   'TRENDING',
-    title: 'Keep 100%\nRoyalties',
-    sub:   'No middlemen. Paid monthly.',
-    accent: Color(0xFF1E1E1E),
-  ),
-  _Banner(
-    image: 'https://images.pexels.com/photos/5135100/pexels-photo-5135100.jpeg?auto=compress&cs=tinysrgb&w=800&dpr=2',
-    tag:   'ANALYTICS',
-    title: 'Track Your\nGrowth',
-    sub:   'Real-time streams & revenue data',
-    accent: Color(0xFF202020),
-  ),
-  _Banner(
-    image: 'https://images.pexels.com/photos/12448173/pexels-photo-12448173.jpeg?auto=compress&cs=tinysrgb&w=800&dpr=2',
-    tag:   'MADE IN GHANA',
-    title: 'Built for\nArtists',
-    sub:   'Independent. Powerful. Yours.',
-    accent: Color(0xFF1C1C1C),
-  ),
-];
-
-class _Banner {
-  final String image, tag, title, sub;
-  final Color accent;
-  const _Banner({required this.image, required this.tag, required this.title,
-    required this.sub, required this.accent});
-}
-
-// ─── PLAYLIST DATA ──────────────────────────────────────────────────
-const _playlists = [
-  _Playlist(
-    cover: 'https://images.pexels.com/photos/1105666/pexels-photo-1105666.jpeg?auto=compress&cs=tinysrgb&w=400',
-    title: 'Afrobeats Heat',
-    sub:   'By 444Music · 24 Artists',
-    plays: '1.2M plays',
-  ),
-  _Playlist(
-    cover: 'https://images.pexels.com/photos/3756766/pexels-photo-3756766.jpeg?auto=compress&cs=tinysrgb&w=400',
-    title: 'Ghana Vibes',
-    sub:   'By 444Music · 18 Artists',
-    plays: '890K plays',
-  ),
-  _Playlist(
-    cover: 'https://images.pexels.com/photos/1370545/pexels-photo-1370545.jpeg?auto=compress&cs=tinysrgb&w=400',
-    title: 'New Releases',
-    sub:   'By 444Music · Weekly',
-    plays: '2.1M plays',
-  ),
-  _Playlist(
-    cover: 'https://images.pexels.com/photos/167636/pexels-photo-167636.jpeg?auto=compress&cs=tinysrgb&w=400',
-    title: 'Artist Picks',
-    sub:   'By 444Music · Curated',
-    plays: '650K plays',
-  ),
-  _Playlist(
-    cover: 'https://images.pexels.com/photos/1021876/pexels-photo-1021876.jpeg?auto=compress&cs=tinysrgb&w=400',
-    title: 'Late Night',
-    sub:   'By 444Music · Mood',
-    plays: '430K plays',
-  ),
-];
-
-class _Playlist {
-  final String cover, title, sub, plays;
-  const _Playlist({required this.cover, required this.title,
-    required this.sub, required this.plays});
-}
-
-// ─── PLATFORM COVERS ────────────────────────────────────────────────
-const _platformCovers = [
-  _PlatformCover(
-    image: 'https://images.pexels.com/photos/1540406/pexels-photo-1540406.jpeg?auto=compress&cs=tinysrgb&w=400',
-    platform: 'Spotify',
-    icon: Icons.music_note_rounded,
-    color: Color(0xFF1DB954),
-  ),
-  _PlatformCover(
-    image: 'https://images.pexels.com/photos/2682543/pexels-photo-2682543.jpeg?auto=compress&cs=tinysrgb&w=400',
-    platform: 'Apple Music',
-    icon: Icons.apple_rounded,
-    color: Color(0xFFFC3C44),
-  ),
-  _PlatformCover(
-    image: 'https://images.pexels.com/photos/3944091/pexels-photo-3944091.jpeg?auto=compress&cs=tinysrgb&w=400',
-    platform: 'YouTube Music',
-    icon: Icons.play_circle_filled_rounded,
-    color: Color(0xFFFF0000),
-  ),
-  _PlatformCover(
-    image: 'https://images.pexels.com/photos/1389429/pexels-photo-1389429.jpeg?auto=compress&cs=tinysrgb&w=400',
-    platform: 'Boomplay',
-    icon: Icons.headphones_rounded,
-    color: Color(0xFF00C853),
-  ),
-];
-
-class _PlatformCover {
-  final String image, platform;
-  final IconData icon;
-  final Color color;
-  const _PlatformCover({required this.image, required this.platform,
-    required this.icon, required this.color});
-}
+// Single premium accent — used sparingly (tags, section labels, icon glyphs only)
+const _gold       = Color(0xFFCBA135);
+const _gold70     = Color(0xB3CBA135);
 
 // ════════════════════════════════════════════════════════════════════
 //  HOME SCREEN
@@ -163,8 +42,6 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   int _navIndex = 0;
-  final _bannerCtrl = PageController(viewportFraction: 0.88);
-  int _bannerIndex = 0;
 
   bool _sidebarOpen = false;
   late AnimationController _sidebarCtrl;
@@ -175,10 +52,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   late Animation<double>   _entranceFade;
   late Animation<Offset>   _entranceSlide;
 
-  int _filterIndex = 0;
-  final _filters = ['All', 'New Release', 'Trending', 'Top Charts'];
-
   final _user = FirebaseAuth.instance.currentUser;
+
+  // Live name from Firestore (kept in sync with ProfileScreen's edit-name save)
+  String? _liveName;
 
   @override
   void initState() {
@@ -193,28 +70,34 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _sidebarSlide = Tween<Offset>(begin: const Offset(1, 0), end: Offset.zero)
         .animate(CurvedAnimation(parent: _sidebarCtrl, curve: Curves.easeOutCubic));
 
-    _entranceCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 800));
+    _entranceCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 700));
     _entranceFade  = CurvedAnimation(parent: _entranceCtrl, curve: Curves.easeOut);
     _entranceSlide = Tween<Offset>(begin: const Offset(0, 0.06), end: Offset.zero)
         .animate(CurvedAnimation(parent: _entranceCtrl, curve: Curves.easeOutCubic));
     _entranceCtrl.forward();
 
-    // Auto-advance banners
-    Future.doWhile(() async {
-      await Future.delayed(const Duration(seconds: 4));
-      if (!mounted) return false;
-      final next = (_bannerIndex + 1) % _banners.length;
-      _bannerCtrl.animateToPage(next,
-          duration: const Duration(milliseconds: 700), curve: Curves.easeInOutCubic);
-      return true;
-    });
+    // Keep greeting/sidebar name in sync with ProfileScreen's saved name
+    if (_user != null) {
+      _nameSub = FirebaseFirestore.instance
+          .collection('users')
+          .doc(_user!.uid)
+          .snapshots()
+          .listen((doc) {
+        final name = doc.data()?['name'] as String?;
+        if (mounted && name != null && name.isNotEmpty && name != _liveName) {
+          setState(() => _liveName = name);
+        }
+      });
+    }
   }
+
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _nameSub;
 
   @override
   void dispose() {
     _sidebarCtrl.dispose();
     _entranceCtrl.dispose();
-    _bannerCtrl.dispose();
+    _nameSub?.cancel();
     super.dispose();
   }
 
@@ -237,8 +120,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   String get _firstName {
-    final name = _user?.displayName ?? 'Artist';
-    return name.split(' ').first;
+    final name = _liveName ?? _user?.displayName ?? 'Artist';
+    return name.trim().isEmpty ? 'Artist' : name.split(' ').first;
   }
 
   @override
@@ -293,8 +176,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 child: _SidebarPanel(
                   onClose: _closeSidebar,
                   onNavigate: _navigate,
-                  userName:  _user?.displayName ?? 'Artist',
+                  userName:  _liveName ?? _user?.displayName ?? 'Artist',
                   userEmail: _user?.email ?? '',
+                  uid: _user?.uid,
                 ),
               ),
             ),
@@ -316,21 +200,40 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             children: [
               SizedBox(height: top + 16),
 
-              // ── TOP BAR ──
+              // ── TOP BAR: avatar + greeting (left) · search + menu (right) ──
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 22),
                 child: Row(
                   children: [
-                    Container(
-                      width: 44, height: 44,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: _black3,
-                        border: Border.all(color: _white20, width: 1.5),
+                    _ProfileAvatar(uid: _user?.uid, authPhotoUrl: _user?.photoURL),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            _greeting,
+                            style: GoogleFonts.outfit(
+                              color: _grey,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              letterSpacing: 0.2,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            _firstName,
+                            style: GoogleFonts.outfit(
+                              color: _white,
+                              fontSize: 20,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: -0.3,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
                       ),
-                      child: const Icon(Icons.person_rounded, color: _white70, size: 22),
                     ),
-                    const Spacer(),
                     _IconBtn(icon: Icons.search_rounded, onTap: () => _navigate('/search')),
                     const SizedBox(width: 10),
                     _IconBtn(icon: Icons.menu_rounded, onTap: _openSidebar),
@@ -338,207 +241,25 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 ),
               ),
 
-              const SizedBox(height: 20),
+              const SizedBox(height: 24),
 
-              // ── GREETING ──
+              // ── HERO CARD ──
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 22),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      _greeting,
-                      style: GoogleFonts.outfit(
-                        color: _grey,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w500,
-                        letterSpacing: 0.2,
-                      ),
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      'Hi, $_firstName',
-                      style: GoogleFonts.outfit(
-                        color: _white,
-                        fontSize: 34,
-                        fontWeight: FontWeight.w800,
-                        height: 1.05,
-                        letterSpacing: -0.5,
-                      ),
-                    ),
-                  ],
-                ),
+                child: _HeroCard(onUpload: () => _navigate('/upload')),
               ),
 
               const SizedBox(height: 20),
-
-              // ── FILTER PILLS ──
-              SizedBox(
-                height: 38,
-                child: ListView.separated(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.symmetric(horizontal: 22),
-                  physics: const BouncingScrollPhysics(),
-                  itemCount: _filters.length,
-                  separatorBuilder: (_, __) => const SizedBox(width: 8),
-                  itemBuilder: (_, i) {
-                    final active = i == _filterIndex;
-                    return GestureDetector(
-                      onTap: () => setState(() => _filterIndex = i),
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 250),
-                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: active ? _white : _black2,
-                          borderRadius: BorderRadius.circular(99),
-                          border: Border.all(color: active ? _white : _white10),
-                        ),
-                        child: Text(
-                          _filters[i],
-                          style: GoogleFonts.outfit(
-                            color: active ? _black : _grey,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ),
-
-              const SizedBox(height: 26),
-
-              // ── SECTION LABEL ──
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 22),
-                child: _SectionTitle(title: 'Curated & trending'),
-              ),
-
-              const SizedBox(height: 14),
-
-              // ── FEATURED BANNERS ──
-              SizedBox(
-                height: 210,
-                child: PageView.builder(
-                  controller: _bannerCtrl,
-                  onPageChanged: (i) => setState(() => _bannerIndex = i),
-                  physics: const BouncingScrollPhysics(),
-                  itemCount: _banners.length,
-                  itemBuilder: (_, i) => _BannerCard(
-                    banner: _banners[i],
-                    onTap: _launchVisitUrl,
-                  ),
-                ),
-              ),
-
-              const SizedBox(height: 14),
-
-              // Page indicator
-              Center(
-                child: SmoothPageIndicator(
-                  controller: _bannerCtrl,
-                  count: _banners.length,
-                  effect: ExpandingDotsEffect(
-                    dotColor: _white20,
-                    activeDotColor: _white,
-                    dotHeight: 4, dotWidth: 4,
-                    expansionFactor: 4, spacing: 5,
-                  ),
-                ),
-              ),
-
-              const SizedBox(height: 32),
-
-              // ── TOP PLAYLISTS ──
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 22),
-                child: Row(
-                  children: [
-                    _SectionTitle(title: 'Top daily playlists'),
-                    const Spacer(),
-                    GestureDetector(
-                      onTap: () => _navigate('/releases'),
-                      child: Text(
-                        'See all',
-                        style: GoogleFonts.outfit(
-                          color: _grey,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
-              const SizedBox(height: 16),
-
-              // Playlist rows — play button redirects to visit URL
-              ...List.generate(_playlists.length, (i) => _PlaylistRow(
-                playlist: _playlists[i],
-                index: i + 1,
-                onTap:     () => _navigate('/releases'),
-                onPlayTap: _launchVisitUrl,   // ← redirect to visit.html
-              )),
-
-              const SizedBox(height: 32),
-
-              // ── PLATFORM COVERS ──
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 22),
-                child: _SectionTitle(title: 'Stream on every platform'),
-              ),
-
-              const SizedBox(height: 16),
-
-              SizedBox(
-                height: 160,
-                child: ListView.separated(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.symmetric(horizontal: 22),
-                  physics: const BouncingScrollPhysics(),
-                  itemCount: _platformCovers.length,
-                  separatorBuilder: (_, __) => const SizedBox(width: 12),
-                  itemBuilder: (_, i) => _PlatformCoverCard(cover: _platformCovers[i]),
-                ),
-              ),
-
-              const SizedBox(height: 32),
-
-              // ── WHY 444MUSIC ──
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 22),
-                child: _SectionTitle(title: 'Why 444Music?'),
-              ),
-
-              const SizedBox(height: 16),
-
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 22),
-                child: Column(
-                  children: [
-                    _DistroRow(icon: Icons.public_rounded,                 title: 'Global Distribution',   sub: '30+ stores worldwide including Spotify, Apple Music & Boomplay'),
-                    _DistroRow(icon: Icons.account_balance_wallet_rounded, title: '100% Royalties Yours',  sub: 'Keep every dollar. Monthly payouts with full transparency'),
-                    _DistroRow(icon: Icons.bolt_rounded,                   title: 'Fast Delivery',         sub: 'Upload today, go live in days — not weeks'),
-                    _DistroRow(icon: Icons.verified_user_rounded,          title: 'Full Ownership',        sub: 'Your masters, your rights. Always and forever'),
-                    _DistroRow(icon: Icons.insights_rounded,               title: 'Real-Time Analytics',   sub: 'Track streams & revenue across all platforms in one dashboard'),
-                    _DistroRow(icon: Icons.support_agent_rounded,          title: 'Artist Support',        sub: 'Dedicated support via WhatsApp. Real humans who care'),
-                  ],
-                ),
-              ),
-
-              const SizedBox(height: 28),
 
               // ── STATS ROW ──
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 22),
                 child: Row(
-                  children: [
+                  children: const [
                     Expanded(child: _StatChip(value: '150+', label: 'Artists')),
-                    const SizedBox(width: 10),
+                    SizedBox(width: 10),
                     Expanded(child: _StatChip(value: '30+',  label: 'Stores')),
-                    const SizedBox(width: 10),
+                    SizedBox(width: 10),
                     Expanded(child: _StatChip(value: '100%', label: 'Ownership')),
                   ],
                 ),
@@ -546,7 +267,48 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
               const SizedBox(height: 28),
 
-              // ── DASHBOARD CTA ──
+              // ── WHY 444MUSIC (compact trust strip) ──
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 22),
+                child: Text(
+                  'WHY 444MUSIC',
+                  style: GoogleFonts.outfit(
+                    color: _gold,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1.6,
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 12),
+
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 22),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  decoration: BoxDecoration(
+                    color: _black2,
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: _white10),
+                  ),
+                  child: Column(
+                    children: const [
+                      _WhyRow(icon: Icons.public_rounded,                 text: 'Global distribution to 30+ platforms'),
+                      _WhyDivider(),
+                      _WhyRow(icon: Icons.account_balance_wallet_rounded, text: '100% royalties, paid monthly'),
+                      _WhyDivider(),
+                      _WhyRow(icon: Icons.bolt_rounded,                   text: 'Live on stores within days'),
+                      _WhyDivider(),
+                      _WhyRow(icon: Icons.verified_user_rounded,         text: 'Your masters, full ownership always'),
+                    ],
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 28),
+
+              // ── DASHBOARD HANDOFF CTA ──
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 22),
                 child: _DashboardCta(onTap: () => _navigate('/dashboard')),
@@ -562,358 +324,203 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  BANNER CARD
+//  PROFILE AVATAR — live Firestore photo (mirrors ProfileScreen exactly)
+//  Field: users/{uid}.profilePic — either a plain image URL or a
+//  base64 data URI (data:image/jpeg;base64,...) saved by _pickAvatar()
+//  in profile_screen.dart. Falls back to Auth photoURL, then an icon.
 // ════════════════════════════════════════════════════════════════════
-class _BannerCard extends StatelessWidget {
-  final _Banner banner;
-  final VoidCallback onTap;
-  const _BannerCard({required this.banner, required this.onTap});
+class _ProfileAvatar extends StatelessWidget {
+  final String? uid;
+  final String? authPhotoUrl;
+  const _ProfileAvatar({required this.uid, required this.authPhotoUrl});
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        margin: const EdgeInsets.only(right: 12),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(20),
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              CachedNetworkImage(
-                imageUrl: banner.image,
-                fit: BoxFit.cover,
-                placeholder: (_, __) => Container(color: _black3),
-                errorWidget: (_, __, ___) => Container(color: _black3),
-              ),
-              Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.centerRight,
-                    end: Alignment.centerLeft,
-                    colors: [Colors.transparent, banner.accent.withOpacity(0.92)],
-                    stops: const [0.3, 1.0],
-                  ),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.all(22),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: _white20,
-                        borderRadius: BorderRadius.circular(99),
-                      ),
-                      child: Text(
-                        banner.tag,
-                        style: GoogleFonts.outfit(
-                          color: _white90,
-                          fontSize: 9,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 1.5,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      banner.title,
-                      style: GoogleFonts.outfit(
-                        color: _white,
-                        fontSize: 24,
-                        fontWeight: FontWeight.w800,
-                        height: 1.1,
-                        letterSpacing: -0.3,
-                      ),
-                    ),
-                    const SizedBox(height: 5),
-                    Text(
-                      banner.sub,
-                      style: GoogleFonts.outfit(
-                        color: _white70,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        height: 1.4,
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    Row(
-                      children: [
-                        _PlayerBtn(icon: Icons.play_arrow_rounded,      filled: true,  onTap: _launchVisitUrl),
-                        const SizedBox(width: 10),
-                        _PlayerBtn(icon: Icons.favorite_border_rounded, filled: false, onTap: _launchVisitUrl),
-                        const SizedBox(width: 10),
-                        _PlayerBtn(icon: Icons.more_horiz_rounded,      filled: false, onTap: _launchVisitUrl),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
+    if (uid == null) return _shell(_imageFor(authPhotoUrl));
+
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance.collection('users').doc(uid).snapshots(),
+      builder: (context, snap) {
+        String? src = authPhotoUrl;
+        if (snap.hasData && snap.data!.exists) {
+          final data = snap.data!.data();
+          src = data?['profilePic'] as String? ?? src;
+        }
+        return _shell(_imageFor(src));
+      },
     );
   }
-}
 
-class _PlayerBtn extends StatelessWidget {
-  final IconData icon;
-  final bool filled;
-  final VoidCallback onTap;
-  const _PlayerBtn({required this.icon, required this.filled, required this.onTap});
+  Widget? _imageFor(String? src) {
+    if (src == null || src.isEmpty) return null;
 
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: filled ? 40 : 34,
-        height: filled ? 40 : 34,
-        decoration: BoxDecoration(
-          color: filled ? _white : _white20,
-          shape: BoxShape.circle,
-        ),
-        child: Icon(icon, color: filled ? _black : _white, size: filled ? 20 : 16),
+    if (src.startsWith('data:image')) {
+      try {
+        final bytes = base64Decode(src.split(',').last);
+        return Image.memory(bytes, fit: BoxFit.cover, width: 44, height: 44);
+      } catch (_) {
+        return null;
+      }
+    }
+
+    return CachedNetworkImage(
+      imageUrl: src,
+      fit: BoxFit.cover,
+      placeholder: (_, __) => const Icon(Icons.person_rounded, color: _white70, size: 22),
+      errorWidget: (_, __, ___) => const Icon(Icons.person_rounded, color: _white70, size: 22),
+    );
+  }
+
+  Widget _shell(Widget? image) {
+    return Container(
+      width: 44, height: 44,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: _black3,
+        border: Border.all(color: _white20, width: 1.5),
       ),
+      clipBehavior: Clip.antiAlias,
+      child: image ?? const Icon(Icons.person_rounded, color: _white70, size: 22),
     );
   }
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  PLAYLIST ROW  — onPlayTap redirects to visit.html
+//  HERO CARD
 // ════════════════════════════════════════════════════════════════════
-class _PlaylistRow extends StatefulWidget {
-  final _Playlist    playlist;
-  final int          index;
-  final VoidCallback onTap;
-  final VoidCallback onPlayTap;   // ← separate callback for the play button
-  const _PlaylistRow({
-    required this.playlist,
-    required this.index,
-    required this.onTap,
-    required this.onPlayTap,
-  });
-  @override
-  State<_PlaylistRow> createState() => _PlaylistRowState();
-}
-
-class _PlaylistRowState extends State<_PlaylistRow> {
-  bool _pressed = false;
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTapDown:   (_) => setState(() => _pressed = true),
-      onTapUp:     (_) { setState(() => _pressed = false); widget.onTap(); },
-      onTapCancel: ()  => setState(() => _pressed = false),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 120),
-        color: _pressed ? _white06 : Colors.transparent,
-        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 10),
-        child: Row(
-          children: [
-            // Cover art
-            ClipRRect(
-              borderRadius: BorderRadius.circular(10),
-              child: CachedNetworkImage(
-                imageUrl: widget.playlist.cover,
-                width: 56, height: 56,
-                fit: BoxFit.cover,
-                placeholder: (_, __) => Container(width: 56, height: 56, color: _black3),
-                errorWidget: (_, __, ___) => Container(
-                  width: 56, height: 56, color: _black3,
-                  child: const Icon(Icons.music_note_rounded, color: _grey, size: 24),
-                ),
-              ),
-            ),
-            const SizedBox(width: 14),
-            // Text info
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    widget.playlist.title,
-                    style: GoogleFonts.outfit(
-                      color: _white,
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    widget.playlist.sub,
-                    style: GoogleFonts.outfit(
-                      color: _grey,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    widget.playlist.plays,
-                    style: GoogleFonts.outfit(
-                      color: _greyDark,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            // Play button → opens visit.html
-            GestureDetector(
-              onTap: widget.onPlayTap,   // ← uses the dedicated play callback
-              child: Container(
-                width: 36, height: 36,
-                decoration: BoxDecoration(
-                  color: _white,
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(
-                      color: _white.withOpacity(0.15),
-                      blurRadius: 12,
-                    ),
-                  ],
-                ),
-                child: const Icon(Icons.play_arrow_rounded, color: _black, size: 20),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ════════════════════════════════════════════════════════════════════
-//  PLATFORM COVER CARD
-// ════════════════════════════════════════════════════════════════════
-class _PlatformCoverCard extends StatelessWidget {
-  final _PlatformCover cover;
-  const _PlatformCoverCard({required this.cover});
+class _HeroCard extends StatelessWidget {
+  final VoidCallback onUpload;
+  const _HeroCard({required this.onUpload});
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 130,
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(22, 24, 22, 22),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
         color: _black2,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: _white10),
       ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(16),
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            CachedNetworkImage(
-              imageUrl: cover.image,
-              fit: BoxFit.cover,
-              placeholder: (_, __) => Container(color: _black3),
-              errorWidget: (_, __, ___) => Container(color: _black3),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+              color: _gold.withOpacity(0.14),
+              borderRadius: BorderRadius.circular(99),
+              border: Border.all(color: _gold.withOpacity(0.35)),
             ),
-            Container(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [Colors.transparent, _black.withOpacity(0.85)],
-                  stops: const [0.4, 1.0],
-                ),
+            child: Text(
+              '444MUSIC DISTRIBUTION',
+              style: GoogleFonts.outfit(
+                color: _gold,
+                fontSize: 10,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 1.4,
               ),
             ),
-            Positioned(
-              bottom: 12, left: 12, right: 12,
+          ),
+          const SizedBox(height: 14),
+          Text(
+            'Your music,\neverywhere it matters',
+            style: GoogleFonts.outfit(
+              color: _white,
+              fontSize: 26,
+              fontWeight: FontWeight.w800,
+              height: 1.12,
+              letterSpacing: -0.4,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            'Get onto Spotify, Apple Music, Boomplay and 30+ stores. Keep 100% of your royalties.',
+            style: GoogleFonts.outfit(
+              color: _white70,
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+              height: 1.45,
+            ),
+          ),
+          const SizedBox(height: 20),
+          GestureDetector(
+            onTap: onUpload,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
+              decoration: BoxDecoration(
+                color: _white,
+                borderRadius: BorderRadius.circular(99),
+              ),
               child: Row(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  Container(
-                    width: 22, height: 22,
-                    decoration: BoxDecoration(
-                      color: cover.color,
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(cover.icon, color: _white, size: 12),
-                  ),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      cover.platform,
-                      style: GoogleFonts.outfit(
-                        color: _white,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w800,
-                      ),
-                      overflow: TextOverflow.ellipsis,
+                  const Icon(Icons.cloud_upload_rounded, color: _black, size: 17),
+                  const SizedBox(width: 9),
+                  Text(
+                    'Upload a Release',
+                    style: GoogleFonts.outfit(
+                      color: _black,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
                     ),
                   ),
                 ],
               ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ════════════════════════════════════════════════════════════════════
-//  DISTRIBUTION ROW
-// ════════════════════════════════════════════════════════════════════
-class _DistroRow extends StatelessWidget {
-  final IconData icon;
-  final String title, sub;
-  const _DistroRow({required this.icon, required this.title, required this.sub});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 40, height: 40,
-            decoration: BoxDecoration(
-              color: _black3,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: _white10),
-            ),
-            child: Icon(icon, color: _white70, size: 18),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: GoogleFonts.outfit(
-                    color: _white,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  sub,
-                  style: GoogleFonts.outfit(
-                    color: _grey,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w400,
-                    height: 1.45,
-                  ),
-                ),
-              ],
             ),
           ),
         ],
       ),
     );
   }
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  WHY ROW (compact, single-line, icon + text)
+// ════════════════════════════════════════════════════════════════════
+class _WhyRow extends StatelessWidget {
+  final IconData icon;
+  final String text;
+  const _WhyRow({required this.icon, required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Row(
+        children: [
+          Container(
+            width: 32, height: 32,
+            decoration: BoxDecoration(
+              color: _gold.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, color: _gold70, size: 16),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Text(
+              text,
+              style: GoogleFonts.outfit(
+                color: _white90,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _WhyDivider extends StatelessWidget {
+  const _WhyDivider();
+  @override
+  Widget build(BuildContext context) => const Padding(
+    padding: EdgeInsets.symmetric(horizontal: 16),
+    child: Divider(color: _white10, height: 1),
+  );
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -938,7 +545,7 @@ class _StatChip extends StatelessWidget {
             value,
             style: GoogleFonts.outfit(
               color: _white,
-              fontSize: 24,
+              fontSize: 22,
               fontWeight: FontWeight.w800,
               letterSpacing: -0.5,
             ),
@@ -959,7 +566,7 @@ class _StatChip extends StatelessWidget {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  DASHBOARD CTA
+//  DASHBOARD HANDOFF CTA
 // ════════════════════════════════════════════════════════════════════
 class _DashboardCta extends StatelessWidget {
   final VoidCallback onTap;
@@ -967,76 +574,52 @@ class _DashboardCta extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        color: _white,
-        borderRadius: BorderRadius.circular(22),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Ready to drop\nyour next release?',
-                  style: GoogleFonts.outfit(
-                    color: _black,
-                    fontSize: 20,
-                    fontWeight: FontWeight.w800,
-                    height: 1.15,
-                    letterSpacing: -0.3,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'Join 150+ artists on 444Music.',
-                  style: GoogleFonts.outfit(
-                    color: Color(0xFF666666),
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                GestureDetector(
-                  onTap: onTap,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                    decoration: BoxDecoration(
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: _white,
+          borderRadius: BorderRadius.circular(22),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'See your full dashboard',
+                    style: GoogleFonts.outfit(
                       color: _black,
-                      borderRadius: BorderRadius.circular(99),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.dashboard_rounded, color: _white, size: 15),
-                        const SizedBox(width: 8),
-                        Text(
-                          'Go to Dashboard',
-                          style: GoogleFonts.outfit(
-                            color: _white,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                      ],
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.2,
                     ),
                   ),
-                ),
-              ],
+                  const SizedBox(height: 4),
+                  Text(
+                    'Releases, streams and earnings',
+                    style: GoogleFonts.outfit(
+                      color: const Color(0xFF666666),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-          const SizedBox(width: 16),
-          Container(
-            width: 64, height: 64,
-            decoration: const BoxDecoration(
-              color: _black,
-              shape: BoxShape.circle,
+            const SizedBox(width: 14),
+            Container(
+              width: 44, height: 44,
+              decoration: const BoxDecoration(
+                color: _black,
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.arrow_forward_rounded, color: _white, size: 20),
             ),
-            child: const Icon(Icons.rocket_launch_rounded, color: _white, size: 28),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -1045,25 +628,6 @@ class _DashboardCta extends StatelessWidget {
 // ════════════════════════════════════════════════════════════════════
 //  SHARED SMALL WIDGETS
 // ════════════════════════════════════════════════════════════════════
-class _SectionTitle extends StatelessWidget {
-  final String title;
-  const _SectionTitle({required this.title});
-
-  @override
-  Widget build(BuildContext context) {
-    return Text(
-      title,
-      style: GoogleFonts.outfit(
-        color: _white,
-        fontSize: 22,
-        fontWeight: FontWeight.w800,
-        height: 1.1,
-        letterSpacing: -0.3,
-      ),
-    );
-  }
-}
-
 class _IconBtn extends StatelessWidget {
   final IconData icon;
   final VoidCallback onTap;
@@ -1087,7 +651,7 @@ class _IconBtn extends StatelessWidget {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  BOTTOM NAVIGATION BAR
+//  BOTTOM NAVIGATION BAR (unchanged)
 // ════════════════════════════════════════════════════════════════════
 class _BottomNav extends StatelessWidget {
   final int current;
@@ -1193,15 +757,16 @@ class _BottomNav extends StatelessWidget {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  SIDEBAR
+//  SIDEBAR (unchanged, avatar now live too)
 // ════════════════════════════════════════════════════════════════════
 class _SidebarPanel extends StatelessWidget {
   final VoidCallback onClose;
   final void Function(String) onNavigate;
   final String userName, userEmail;
+  final String? uid;
 
   const _SidebarPanel({required this.onClose, required this.onNavigate,
-    required this.userName, required this.userEmail});
+    required this.userName, required this.userEmail, required this.uid});
 
   @override
   Widget build(BuildContext context) {
@@ -1260,14 +825,7 @@ class _SidebarPanel extends StatelessWidget {
               ),
               child: Row(
                 children: [
-                  Container(
-                    width: 42, height: 42,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle, color: _white20,
-                      border: Border.all(color: _white20),
-                    ),
-                    child: const Icon(Icons.person_rounded, color: _white, size: 22),
-                  ),
+                  _ProfileAvatar(uid: uid, authPhotoUrl: FirebaseAuth.instance.currentUser?.photoURL),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
@@ -1443,7 +1001,7 @@ class _SidebarDivider extends StatelessWidget {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  PLACEHOLDER TABS
+//  PLACEHOLDER TABS (unchanged)
 // ════════════════════════════════════════════════════════════════════
 class _PlaceholderTab extends StatelessWidget {
   final IconData icon;
