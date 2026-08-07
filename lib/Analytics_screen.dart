@@ -7,6 +7,7 @@
 //            appleStreams, youtubeStreams) + submissions where userId==uid
 // ═══════════════════════════════════════════════════════════════════
 
+import 'dart:convert';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -14,6 +15,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:image_picker/image_picker.dart';
 
 // ─── PALETTE (mirrors :root in wey.html) ─────────────────────────────
 const _bg         = Color(0xFF070707);
@@ -62,6 +64,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
   _Period _period = _Period.d7;
   String? _photoURL;
   String? _uid;
+  bool _uploadingAvatar = false;
 
   late final AnimationController _ctrl;
   late final Animation<double> _fade;
@@ -156,10 +159,56 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
     }
   }
 
+  ImageProvider _avatarImageProvider(String url) {
+    if (url.startsWith('data:')) {
+      final b64 = url.substring(url.indexOf(',') + 1);
+      return MemoryImage(base64Decode(b64));
+    }
+    return CachedNetworkImageProvider(url);
+  }
+
   String _fmt(num n) {
     if (n >= 1000000) return '${(n / 1000000).toStringAsFixed(1)}M';
     if (n >= 1000) return '${(n / 1000).toStringAsFixed(1)}K';
     return n.toString();
+  }
+
+  // Mirrors wey.html's avatarInput 'change' handler: pick an image,
+  // base64-encode it, save to users/{uid}.photoURL. Same 5MB cap.
+  Future<void> _pickAndUploadAvatar() async {
+    if (_uid == null || _uploadingAvatar) return;
+    final picked = await ImagePicker().pickImage(source: ImageSource.gallery, imageQuality: 85);
+    if (picked == null) return;
+
+    final bytes = await picked.readAsBytes();
+    if (bytes.lengthInBytes > 5 * 1024 * 1024) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Image must be under 5MB')),
+        );
+      }
+      return;
+    }
+
+    setState(() => _uploadingAvatar = true);
+    try {
+      final ext = picked.path.split('.').last.toLowerCase();
+      final mime = ext == 'png' ? 'image/png' : 'image/jpeg';
+      final base64Str = 'data:$mime;base64,${base64Encode(bytes)}';
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(_uid)
+          .set({'photoURL': base64Str}, SetOptions(merge: true));
+      if (mounted) setState(() => _photoURL = base64Str);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Couldn't update your photo. Please try again.")),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _uploadingAvatar = false);
+    }
   }
 
   @override
@@ -215,17 +264,50 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
           ),
         ),
         const Spacer(),
-        Container(
-          width: 40, height: 40,
-          decoration: BoxDecoration(
-            color: _surface2,
-            shape: BoxShape.circle,
-            border: Border.all(color: _borderH),
-            image: _photoURL != null
-                ? DecorationImage(image: CachedNetworkImageProvider(_photoURL!), fit: BoxFit.cover)
-                : null,
+        GestureDetector(
+          onTap: _pickAndUploadAvatar,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Container(
+                width: 40, height: 40,
+                decoration: BoxDecoration(
+                  color: _surface2,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: _borderH),
+                  image: _photoURL != null
+                      ? DecorationImage(image: _avatarImageProvider(_photoURL!), fit: BoxFit.cover)
+                      : null,
+                ),
+                child: _photoURL == null ? const Icon(Icons.person_rounded, color: _text2, size: 19) : null,
+              ),
+              if (_uploadingAvatar)
+                Positioned.fill(
+                  child: Container(
+                    decoration: const BoxDecoration(color: Color(0x99000000), shape: BoxShape.circle),
+                    child: const Center(
+                      child: SizedBox(
+                        width: 16, height: 16,
+                        child: CircularProgressIndicator(color: _wht, strokeWidth: 2),
+                      ),
+                    ),
+                  ),
+                )
+              else
+                Positioned(
+                  bottom: -2, right: -2,
+                  child: Container(
+                    width: 18, height: 18,
+                    decoration: BoxDecoration(
+                      color: Colors.black,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: _bg, width: 2),
+                    ),
+                    child: const Icon(Icons.edit_rounded, color: _wht, size: 9),
+                  ),
+                ),
+            ],
           ),
-          child: _photoURL == null ? const Icon(Icons.person_rounded, color: _text2, size: 19) : null,
         ),
       ]),
     );
