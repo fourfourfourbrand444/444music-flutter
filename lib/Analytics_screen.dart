@@ -1,15 +1,14 @@
 // ═══════════════════════════════════════════════════════════════════
-//  444MUSIC — Analytics Screen
-//  Static render — no entrance animation, no FadeTransition, no
-//  AnimationController. Content appears instantly once data loads.
-//  This removes every compositing/opacity layer from the screen since
-//  the device's GPU was stalling mid-composite on animated opacity,
-//  regardless of what was inside it (shadows, CustomPaint, or plain
-//  bars all showed the same frozen partial-opacity symptom).
-//  Route: /analytics
-//  Firebase: analytics/{uid} + submissions where userId==uid
+//  444MUSIC — Analytics Screen (simplified, backend-only)
+//  Route  : /analytics
+//  Nav    : Bottom Nav (index 1) + Sidebar "Analytics"
+//  Font   : Outfit (matches Home Screen)
+//  Theme  : Pure black & white, very dark
+//  Charts : CustomPainter (donut only)
+//  Firebase: analytics/{uid}  +  submissions where userId==uid
 // ═══════════════════════════════════════════════════════════════════
 
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -17,56 +16,75 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
-// ─── PALETTE (same as earnings_screen.dart) ──────────────────────
+// ─── PALETTE (darker) ───────────────────────────────────────────────
 const _black    = Color(0xFF000000);
-const _black2   = Color(0xFF111111);
-const _black3   = Color(0xFF1A1A1A);
+const _black2   = Color(0xFF0A0A0A);
+const _black3   = Color(0xFF101010);
+const _black4   = Color(0xFF181818);
 const _white    = Color(0xFFFFFFFF);
-const _white10  = Color(0x1AFFFFFF);
-const _white20  = Color(0x33FFFFFF);
-const _grey     = Color(0xFF8A8A8A);
-const _greyDark = Color(0xFF444444);
-const _ink1     = Color(0xFF0D0D0D);
-const _ink2     = Color(0xFF6E6E6E);
-const _inkBorder= Color(0x14000000);
+const _white70  = Color(0xB3FFFFFF);
+const _white10  = Color(0x14FFFFFF);
+const _white06  = Color(0x0FFFFFFF);
+const _grey     = Color(0xFF7A7A7A);
+const _greyDark = Color(0xFF3A3A3A);
 
-TextStyle _head(double s, FontWeight w, {Color c = _white, double? ls}) =>
-    GoogleFonts.nunito(fontSize: s, fontWeight: w, color: c, letterSpacing: ls);
-TextStyle _body(double s, FontWeight w, {Color c = _grey, double? h}) =>
-    GoogleFonts.nunito(fontSize: s, fontWeight: w, color: c, height: h);
+const _green    = Color(0xFF22C55E);
+const _greenDim = Color(0x1A22C55E);
+const _warn     = Color(0xFFF59E0B);
+const _warnDim  = Color(0x1AF59E0B);
 
-enum _Period { d7, d30, all }
+const _spotify  = Color(0xFF1DB954);
+const _apple    = Color(0xFFFC3C44);
+const _youtube  = Color(0xFFFF0000);
+const _boomplay = Color(0xFF00C853);
 
-class _Release {
-  final String title, type, genre, status;
-  final String? coverURL;
-  const _Release({required this.title, this.type = 'Single', this.genre = '—', this.status = 'Pending', this.coverURL});
+// ════════════════════════════════════════════════════════════════════
+//  DATA MODELS
+// ════════════════════════════════════════════════════════════════════
+class _AnalyticsData {
+  final int totalStreams, totalReleases;
+  final int spotifyStreams, appleStreams, youtubeStreams, boomplayStreams;
+  final List<_Release> releases;
+  const _AnalyticsData({
+    this.totalStreams = 0,
+    this.totalReleases = 0,
+    this.spotifyStreams = 0,
+    this.appleStreams = 0,
+    this.youtubeStreams = 0,
+    this.boomplayStreams = 0,
+    this.releases = const [],
+  });
 }
 
+class _Release {
+  final String title, type, genre, date, status;
+  const _Release({
+    required this.title,
+    this.type = 'Single',
+    this.genre = '—',
+    this.date = '—',
+    this.status = 'Pending',
+  });
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  SCREEN
+// ════════════════════════════════════════════════════════════════════
 class AnalyticsScreen extends StatefulWidget {
   const AnalyticsScreen({super.key});
   @override
   State<AnalyticsScreen> createState() => _AnalyticsScreenState();
 }
 
-class _AnalyticsScreenState extends State<AnalyticsScreen> {
-  int _totalStreams = 0, _spotify = 0, _apple = 0, _youtube = 0;
-  List<_Release> _releases = [];
+class _AnalyticsScreenState extends State<AnalyticsScreen>
+    with SingleTickerProviderStateMixin {
+  _AnalyticsData _data = const _AnalyticsData();
   bool _loading = true;
-  _Period _period = _Period.d7;
 
-  static const _w7   = [0.05, 0.08, 0.11, 0.14, 0.18, 0.20, 0.24];
-  static const _w30  = [0.15, 0.22, 0.28, 0.35];
-  static const _wAll = [0.06, 0.09, 0.11, 0.13, 0.16, 0.19, 0.26];
-  static const _labels7   = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-  static const _labels30  = ['W1','W2','W3','W4'];
-  static const _labelsAll = ['Jan','Feb','Mar','Apr','May','Jun','Jul'];
-
-  List<double> _scale(List<double> weights, double total) {
-    final sum = weights.fold(0.0, (a, b) => a + b);
-    double running = 0;
-    return weights.map((w) => running += (w / sum) * total).toList();
-  }
+  late AnimationController _ctrl;
+  late Animation<double> _fade;
+  late Animation<Offset> _slide;
+  late Animation<double> _barAnim;
 
   @override
   void initState() {
@@ -75,6 +93,14 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
       statusBarColor: Colors.transparent,
       systemNavigationBarColor: _black,
     ));
+    _ctrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 900));
+    _fade = CurvedAnimation(parent: _ctrl, curve: Curves.easeOut);
+    _slide = Tween<Offset>(begin: const Offset(0, 0.05), end: Offset.zero)
+        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic));
+    _barAnim = CurvedAnimation(
+        parent: _ctrl,
+        curve: const Interval(0.35, 1.0, curve: Curves.easeOutCubic));
     _load();
   }
 
@@ -85,12 +111,16 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
       return;
     }
     try {
-      final aSnap = await FirebaseFirestore.instance.collection('analytics').doc(user.uid).get();
-      final sSnap = await FirebaseFirestore.instance
-          .collection('submissions').where('userId', isEqualTo: user.uid).get();
-
+      final aSnap = await FirebaseFirestore.instance
+          .collection('analytics')
+          .doc(user.uid)
+          .get();
       final aData = aSnap.exists ? aSnap.data()! : <String, dynamic>{};
-      int int_(dynamic v) => v == null ? 0 : (v is int ? v : int.tryParse(v.toString()) ?? 0);
+
+      final sSnap = await FirebaseFirestore.instance
+          .collection('submissions')
+          .where('userId', isEqualTo: user.uid)
+          .get();
 
       final releases = sSnap.docs.map((d) {
         final r = d.data();
@@ -98,27 +128,44 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
           title: r['releaseTitle'] ?? 'Untitled Release',
           type: r['releaseType'] ?? 'Single',
           genre: r['genre'] ?? '—',
+          date: r['releaseDate'] ?? '—',
           status: r['status'] ?? 'Pending',
-          coverURL: r['coverURL'],
         );
       }).toList();
 
       if (mounted) {
         setState(() {
-          _totalStreams = int_(aData['totalStreams']);
-          _spotify = int_(aData['spotifyStreams']);
-          _apple = int_(aData['appleStreams']);
-          _youtube = int_(aData['youtubeStreams']);
-          _releases = releases;
+          _data = _AnalyticsData(
+            totalStreams: _int(aData['totalStreams']),
+            totalReleases: sSnap.size,
+            spotifyStreams: _int(aData['spotifyStreams']),
+            appleStreams: _int(aData['appleStreams']),
+            youtubeStreams: _int(aData['youtubeStreams']),
+            boomplayStreams: _int(aData['boomplayStreams']),
+            releases: releases,
+          );
           _loading = false;
         });
+        _ctrl.forward();
       }
     } catch (_) {
-      if (mounted) setState(() => _loading = false);
+      if (mounted) {
+        setState(() => _loading = false);
+        _ctrl.forward();
+      }
     }
   }
 
-  String _fmt(num n) {
+  int _int(dynamic v) =>
+      v == null ? 0 : (v is int ? v : int.tryParse(v.toString()) ?? 0);
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  String _fmt(int n) {
     if (n >= 1000000) return '${(n / 1000000).toStringAsFixed(1)}M';
     if (n >= 1000) return '${(n / 1000).toStringAsFixed(1)}K';
     return n.toString();
@@ -128,9 +175,17 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: _black,
-      body: _loading
-          ? const Center(child: CircularProgressIndicator(color: _white, strokeWidth: 2))
-          : _buildBody(),
+      body: Stack(children: [
+        if (_loading)
+          const Center(
+              child: CircularProgressIndicator(
+                  color: _white, strokeWidth: 2))
+        else
+          SlideTransition(
+            position: _slide,
+            child: FadeTransition(opacity: _fade, child: _buildBody()),
+          ),
+      ]),
     );
   }
 
@@ -139,318 +194,539 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
     final bottom = MediaQuery.of(context).padding.bottom;
     return SingleChildScrollView(
       physics: const BouncingScrollPhysics(),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        SizedBox(height: top),
-        _topBar(),
-        Padding(padding: const EdgeInsets.fromLTRB(20, 24, 20, 0), child: _header()),
-        Padding(padding: const EdgeInsets.fromLTRB(16, 20, 16, 0), child: _statRow()),
-        Padding(padding: const EdgeInsets.fromLTRB(16, 16, 16, 0), child: _chartCard()),
-        Padding(padding: const EdgeInsets.fromLTRB(16, 16, 16, 0), child: _sourceCard()),
-        Padding(padding: const EdgeInsets.fromLTRB(16, 16, 16, 0), child: _topReleasesCard()),
-        SizedBox(height: bottom + 40),
-      ]),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(height: top),
+          _topBar(),
+          _heroStrip(),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 18, 16, 0),
+            child: _statGrid(),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+            child: _platformSplit(),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+            child: _topStores(),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+            child: _topReleases(),
+          ),
+          SizedBox(height: bottom + 100),
+        ],
+      ),
     );
   }
 
-  Widget _topBar() => Container(
-        height: 62,
-        padding: const EdgeInsets.symmetric(horizontal: 20),
-        decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: _white10))),
-        child: Row(children: [
-          GestureDetector(
-            onTap: () => Navigator.pop(context),
-            child: Container(
-              width: 36, height: 36,
-              decoration: BoxDecoration(
-                  color: _black2, borderRadius: BorderRadius.circular(10), border: Border.all(color: _white10)),
-              child: const Icon(Icons.arrow_back_ios_new_rounded, color: _white, size: 16),
-            ),
+  // ══ TOP BAR ══
+  Widget _topBar() {
+    return Container(
+      height: 58,
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      decoration: const BoxDecoration(
+        color: _black,
+        border: Border(bottom: BorderSide(color: _white10)),
+      ),
+      child: Row(children: [
+        GestureDetector(
+          onTap: () => Navigator.pop(context),
+          child: CachedNetworkImage(
+            imageUrl: 'https://444music-distribution.vercel.app/black.png',
+            height: 26,
+            color: _white,
+            colorBlendMode: BlendMode.srcIn,
+            errorWidget: (_, __, ___) => Text('444Music',
+                style: GoogleFonts.outfit(
+                    color: _white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800)),
           ),
-        ]),
-      );
-
-  Widget _header() => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text('Artist Insights', style: _head(24, FontWeight.w900)),
-        const SizedBox(height: 6),
-        Text('All-time performance across every release and store.', style: _body(13, FontWeight.w500)),
-      ]);
-
-  // ── STATS ──
-  Widget _statRow() => Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Expanded(
-          flex: 13,
+        ),
+        const Spacer(),
+        GestureDetector(
+          onTap: () => Navigator.pop(context),
           child: Container(
-            padding: const EdgeInsets.fromLTRB(18, 20, 16, 18),
+            width: 34,
+            height: 34,
             decoration: BoxDecoration(
-              color: _black2,
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: _white20),
+              color: _white06,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: _white10),
             ),
-            child: Stack(children: [
-              Positioned(
-                top: 0, right: 0,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
-                  decoration: BoxDecoration(color: _white10, borderRadius: BorderRadius.circular(99)),
-                  child: Text('All-Time', style: _body(10, FontWeight.w700, c: _white)),
-                ),
-              ),
-              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Container(
-                  width: 36, height: 36,
-                  decoration: BoxDecoration(color: _white10, borderRadius: BorderRadius.circular(8)),
-                  child: const Icon(Icons.headphones_rounded, color: _white, size: 16),
-                ),
-                const SizedBox(height: 14),
-                FittedBox(
-                  fit: BoxFit.scaleDown, alignment: Alignment.centerLeft,
-                  child: Text(_fmt(_totalStreams), maxLines: 1, style: _head(24, FontWeight.w900, ls: -1)),
-                ),
-                const SizedBox(height: 5),
-                Text('TOTAL STREAMS', style: _body(9.5, FontWeight.w700).copyWith(letterSpacing: 0.7)),
-              ]),
-            ]),
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(flex: 10, child: _plainStat(Icons.music_note_rounded, _releases.length.toString(), 'Total Releases')),
-        const SizedBox(width: 12),
-        Expanded(flex: 10, child: _plainStat(Icons.public_rounded, '50+', 'Stores Distributed')),
-      ]);
-
-  Widget _plainStat(IconData icon, String value, String label) => Container(
-        padding: const EdgeInsets.fromLTRB(16, 18, 14, 16),
-        decoration: BoxDecoration(
-          color: _white, borderRadius: BorderRadius.circular(18), border: Border.all(color: _inkBorder)),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Container(
-            width: 32, height: 32,
-            decoration: BoxDecoration(color: const Color(0x0D000000), borderRadius: BorderRadius.circular(8)),
-            child: Icon(icon, color: _ink1, size: 15),
-          ),
-          const SizedBox(height: 13),
-          FittedBox(
-            fit: BoxFit.scaleDown, alignment: Alignment.centerLeft,
-            child: Text(value, maxLines: 1, style: _head(18, FontWeight.w900, c: _ink1, ls: -0.5)),
-          ),
-          const SizedBox(height: 4),
-          Text(label.toUpperCase(), style: _body(9, FontWeight.w700, c: _ink2).copyWith(letterSpacing: 0.6)),
-        ]),
-      );
-
-  // ── CHART — plain static bar chart, no animation, no canvas ──
-  Widget _chartCard() {
-    late List<double> values;
-    late List<String> labels;
-    switch (_period) {
-      case _Period.d7: values = _scale(_w7, _totalStreams.toDouble()); labels = _labels7; break;
-      case _Period.d30: values = _scale(_w30, _totalStreams.toDouble()); labels = _labels30; break;
-      case _Period.all: values = _scale(_wAll, _totalStreams.toDouble()); labels = _labelsAll; break;
-    }
-    final maxVal = values.isEmpty ? 1.0 : values.reduce((a, b) => a > b ? a : b).clamp(1.0, double.infinity);
-
-    return _card(
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Text('Streaming Growth', style: _head(15, FontWeight.w800, ls: -0.3)),
-          const Spacer(),
-          Container(
-            padding: const EdgeInsets.all(3),
-            decoration: BoxDecoration(color: _black3, borderRadius: BorderRadius.circular(8)),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              _tab('7D', _period == _Period.d7, () => setState(() => _period = _Period.d7)),
-              _tab('30D', _period == _Period.d30, () => setState(() => _period = _Period.d30)),
-              _tab('All', _period == _Period.all, () => setState(() => _period = _Period.all)),
-            ]),
-          ),
-        ]),
-        const SizedBox(height: 20),
-        SizedBox(
-          height: 140,
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: List.generate(values.length, (i) {
-              final frac = (values[i] / maxVal).clamp(0.02, 1.0);
-              return Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 4),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      Expanded(
-                        child: Align(
-                          alignment: Alignment.bottomCenter,
-                          child: FractionallySizedBox(
-                            heightFactor: frac,
-                            widthFactor: 1,
-                            child: Container(
-                              decoration: BoxDecoration(
-                                color: _white,
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(labels[i], style: _body(9, FontWeight.w600, c: _greyDark)),
-                    ],
-                  ),
-                ),
-              );
-            }),
+            child: const Icon(Icons.arrow_back_ios_new_rounded,
+                color: _white, size: 15),
           ),
         ),
       ]),
     );
   }
 
-  Widget _tab(String label, bool active, VoidCallback onTap) => GestureDetector(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-          decoration: BoxDecoration(
-            color: active ? _black2 : Colors.transparent,
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Text(label, style: _body(10.5, FontWeight.w700, c: active ? _white : _greyDark).copyWith(letterSpacing: 0.6)),
-        ),
-      );
-
-  // ── SOURCE OF STREAMS ──
-  Widget _sourceCard() {
-    final total = (_spotify + _apple + _youtube).clamp(1, 1 << 30);
-    int pct(int v) => (v / total * 100).round();
-    final rows = [
-      (icon: Icons.music_note_rounded, name: 'Spotify', value: _spotify),
-      (icon: Icons.apple_rounded, name: 'Apple Music', value: _apple),
-      (icon: Icons.play_circle_fill_rounded, name: 'YouTube', value: _youtube),
-    ];
-    return _card(
+  // ══ HERO ══
+  Widget _heroStrip() {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 22, 20, 18),
+      decoration: const BoxDecoration(
+          border: Border(bottom: BorderSide(color: _white10))),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Text('Source of Streams', style: _head(15, FontWeight.w800, ls: -0.3)),
-          const Spacer(),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(color: _white10, borderRadius: BorderRadius.circular(99)),
-            child: Text('ALL-TIME', style: _body(9.5, FontWeight.w700, c: _white).copyWith(letterSpacing: 0.6)),
-          ),
+        Text('Artist Insights',
+            style: GoogleFonts.outfit(
+                color: _white,
+                fontSize: 26,
+                fontWeight: FontWeight.w800,
+                height: 1.05)),
+        const SizedBox(height: 4),
+        Text('Live performance data across your releases.',
+            style: GoogleFonts.outfit(
+                color: _grey, fontSize: 12.5, fontWeight: FontWeight.w500)),
+      ]),
+    );
+  }
+
+  // ══ STAT GRID (real data only) ══
+  Widget _statGrid() {
+    return Row(children: [
+      Expanded(
+        child: _StatCard(
+          icon: Icons.headphones_rounded,
+          label: 'Total Streams',
+          value: _fmt(_data.totalStreams),
+        ),
+      ),
+      const SizedBox(width: 12),
+      Expanded(
+        child: _StatCard(
+          icon: Icons.music_note_rounded,
+          label: 'Total Releases',
+          value: _data.totalReleases.toString(),
+        ),
+      ),
+    ]);
+  }
+
+  // ══ PLATFORM SPLIT ══
+  Widget _platformSplit() {
+    final sp = _data.spotifyStreams.toDouble();
+    final ap = _data.appleStreams.toDouble();
+    final yt = _data.youtubeStreams.toDouble();
+    final bp = _data.boomplayStreams.toDouble();
+    final tot = (sp + ap + yt + bp);
+
+    if (tot <= 0) {
+      return _Card(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          _CardTitle(icon: Icons.donut_large_rounded, label: 'Platform Split'),
+          const SizedBox(height: 14),
+          _emptyState(
+              icon: Icons.donut_large_rounded,
+              text: 'Platform data will appear once streams come in.'),
         ]),
+      );
+    }
+
+    String pct(double v) => '${(v / tot * 100).round()}%';
+    final segments = [
+      _DonutSegment(label: 'Spotify', value: sp, color: _spotify, pct: pct(sp)),
+      _DonutSegment(
+          label: 'Apple Music', value: ap, color: _apple, pct: pct(ap)),
+      _DonutSegment(
+          label: 'YouTube', value: yt, color: _youtube, pct: pct(yt)),
+      _DonutSegment(
+          label: 'Others', value: bp, color: _white70, pct: pct(bp)),
+    ];
+
+    return _Card(
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        _CardTitle(icon: Icons.donut_large_rounded, label: 'Platform Split'),
         const SizedBox(height: 18),
-        ...rows.map((r) => Padding(
-              padding: const EdgeInsets.only(bottom: 10),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                decoration: BoxDecoration(
-                    color: _black3, borderRadius: BorderRadius.circular(12), border: Border.all(color: _white10)),
-                child: Row(children: [
-                  Container(
-                    width: 32, height: 32,
-                    decoration: BoxDecoration(color: _black, borderRadius: BorderRadius.circular(9)),
-                    child: Icon(r.icon, color: _white, size: 15),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            SizedBox(
+              width: 130,
+              height: 130,
+              child: AnimatedBuilder(
+                animation: _barAnim,
+                builder: (_, __) => CustomPaint(
+                  painter: _DonutPainter(
+                    segments: segments,
+                    progress: _barAnim.value,
+                    centerLabel: _fmt(_data.totalStreams),
+                    centerSub: 'Streams',
                   ),
-                  const SizedBox(width: 14),
-                  SizedBox(width: 100, child: Text(r.name, maxLines: 1, overflow: TextOverflow.ellipsis,
-                      style: _body(13, FontWeight.w700, c: _white))),
-                  Expanded(
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(99),
-                      child: Container(
-                        height: 5, color: _black,
-                        child: FractionallySizedBox(
-                          alignment: Alignment.centerLeft, widthFactor: r.value / total,
-                          child: Container(color: _white),
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  SizedBox(width: 40, child: Text('${pct(r.value)}%', textAlign: TextAlign.right,
-                      style: _head(13, FontWeight.w800))),
-                ]),
+                ),
               ),
+            ),
+            const SizedBox(width: 20),
+            Expanded(
+              child: Column(
+                children: segments
+                    .where((s) => s.value > 0)
+                    .map((s) => Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 5),
+                          child: Row(children: [
+                            Container(
+                              width: 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                  color: s.color, shape: BoxShape.circle),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(s.label,
+                                  style: GoogleFonts.outfit(
+                                      color: _white70,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w500)),
+                            ),
+                            Text(s.pct,
+                                style: GoogleFonts.outfit(
+                                    color: _white,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700)),
+                          ]),
+                        ))
+                    .toList(),
+              ),
+            ),
+          ],
+        ),
+      ]),
+    );
+  }
+
+  // ══ TOP STORES (real counts only, no fake bars) ══
+  Widget _topStores() {
+    final stores = [
+      _StoreInfo(
+          name: 'Spotify',
+          icon: Icons.music_note_rounded,
+          color: _spotify,
+          count: _data.spotifyStreams),
+      _StoreInfo(
+          name: 'Apple Music',
+          icon: Icons.apple_rounded,
+          color: _apple,
+          count: _data.appleStreams),
+      _StoreInfo(
+          name: 'YouTube',
+          icon: Icons.play_circle_rounded,
+          color: _youtube,
+          count: _data.youtubeStreams),
+      _StoreInfo(
+          name: 'Boomplay',
+          icon: Icons.headphones_rounded,
+          color: _boomplay,
+          count: _data.boomplayStreams),
+    ];
+
+    return _Card(
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        _CardTitle(icon: Icons.storefront_rounded, label: 'Top Stores'),
+        const SizedBox(height: 14),
+        ...stores.map((s) => Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Row(children: [
+                Container(
+                  width: 34,
+                  height: 34,
+                  decoration: BoxDecoration(
+                    color: s.color.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(9),
+                  ),
+                  child: Icon(s.icon, color: s.color, size: 16),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(s.name,
+                      style: GoogleFonts.outfit(
+                          color: _white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600)),
+                ),
+                Text(_fmt(s.count),
+                    style: GoogleFonts.outfit(
+                        color: _white70,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700)),
+              ]),
             )),
       ]),
     );
   }
 
-  // ── TOP RELEASES ──
-  Widget _topReleasesCard() => _card(
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            Text('Top Releases', style: _head(15, FontWeight.w800, ls: -0.3)),
-            const Spacer(),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(color: _white10, borderRadius: BorderRadius.circular(99)),
-              child: Text('LIBRARY', style: _body(9.5, FontWeight.w700, c: _white).copyWith(letterSpacing: 0.6)),
-            ),
-          ]),
-          const SizedBox(height: 16),
-          if (_releases.isEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 30),
-              child: Column(children: [
-                const Icon(Icons.album_rounded, color: _white, size: 34),
-                const SizedBox(height: 12),
-                Text('Your releases will appear here once submitted.',
-                    textAlign: TextAlign.center, style: _body(12.5, FontWeight.w600, c: _greyDark)),
-              ]),
-            )
-          else
-            ...List.generate(_releases.length, (i) {
-              final r = _releases[i];
-              final approved = r.status.toLowerCase() == 'approved';
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                  decoration: BoxDecoration(
-                      color: _black3, borderRadius: BorderRadius.circular(12), border: Border.all(color: _white10)),
-                  child: Row(children: [
-                    Text((i + 1).toString().padLeft(2, '0'), style: _body(10.5, FontWeight.w700, c: _greyDark)),
-                    const SizedBox(width: 12),
-                    Container(
-                      width: 36, height: 36,
-                      decoration: BoxDecoration(color: _white, borderRadius: BorderRadius.circular(8)),
-                      clipBehavior: Clip.antiAlias,
-                      child: r.coverURL != null
-                          ? CachedNetworkImage(imageUrl: r.coverURL!, fit: BoxFit.cover)
-                          : const Icon(Icons.album_rounded, color: Colors.black, size: 17),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text(r.title, maxLines: 1, overflow: TextOverflow.ellipsis,
-                            style: _body(13.5, FontWeight.w700, c: _white)),
-                        const SizedBox(height: 3),
-                        Text('${r.type} · ${r.genre}', maxLines: 1, overflow: TextOverflow.ellipsis,
-                            style: _body(11, FontWeight.w500, c: _greyDark)),
-                      ]),
-                    ),
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-                      decoration: BoxDecoration(
-                          color: approved ? _white10 : _black,
-                          borderRadius: BorderRadius.circular(99),
-                          border: Border.all(color: _white10)),
-                      child: Text(approved ? 'Approved' : r.status,
-                          style: _body(10, FontWeight.w700, c: approved ? _white : _grey)),
-                    ),
-                  ]),
+  // ══ TOP RELEASES ══
+  Widget _topReleases() {
+    return _Card(
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        _CardTitle(icon: Icons.library_music_rounded, label: 'Releases'),
+        const SizedBox(height: 12),
+        if (_data.releases.isEmpty)
+          _emptyState(
+            icon: Icons.album_rounded,
+            text: 'Your releases will appear here once submitted.',
+          )
+        else
+          ...List.generate(_data.releases.length, (i) {
+            final r = _data.releases[i];
+            final isLive = r.status.toLowerCase() == 'live';
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+                decoration: BoxDecoration(
+                  color: _black4,
+                  borderRadius: BorderRadius.circular(11),
                 ),
-              );
-            }),
-        ]),
-      );
+                child: Row(children: [
+                  Container(
+                    width: 32,
+                    height: 32,
+                    decoration: BoxDecoration(
+                      color: _white10,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child:
+                        const Icon(Icons.album_rounded, color: _white, size: 16),
+                  ),
+                  const SizedBox(width: 11),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(r.title,
+                            style: GoogleFonts.outfit(
+                                color: _white,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700),
+                            overflow: TextOverflow.ellipsis),
+                        const SizedBox(height: 2),
+                        Text('${r.type} · ${r.date}',
+                            style: GoogleFonts.outfit(
+                                color: _grey, fontSize: 10.5),
+                            overflow: TextOverflow.ellipsis),
+                      ],
+                    ),
+                  ),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: isLive ? _greenDim : _warnDim,
+                      borderRadius: BorderRadius.circular(99),
+                    ),
+                    child: Text(r.status,
+                        style: GoogleFonts.outfit(
+                            color: isLive ? _green : _warn,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700)),
+                  ),
+                ]),
+              ),
+            );
+          }),
+      ]),
+    );
+  }
 
-  Widget _card({required Widget child}) => Container(
+  Widget _emptyState({required IconData icon, required String text}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 24),
+      child: Column(children: [
+        Icon(icon, color: _greyDark, size: 34),
+        const SizedBox(height: 10),
+        Text(text,
+            textAlign: TextAlign.center,
+            style: GoogleFonts.outfit(
+                color: _greyDark, fontSize: 12.5, fontWeight: FontWeight.w500)),
+      ]),
+    );
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  DATA CLASSES
+// ════════════════════════════════════════════════════════════════════
+class _StoreInfo {
+  final String name;
+  final IconData icon;
+  final Color color;
+  final int count;
+  const _StoreInfo(
+      {required this.name,
+      required this.icon,
+      required this.color,
+      required this.count});
+}
+
+class _DonutSegment {
+  final String label, pct;
+  final double value;
+  final Color color;
+  const _DonutSegment(
+      {required this.label,
+      required this.value,
+      required this.color,
+      required this.pct});
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  DONUT PAINTER
+// ════════════════════════════════════════════════════════════════════
+class _DonutPainter extends CustomPainter {
+  final List<_DonutSegment> segments;
+  final double progress;
+  final String centerLabel, centerSub;
+
+  const _DonutPainter({
+    required this.segments,
+    required this.progress,
+    required this.centerLabel,
+    required this.centerSub,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final cx = size.width / 2;
+    final cy = size.height / 2;
+    final r = math.min(cx, cy) - 6;
+    final inner = r * 0.62;
+
+    final total = segments.fold(0.0, (s, e) => s + e.value);
+    if (total <= 0) return;
+
+    double start = -math.pi / 2;
+    final sweep = 2 * math.pi * progress;
+
+    for (final seg in segments) {
+      final frac = seg.value / total;
+      final segSweep = frac * sweep;
+      final paint = Paint()
+        ..color = seg.color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = r - inner
+        ..strokeCap = StrokeCap.butt;
+      canvas.drawArc(
+        Rect.fromCircle(center: Offset(cx, cy), radius: (r + inner) / 2),
+        start,
+        segSweep - 0.03,
+        false,
+        paint,
+      );
+      start += frac * 2 * math.pi;
+    }
+
+    if (progress > 0.5) {
+      final opacity = ((progress - 0.5) / 0.5).clamp(0.0, 1.0);
+      final valPainter = TextPainter(
+        text: TextSpan(
+          text: centerLabel,
+          style: GoogleFonts.outfit(
+              color: Color.fromRGBO(255, 255, 255, opacity),
+              fontSize: 19,
+              fontWeight: FontWeight.w800),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      valPainter.paint(canvas,
+          Offset(cx - valPainter.width / 2, cy - valPainter.height - 2));
+
+      final subPainter = TextPainter(
+        text: TextSpan(
+          text: centerSub,
+          style: GoogleFonts.outfit(
+              color: Color.fromRGBO(122, 122, 122, opacity),
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.5),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      subPainter.paint(canvas, Offset(cx - subPainter.width / 2, cy + 4));
+    }
+  }
+
+  @override
+  bool shouldRepaint(_DonutPainter old) => old.progress != progress;
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  SHARED WIDGETS
+// ════════════════════════════════════════════════════════════════════
+class _Card extends StatelessWidget {
+  final Widget child;
+  const _Card({required this.child});
+  @override
+  Widget build(BuildContext context) => Container(
         width: double.infinity,
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-            color: _black2, borderRadius: BorderRadius.circular(18), border: Border.all(color: _white10)),
+          color: _black3,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: _white10),
+        ),
         child: child,
+      );
+}
+
+class _CardTitle extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  const _CardTitle({required this.icon, required this.label});
+  @override
+  Widget build(BuildContext context) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: _white70, size: 14),
+          const SizedBox(width: 7),
+          Text(label.toUpperCase(),
+              style: GoogleFonts.outfit(
+                  color: _grey,
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1)),
+        ],
+      );
+}
+
+class _StatCard extends StatelessWidget {
+  final IconData icon;
+  final String label, value;
+  const _StatCard(
+      {required this.icon, required this.label, required this.value});
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.all(15),
+        decoration: BoxDecoration(
+          color: _black3,
+          borderRadius: BorderRadius.circular(15),
+          border: Border.all(color: _white10),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: _white10,
+              borderRadius: BorderRadius.circular(9),
+            ),
+            child: Icon(icon, color: _white70, size: 16),
+          ),
+          const SizedBox(height: 12),
+          Text(value,
+              style: GoogleFonts.outfit(
+                  color: _white,
+                  fontSize: 24,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -0.8)),
+          const SizedBox(height: 3),
+          Text(label,
+              style: GoogleFonts.outfit(
+                  color: _grey, fontSize: 10.5, fontWeight: FontWeight.w600)),
+        ]),
       );
 }
