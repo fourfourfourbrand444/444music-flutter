@@ -243,6 +243,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
     final bottom = MediaQuery.of(context).padding.bottom;
     return SingleChildScrollView(
       physics: const BouncingScrollPhysics(),
+      cacheExtent: 0,
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         SizedBox(height: top),
         _topBar(),

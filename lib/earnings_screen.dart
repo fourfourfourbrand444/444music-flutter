@@ -214,8 +214,9 @@ class _EarningsScreenState extends State<EarningsScreen>
   Widget _buildBody() {
     final top = MediaQuery.of(context).padding.top;
     final bottom = MediaQuery.of(context).padding.bottom;
-    return SingleChildScrollView(
-      physics: const BouncingScrollPhysics(),
+   return SingleChildScrollView(
+     physics: const BouncingScrollPhysics(),
+     cacheExtent: 0,
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         SizedBox(height: top),
         _topBar(),
