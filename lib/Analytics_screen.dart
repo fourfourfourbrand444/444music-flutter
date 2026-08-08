@@ -1,11 +1,11 @@
 // ═══════════════════════════════════════════════════════════════════
-//  444MUSIC — Analytics Screen (full rebuild using the exact same
-//  proven-stable pattern as the working earnings_screen.dart: flat
-//  Container cards, no BoxShadow, no CustomPaint/canvas repainting,
-//  no AnimatedBuilder-driven redraws, simple one-shot fade entrance.
-//  The line chart is replaced with a simple bar chart built from
-//  plain Containers — same technique as Earnings' platform bars —
-//  so there is no repaint-per-frame surface left anywhere on screen.
+//  444MUSIC — Analytics Screen
+//  Static render — no entrance animation, no FadeTransition, no
+//  AnimationController. Content appears instantly once data loads.
+//  This removes every compositing/opacity layer from the screen since
+//  the device's GPU was stalling mid-composite on animated opacity,
+//  regardless of what was inside it (shadows, CustomPaint, or plain
+//  bars all showed the same frozen partial-opacity symptom).
 //  Route: /analytics
 //  Firebase: analytics/{uid} + submissions where userId==uid
 // ═══════════════════════════════════════════════════════════════════
@@ -49,15 +49,11 @@ class AnalyticsScreen extends StatefulWidget {
   State<AnalyticsScreen> createState() => _AnalyticsScreenState();
 }
 
-class _AnalyticsScreenState extends State<AnalyticsScreen>
-    with SingleTickerProviderStateMixin {
+class _AnalyticsScreenState extends State<AnalyticsScreen> {
   int _totalStreams = 0, _spotify = 0, _apple = 0, _youtube = 0;
   List<_Release> _releases = [];
   bool _loading = true;
   _Period _period = _Period.d7;
-
-  late final AnimationController _ctrl;
-  late final Animation<double> _fade;
 
   static const _w7   = [0.05, 0.08, 0.11, 0.14, 0.18, 0.20, 0.24];
   static const _w30  = [0.15, 0.22, 0.28, 0.35];
@@ -79,17 +75,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
       statusBarColor: Colors.transparent,
       systemNavigationBarColor: _black,
     ));
-    // Same lightweight one-shot fade as earnings_screen.dart — no
-    // repeating/continuous animation driving any repaint.
-    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 500));
-    _fade = CurvedAnimation(parent: _ctrl, curve: Curves.easeOut);
     _load();
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
   }
 
   Future<void> _load() async {
@@ -126,11 +112,9 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
           _releases = releases;
           _loading = false;
         });
-        _ctrl.forward();
       }
     } catch (_) {
       if (mounted) setState(() => _loading = false);
-      _ctrl.forward();
     }
   }
 
@@ -146,7 +130,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
       backgroundColor: _black,
       body: _loading
           ? const Center(child: CircularProgressIndicator(color: _white, strokeWidth: 2))
-          : FadeTransition(opacity: _fade, child: _buildBody()),
+          : _buildBody(),
     );
   }
 
@@ -191,7 +175,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
         Text('All-time performance across every release and store.', style: _body(13, FontWeight.w500)),
       ]);
 
-  // ── STATS — same flat pattern as Earnings' hero/plain cards ──
+  // ── STATS ──
   Widget _statRow() => Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Expanded(
           flex: 13,
@@ -254,9 +238,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
         ]),
       );
 
-  // ── CHART — plain bar chart, built the same way as Earnings'
-  // progress bars (Container + FractionallySizedBox). No CustomPaint,
-  // no canvas, no per-frame repaint of any kind. ──
+  // ── CHART — plain static bar chart, no animation, no canvas ──
   Widget _chartCard() {
     late List<double> values;
     late List<String> labels;
@@ -335,7 +317,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
         ),
       );
 
-  // ── SOURCE OF STREAMS — identical pattern to Earnings' platform card ──
+  // ── SOURCE OF STREAMS ──
   Widget _sourceCard() {
     final total = (_spotify + _apple + _youtube).clamp(1, 1 << 30);
     int pct(int v) => (v / total * 100).round();
