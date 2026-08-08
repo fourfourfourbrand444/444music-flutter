@@ -8,7 +8,6 @@ import 'upload_screen.dart';
 import 'agreement_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'Landing.dart';
 import 'rejection_screen.dart';
 import 'dashboard.dart';
 import 'profile_screen.dart';
@@ -471,7 +470,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> with TickerProviderStateM
                           width: double.infinity, height: 54,
                           child: ElevatedButton(
                             onPressed: () => Navigator.push(context, PageRouteBuilder(
-                              pageBuilder: (_, __, ___) => const LandingScreen(),
+                              pageBuilder: (_, __, ___) => const LoginScreen(initialTab: 1),
                               transitionsBuilder: (_, anim, __, child) => FadeTransition(opacity: anim, child: child),
                               transitionDuration: const Duration(milliseconds: 400),
                             )),
@@ -490,7 +489,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> with TickerProviderStateM
                           width: double.infinity, height: 54,
                           child: TextButton(
                             onPressed: () => Navigator.push(context, PageRouteBuilder(
-                              pageBuilder: (_, __, ___) => const LandingScreen(),
+                              pageBuilder: (_, __, ___) => const LoginScreen(initialTab: 0),
                               transitionsBuilder: (_, anim, __, child) => FadeTransition(opacity: anim, child: child),
                               transitionDuration: const Duration(milliseconds: 400),
                             )),
