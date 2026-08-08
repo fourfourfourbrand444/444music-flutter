@@ -5,6 +5,11 @@
 //  (stores + 100% yours only, no plays count, short caption so it never
 //  overflows). Rest of the screen (stats row, why-us, dashboard CTA,
 //  bottom nav, sidebar) is unchanged from v4.
+//
+//  v6 patch: hero slide images only. Image.asset → Image.network,
+//  pointed at real Pexels stock photography (laptop analytics
+//  dashboards / music-streaming screens, no people). Nothing else —
+//  theme, layout, animation, captions, structure — changed.
 // ═══════════════════════════════════════════════════════════════════
 import 'dart:async';
 import 'dart:convert';
@@ -325,12 +330,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
 // ════════════════════════════════════════════════════════════════════
 //  SLIDING HERO — auto-advances every 5s, caption cross-fades with image
-//  Swap the imageAsset paths below for your own professional analytics
-//  style images (a Spotify for Artists-style dashboard shot, an Apple
-//  Music for Artists-style dashboard shot, a laptop displaying a song
-//  analytics chart). Use your own screenshots or licensed stock photos —
-//  not scraped Apple/Spotify app screenshots, since those are their
-//  trademarked UI, not yours to redistribute in a commercial app.
+//  v6: real Pexels stock photography (laptop analytics dashboards /
+//  music-streaming screens, no people) via Image.network instead of
+//  the previous unbundled local assets.
 // ════════════════════════════════════════════════════════════════════
 class _HeroSlide {
   final String imageAsset;
@@ -341,17 +343,17 @@ class _HeroSlide {
 
 final List<_HeroSlide> _heroSlides = [
   _HeroSlide(
-    imageAsset: 'assets/images/slide_streaming_dashboard.jpg',
+    imageAsset: 'https://images.pexels.com/photos/12969403/pexels-photo-12969403.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=2',
     title: 'Streaming dashboard',
     caption: 'Live stream counts, updated daily',
   ),
   _HeroSlide(
-    imageAsset: 'assets/images/slide_fan_insights.jpg',
+    imageAsset: 'https://images.pexels.com/photos/11989313/pexels-photo-11989313.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=2',
     title: 'Fan insights',
     caption: 'See exactly where your fans are',
   ),
   _HeroSlide(
-    imageAsset: 'assets/images/slide_full_reports.jpg',
+    imageAsset: 'https://images.pexels.com/photos/4604639/pexels-photo-4604639.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=2',
     title: 'Full reports',
     caption: 'Every store, one dashboard',
   ),
@@ -404,9 +406,13 @@ class _SlideHeroState extends State<_SlideHero> {
               onPageChanged: (i) => setState(() => _index = i),
               itemBuilder: (context, i) {
                 final s = _heroSlides[i];
-                return Image.asset(
+                return Image.network(
                   s.imageAsset,
                   fit: BoxFit.cover,
+                  loadingBuilder: (_, child, progress) {
+                    if (progress == null) return child;
+                    return Container(color: _black3);
+                  },
                   errorBuilder: (_, __, ___) => Container(color: _black3),
                 );
               },
