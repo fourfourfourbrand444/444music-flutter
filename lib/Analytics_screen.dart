@@ -5,6 +5,12 @@
 //  Route: /analytics
 //  Firebase: analytics/{uid} (totalStreams, spotifyStreams,
 //            appleStreams, youtubeStreams) + submissions where userId==uid
+//
+//  v2 patch: overflow-safety only, mirroring the earnings_screen.dart
+//  patch — hero/plain stat values wrapped in FittedBox, the chart
+//  header row won't squeeze its tabs off-screen, source-row name/count/
+//  pct all ellipsis-guarded. Nothing else — chart painter, avatar
+//  upload, all-time totals logic — changed.
 // ═══════════════════════════════════════════════════════════════════
 
 import 'dart:convert';
@@ -71,9 +77,6 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
   late final Animation<Offset> _slide;
   late final Animation<double> _reveal;
 
-  // Weight arrays mirror buildTrendFromTotal() in wey.html exactly —
-  // backend only stores a cumulative total, so the trend is an
-  // illustrative split across the selected range.
   static const _w7   = [0.05, 0.08, 0.11, 0.14, 0.18, 0.20, 0.24];
   static const _w30  = [0.15, 0.22, 0.28, 0.35];
   static const _wAll = [0.06, 0.09, 0.11, 0.13, 0.16, 0.19, 0.26];
@@ -173,8 +176,6 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
     return n.toString();
   }
 
-  // Mirrors wey.html's avatarInput 'change' handler: pick an image,
-  // base64-encode it, save to users/{uid}.photoURL. Same 5MB cap.
   Future<void> _pickAndUploadAvatar() async {
     if (_uid == null || _uploadingAvatar) return;
     final picked = await ImagePicker().pickImage(source: ImageSource.gallery, imageQuality: 85);
@@ -373,7 +374,14 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
                 child: const Icon(Icons.headphones_rounded, color: _wht, size: 16),
               ),
               const SizedBox(height: 14),
-              Text(_fmt(_totalStreams), style: _head(24, FontWeight.w900, letterSpacing: -1)),
+              // PATCHED: FittedBox so a very large total-streams number
+              // (e.g. "12.4M") can never overflow the hero card's width.
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(_fmt(_totalStreams),
+                    maxLines: 1, style: _head(24, FontWeight.w900, letterSpacing: -1)),
+              ),
               const SizedBox(height: 5),
               Text('TOTAL STREAMS',
                   style: _body(9.5, FontWeight.w700, color: const Color(0x8CFFFFFF)).copyWith(letterSpacing: 0.7)),
@@ -402,7 +410,12 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
             child: Icon(icon, color: _wht, size: 15),
           ),
           const SizedBox(height: 13),
-          Text(value, style: _head(18, FontWeight.w900, letterSpacing: -0.5)),
+          // PATCHED: same FittedBox guard as the hero card.
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(value, maxLines: 1, style: _head(18, FontWeight.w900, letterSpacing: -0.5)),
+          ),
           const SizedBox(height: 4),
           Text(label.toUpperCase(), style: _body(9, FontWeight.w700, color: _text2).copyWith(letterSpacing: 0.6)),
         ]),
@@ -429,8 +442,14 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
 
     return _card(
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // PATCHED: title wrapped in Flexible+ellipsis so the fixed-size
+        // 7D/30D/All tab group is never pushed off the card's right edge.
         Row(children: [
-          Text('Streaming Growth', style: _head(15, FontWeight.w800, letterSpacing: -0.3)),
+          Flexible(
+            child: Text('Streaming Growth',
+                overflow: TextOverflow.ellipsis,
+                style: _head(15, FontWeight.w800, letterSpacing: -0.3)),
+          ),
           const Spacer(),
           Container(
             padding: const EdgeInsets.all(3),
@@ -480,7 +499,11 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
     return _card(
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          Text('Source of Streams', style: _head(15, FontWeight.w800, letterSpacing: -0.3)),
+          Flexible(
+            child: Text('Source of Streams',
+                overflow: TextOverflow.ellipsis,
+                style: _head(15, FontWeight.w800, letterSpacing: -0.3)),
+          ),
           const Spacer(),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -513,7 +536,14 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
                     child: Icon(r.icon, color: _wht, size: 15),
                   ),
                   const SizedBox(width: 14),
-                  SizedBox(width: 92, child: Text(r.name, style: _body(13, FontWeight.w700, color: _text1))),
+                  // PATCHED: added maxLines/ellipsis — no functional change
+                  // for the current three names, just a backstop.
+                  SizedBox(
+                    width: 92,
+                    child: Text(r.name,
+                        maxLines: 1, overflow: TextOverflow.ellipsis,
+                        style: _body(13, FontWeight.w700, color: _text1)),
+                  ),
                   Expanded(
                     child: AnimatedBuilder(
                       animation: _reveal,
@@ -536,12 +566,23 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
                     ),
                   ),
                   const SizedBox(width: 12),
-                  Text(_fmt(r.value), style: _head(12.5, FontWeight.w800, color: _text1)),
+                  // PATCHED: count wrapped so a very large stream count
+                  // (e.g. "12.4M") shrinks instead of overflowing.
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 56),
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerRight,
+                      child: Text(_fmt(r.value), maxLines: 1, style: _head(12.5, FontWeight.w800, color: _text1)),
+                    ),
+                  ),
                   const SizedBox(width: 8),
                   SizedBox(
                     width: 34,
                     child: Text('${pct(r.value)}%',
-                        textAlign: TextAlign.right, style: _body(10.5, FontWeight.w700, color: _text3)),
+                        textAlign: TextAlign.right,
+                        maxLines: 1, overflow: TextOverflow.ellipsis,
+                        style: _body(10.5, FontWeight.w700, color: _text3)),
                   ),
                 ]),
               ),
@@ -555,7 +596,11 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
     return _card(
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          Text('Top Releases', style: _head(15, FontWeight.w800, letterSpacing: -0.3)),
+          Flexible(
+            child: Text('Top Releases',
+                overflow: TextOverflow.ellipsis,
+                style: _head(15, FontWeight.w800, letterSpacing: -0.3)),
+          ),
           const Spacer(),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -627,6 +672,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
                       border: Border.all(color: approved ? const Color(0x33FFFFFF) : const Color(0x1FFFFFFF)),
                     ),
                     child: Text(approved ? 'Approved' : r.status,
+                        maxLines: 1, overflow: TextOverflow.ellipsis,
                         style: _body(10, FontWeight.w700, color: approved ? _text1 : _text2)),
                   ),
                 ]),
