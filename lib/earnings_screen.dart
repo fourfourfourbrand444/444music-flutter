@@ -20,7 +20,13 @@
 //  a fixed Row, the progress-to-payout line and both stat-card values
 //  are guarded (FittedBox / Flexible+ellipsis) so a long converted
 //  amount (NGN, XOF, etc.) can never push past the screen edge.
-//  Nothing else — animations, layout, avatar button — changed.
+//
+//  v3 patch: RepaintBoundary isolation. Every BoxShadow-decorated card
+//  is wrapped in its own RepaintBoundary so a compositing glitch in
+//  one card's paint layer can't bleed into a neighboring widget — this
+//  is the fix for cards rendering faint/missing/ghosted on some
+//  Android GPUs. Nothing else — animations, layout, avatar button,
+//  data logic — changed.
 // ═══════════════════════════════════════════════════════════════════
 
 import 'package:flutter/material.dart';
@@ -191,9 +197,14 @@ class _EarningsScreenState extends State<EarningsScreen>
         if (_loading)
           const Center(child: CircularProgressIndicator(color: _wht, strokeWidth: 2))
         else
-          SlideTransition(
-            position: _slide,
-            child: FadeTransition(opacity: _fade, child: _buildBody()),
+          // PATCH: RepaintBoundary around the whole animated subtree —
+          // gives Skia a clean compositing boundary for the slide+fade
+          // layer instead of it sharing a layer with the Scaffold/Stack.
+          RepaintBoundary(
+            child: SlideTransition(
+              position: _slide,
+              child: FadeTransition(opacity: _fade, child: _buildBody()),
+            ),
           ),
         if (_showPopup) _popup(),
       ]),
@@ -216,9 +227,21 @@ class _EarningsScreenState extends State<EarningsScreen>
           padding: const EdgeInsets.fromLTRB(20, 18, 20, 0),
           child: _currencySelector(),
         ),
-        Padding(padding: const EdgeInsets.fromLTRB(16, 20, 16, 0), child: _statRow()),
-        Padding(padding: const EdgeInsets.fromLTRB(16, 16, 16, 0), child: _withdrawCard()),
-        Padding(padding: const EdgeInsets.fromLTRB(16, 16, 16, 0), child: _platformCard()),
+        // PATCH: each card below gets its own RepaintBoundary so a paint
+        // glitch in one (e.g. the shadow-heavy hero stat card) can't
+        // bleed into the card above/below it.
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
+          child: RepaintBoundary(child: _statRow()),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+          child: RepaintBoundary(child: _withdrawCard()),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+          child: RepaintBoundary(child: _platformCard()),
+        ),
         SizedBox(height: bottom + 40),
       ]),
     );
@@ -280,8 +303,6 @@ class _EarningsScreenState extends State<EarningsScreen>
         ]),
       );
 
-  // PATCHED: Row → Wrap, dropdown width-constrained, every label
-  // ellipsis-clamped — a long label can no longer overflow.
   Widget _currencySelector() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -417,7 +438,6 @@ class _EarningsScreenState extends State<EarningsScreen>
           ),
         ),
         const SizedBox(height: 8),
-        // PATCHED: spaceBetween Row → Flexible+ellipsis pair.
         Row(children: [
           Flexible(
             child: Text('Progress to payout',
@@ -679,8 +699,6 @@ class _HeroStatCard extends StatelessWidget {
               child: Icon(icon, color: _wht, size: 16),
             ),
             const SizedBox(height: 14),
-            // PATCHED: FittedBox so a long converted value scales down
-            // instead of overflowing this card's width.
             FittedBox(
               fit: BoxFit.scaleDown,
               alignment: Alignment.centerLeft,
@@ -720,7 +738,6 @@ class _PlainStatCard extends StatelessWidget {
             child: Icon(icon, color: _ink1, size: 15),
           ),
           const SizedBox(height: 13),
-          // PATCHED: FittedBox guard, same reasoning as the hero card.
           FittedBox(
             fit: BoxFit.scaleDown,
             alignment: Alignment.centerLeft,

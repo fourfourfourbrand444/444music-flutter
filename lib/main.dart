@@ -29,6 +29,23 @@ final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // PATCH: replace Flutter's default invisible-grey-box error widget with
+  // a visible one. In release mode a crashed widget normally renders as a
+  // blank grey box — on our pure-black screens that's indistinguishable
+  // from "missing". This turns every future silent crash into a readable
+  // on-screen message instead of us guessing at rendering theories again.
+  ErrorWidget.builder = (FlutterErrorDetails details) {
+    return Container(
+      color: Colors.black,
+      alignment: Alignment.center,
+      padding: const EdgeInsets.all(12),
+      child: Text(
+        'RENDER ERROR:\n${details.exception}',
+        style: const TextStyle(color: Colors.redAccent, fontSize: 11),
+      ),
+    );
+  };
+
   if (kIsWeb) {
     await Firebase.initializeApp(
       options: const FirebaseOptions(
@@ -47,6 +64,7 @@ void main() async {
   SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle.dark);
   runApp(const MyApp());
 }
+
 class MyApp extends StatefulWidget {
   const MyApp({super.key});
   @override

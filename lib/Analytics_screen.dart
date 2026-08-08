@@ -9,8 +9,16 @@
 //  v2 patch: overflow-safety only, mirroring the earnings_screen.dart
 //  patch — hero/plain stat values wrapped in FittedBox, the chart
 //  header row won't squeeze its tabs off-screen, source-row name/count/
-//  pct all ellipsis-guarded. Nothing else — chart painter, avatar
-//  upload, all-time totals logic — changed.
+//  pct all ellipsis-guarded.
+//
+//  v3 patch: RepaintBoundary isolation. Every BoxShadow-decorated card
+//  AND the live-animating line chart are each wrapped in their own
+//  RepaintBoundary, so a compositing glitch or stale-frame issue in
+//  one (particularly the CustomPaint chart, which repaints on every
+//  animation tick) can't bleed into the header text or neighboring
+//  cards — this matches the "Artist Insights" / day-label overlap seen
+//  on-device. Nothing else — chart painter, avatar upload, all-time
+//  totals logic — changed.
 // ═══════════════════════════════════════════════════════════════════
 
 import 'dart:convert';
@@ -218,9 +226,14 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
       backgroundColor: _bg,
       body: _loading
           ? const Center(child: CircularProgressIndicator(color: _wht, strokeWidth: 2))
-          : SlideTransition(
-              position: _slide,
-              child: FadeTransition(opacity: _fade, child: _buildBody()),
+          // PATCH: RepaintBoundary around the whole animated subtree —
+          // gives Skia a clean compositing boundary for the slide+fade
+          // layer instead of it sharing a layer with the Scaffold.
+          : RepaintBoundary(
+              child: SlideTransition(
+                position: _slide,
+                child: FadeTransition(opacity: _fade, child: _buildBody()),
+              ),
             ),
     );
   }
@@ -234,10 +247,25 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
         SizedBox(height: top),
         _topBar(),
         Padding(padding: const EdgeInsets.fromLTRB(20, 26, 20, 0), child: _pageHeader()),
-        Padding(padding: const EdgeInsets.fromLTRB(16, 24, 16, 0), child: _statRow()),
-        Padding(padding: const EdgeInsets.fromLTRB(16, 16, 16, 0), child: _chartCard()),
-        Padding(padding: const EdgeInsets.fromLTRB(16, 16, 16, 0), child: _sourceCard()),
-        Padding(padding: const EdgeInsets.fromLTRB(16, 16, 16, 0), child: _topReleasesCard()),
+        // PATCH: each card below gets its own RepaintBoundary so a paint
+        // glitch in one (especially the live-animating chart) can't
+        // bleed into the header or a neighboring card.
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 24, 16, 0),
+          child: RepaintBoundary(child: _statRow()),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+          child: RepaintBoundary(child: _chartCard()),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+          child: RepaintBoundary(child: _sourceCard()),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+          child: RepaintBoundary(child: _topReleasesCard()),
+        ),
         SizedBox(height: bottom + 40),
       ]),
     );
@@ -374,8 +402,6 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
                 child: const Icon(Icons.headphones_rounded, color: _wht, size: 16),
               ),
               const SizedBox(height: 14),
-              // PATCHED: FittedBox so a very large total-streams number
-              // (e.g. "12.4M") can never overflow the hero card's width.
               FittedBox(
                 fit: BoxFit.scaleDown,
                 alignment: Alignment.centerLeft,
@@ -410,7 +436,6 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
             child: Icon(icon, color: _wht, size: 15),
           ),
           const SizedBox(height: 13),
-          // PATCHED: same FittedBox guard as the hero card.
           FittedBox(
             fit: BoxFit.scaleDown,
             alignment: Alignment.centerLeft,
@@ -442,8 +467,6 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
 
     return _card(
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // PATCHED: title wrapped in Flexible+ellipsis so the fixed-size
-        // 7D/30D/All tab group is never pushed off the card's right edge.
         Row(children: [
           Flexible(
             child: Text('Streaming Growth',
@@ -462,9 +485,15 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
           ),
         ]),
         const SizedBox(height: 20),
-        AnimatedBuilder(
-          animation: _reveal,
-          builder: (_, __) => _LineChart(values: values, labels: labels, progress: _reveal.value),
+        // PATCH: RepaintBoundary around the chart specifically — this
+        // subtree repaints on every animation tick via AnimatedBuilder,
+        // so isolating it stops its per-frame repaint from invalidating
+        // or bleeding into the static title/tabs row above it.
+        RepaintBoundary(
+          child: AnimatedBuilder(
+            animation: _reveal,
+            builder: (_, __) => _LineChart(values: values, labels: labels, progress: _reveal.value),
+          ),
         ),
       ]),
     );
@@ -536,8 +565,6 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
                     child: Icon(r.icon, color: _wht, size: 15),
                   ),
                   const SizedBox(width: 14),
-                  // PATCHED: added maxLines/ellipsis — no functional change
-                  // for the current three names, just a backstop.
                   SizedBox(
                     width: 92,
                     child: Text(r.name,
@@ -566,8 +593,6 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
                     ),
                   ),
                   const SizedBox(width: 12),
-                  // PATCHED: count wrapped so a very large stream count
-                  // (e.g. "12.4M") shrinks instead of overflowing.
                   ConstrainedBox(
                     constraints: const BoxConstraints(maxWidth: 56),
                     child: FittedBox(
