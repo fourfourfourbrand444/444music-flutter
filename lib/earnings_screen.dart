@@ -1,32 +1,11 @@
 // ═══════════════════════════════════════════════════════════════════
-//  444MUSIC — Earnings Screen  (mirrors web: ear.html)
+//  444MUSIC — Earnings Screen (merged: old stable structure + new
+//  monochrome theme + currency dropdown). No heavy BoxShadow blurs,
+//  no per-card RepaintBoundary stacking — kept close to the old file's
+//  proven-stable rendering pattern.
 //  Route: /earnings
-//  Theme: Two-tone monochrome — genuinely black cards + genuinely
-//         white cards on a true-black page. Fonts: Outfit (headings)
-//         + Plus Jakarta Sans (body), matching the web build exactly.
 //  Firebase: users/{uid} → earnings, clearedEarnings, pendingEarnings,
 //            spotifyEarnings, appleEarnings, youtubeEarnings, amazonEarnings
-//
-//  Currency preview dropdown (display-only, mirrors the pattern used
-//  on pricing_screen.dart): balances are stored and computed in USD
-//  everywhere in Firestore/logic. The dropdown only changes what's
-//  RENDERED on screen — withdrawal eligibility, the $50 minimum check,
-//  and all backend calls still use the raw USD figures. Rates below
-//  are USD-based and derived from the same GHC snapshot used on
-//  pricing.html/pricing_screen.dart, so the two screens stay coherent.
-//  Keep in sync with that file if you refresh rates.
-//
-//  v2 patch: overflow-safety only — currency row now wraps instead of
-//  a fixed Row, the progress-to-payout line and both stat-card values
-//  are guarded (FittedBox / Flexible+ellipsis) so a long converted
-//  amount (NGN, XOF, etc.) can never push past the screen edge.
-//
-//  v3 patch: RepaintBoundary isolation. Every BoxShadow-decorated card
-//  is wrapped in its own RepaintBoundary so a compositing glitch in
-//  one card's paint layer can't bleed into a neighboring widget — this
-//  is the fix for cards rendering faint/missing/ghosted on some
-//  Android GPUs. Nothing else — animations, layout, avatar button,
-//  data logic — changed.
 // ═══════════════════════════════════════════════════════════════════
 
 import 'package:flutter/material.dart';
@@ -36,29 +15,22 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
-// ─── PALETTE (mirrors :root in ear.html) ─────────────────────────────
-const _page       = Color(0xFF000000);
-const _blk        = Color(0xFF0A0A0A);
-const _blk2       = Color(0xFF111111);
-const _blkBorder  = Color(0x17FFFFFF);
-const _blkBorderH = Color(0x2EFFFFFF);
-
-const _wht        = Color(0xFFFFFFFF);
-const _inkBorder  = Color(0x14000000);
-const _inkBorderH = Color(0x29000000);
-
-const _text1      = Color(0xFFF5F5F5);
-const _text2      = Color(0xFF969696);
+// ─── PALETTE ───────────────────────────────────────────────────────
+const _black      = Color(0xFF000000);
+const _black2     = Color(0xFF111111);
+const _black3     = Color(0xFF1A1A1A);
+const _white      = Color(0xFFFFFFFF);
+const _white10    = Color(0x1AFFFFFF);
+const _white20    = Color(0x33FFFFFF);
+const _grey       = Color(0xFF8A8A8A);
 const _ink1       = Color(0xFF0D0D0D);
 const _ink2       = Color(0xFF6E6E6E);
+const _inkBorder  = Color(0x14000000);
 
-const _ease = Curves.easeOutCubic;
-const _entranceDuration = Duration(milliseconds: 900);
-
-TextStyle _head(double size, FontWeight w, {Color color = _wht, double? letterSpacing}) =>
-    GoogleFonts.outfit(fontSize: size, fontWeight: w, color: color, letterSpacing: letterSpacing);
-TextStyle _body(double size, FontWeight w, {Color color = _text2, double? height}) =>
-    GoogleFonts.plusJakartaSans(fontSize: size, fontWeight: w, color: color, height: height);
+TextStyle _head(double s, FontWeight w, {Color c = _white, double? ls}) =>
+    GoogleFonts.nunito(fontSize: s, fontWeight: w, color: c, letterSpacing: ls);
+TextStyle _body(double s, FontWeight w, {Color c = _grey, double? h}) =>
+    GoogleFonts.nunito(fontSize: s, fontWeight: w, color: c, height: h);
 
 class _CurrencyInfo {
   final String symbol;
@@ -79,15 +51,15 @@ const Map<String, _CurrencyInfo> _currencyRates = {
 };
 
 const List<Map<String, String>> _currencyOptions = [
-  {'code': 'USD', 'label': '🇺🇸 United States — USD'},
-  {'code': 'GHS', 'label': '🇬🇭 Ghana — GHS'},
-  {'code': 'NGN', 'label': '🇳🇬 Nigeria — NGN'},
-  {'code': 'EUR', 'label': '🇪🇺 Europe — EUR'},
-  {'code': 'GBP', 'label': '🇬🇧 United Kingdom — GBP'},
-  {'code': 'ZAR', 'label': '🇿🇦 South Africa — ZAR'},
-  {'code': 'KES', 'label': '🇰🇪 Kenya — KES'},
-  {'code': 'CAD', 'label': '🇨🇦 Canada — CAD'},
-  {'code': 'XOF', 'label': '🌍 West Africa (CFA) — XOF'},
+  {'code': 'USD', 'label': '🇺🇸 USD'},
+  {'code': 'GHS', 'label': '🇬🇭 GHS'},
+  {'code': 'NGN', 'label': '🇳🇬 NGN'},
+  {'code': 'EUR', 'label': '🇪🇺 EUR'},
+  {'code': 'GBP', 'label': '🇬🇧 GBP'},
+  {'code': 'ZAR', 'label': '🇿🇦 ZAR'},
+  {'code': 'KES', 'label': '🇰🇪 KES'},
+  {'code': 'CAD', 'label': '🇨🇦 CAD'},
+  {'code': 'XOF', 'label': '🌍 XOF'},
 ];
 
 class EarningsScreen extends StatefulWidget {
@@ -105,28 +77,22 @@ class _EarningsScreenState extends State<EarningsScreen>
   bool _loading = true;
   bool _showPopup = false;
   String? _photoURL;
-  String? _uid;
-
   String _selectedCurrency = 'USD';
 
   late final AnimationController _ctrl;
   late final Animation<double> _fade;
-  late final Animation<Offset> _slide;
-  late final Animation<double> _reveal;
 
   @override
   void initState() {
     super.initState();
     SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle.light.copyWith(
       statusBarColor: Colors.transparent,
-      systemNavigationBarColor: _page,
+      systemNavigationBarColor: _black,
     ));
-    _ctrl = AnimationController(vsync: this, duration: _entranceDuration);
-    _fade = CurvedAnimation(parent: _ctrl, curve: _ease);
-    _slide = Tween<Offset>(begin: const Offset(0, 0.06), end: Offset.zero)
-        .animate(CurvedAnimation(parent: _ctrl, curve: _ease));
-    _reveal = CurvedAnimation(
-        parent: _ctrl, curve: const Interval(0.35, 1.0, curve: _ease));
+    // NOTE: simple fade only — no slide/scale entrance stacked on top,
+    // matching the old file's lighter entrance animation.
+    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 500));
+    _fade = CurvedAnimation(parent: _ctrl, curve: Curves.easeOut);
     _load();
   }
 
@@ -142,10 +108,8 @@ class _EarningsScreenState extends State<EarningsScreen>
       if (mounted) Navigator.pushReplacementNamed(context, '/login');
       return;
     }
-    _uid = user.uid;
     try {
-      final snap =
-          await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+      final snap = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
       final d = snap.exists ? snap.data()! : <String, dynamic>{};
       double num_(dynamic v) => v == null ? 0.0 : (double.tryParse(v.toString()) ?? 0.0);
       if (mounted) {
@@ -163,10 +127,8 @@ class _EarningsScreenState extends State<EarningsScreen>
         _ctrl.forward();
       }
     } catch (_) {
-      if (mounted) {
-        setState(() => _loading = false);
-        _ctrl.forward();
-      }
+      if (mounted) setState(() => _loading = false);
+      _ctrl.forward();
     }
   }
 
@@ -178,34 +140,22 @@ class _EarningsScreenState extends State<EarningsScreen>
     }
   }
 
-  _CurrencyInfo get _currencyInfo =>
-      _currencyRates[_selectedCurrency] ?? _currencyRates['USD']!;
-
-  double _toSelectedCurrency(double usdValue) => usdValue * _currencyInfo.rate;
-
-  String _formatSelected(double usdValue, {int? decimals}) {
-    final converted = _toSelectedCurrency(usdValue);
+  _CurrencyInfo get _cur => _currencyRates[_selectedCurrency] ?? _currencyRates['USD']!;
+  String _fmt(double usd, {int? decimals}) {
+    final v = usd * _cur.rate;
     final d = decimals ?? (_selectedCurrency == 'XOF' ? 0 : 2);
-    return '${_currencyInfo.symbol}${converted.toStringAsFixed(d)}';
+    return '${_cur.symbol}${v.toStringAsFixed(d)}';
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: _page,
+      backgroundColor: _black,
       body: Stack(children: [
         if (_loading)
-          const Center(child: CircularProgressIndicator(color: _wht, strokeWidth: 2))
+          const Center(child: CircularProgressIndicator(color: _white, strokeWidth: 2))
         else
-          // PATCH: RepaintBoundary around the whole animated subtree —
-          // gives Skia a clean compositing boundary for the slide+fade
-          // layer instead of it sharing a layer with the Scaffold/Stack.
-          RepaintBoundary(
-            child: SlideTransition(
-              position: _slide,
-              child: FadeTransition(opacity: _fade, child: _buildBody()),
-            ),
-          ),
+          FadeTransition(opacity: _fade, child: _buildBody()),
         if (_showPopup) _popup(),
       ]),
     );
@@ -214,245 +164,176 @@ class _EarningsScreenState extends State<EarningsScreen>
   Widget _buildBody() {
     final top = MediaQuery.of(context).padding.top;
     final bottom = MediaQuery.of(context).padding.bottom;
-   return SingleChildScrollView(
-     physics: const BouncingScrollPhysics(),
+    return SingleChildScrollView(
+      physics: const BouncingScrollPhysics(),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         SizedBox(height: top),
         _topBar(),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 30, 20, 0),
-          child: _pageHeader(),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 18, 20, 0),
-          child: _currencySelector(),
-        ),
-        // PATCH: each card below gets its own RepaintBoundary so a paint
-        // glitch in one (e.g. the shadow-heavy hero stat card) can't
-        // bleed into the card above/below it.
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
-          child: RepaintBoundary(child: _statRow()),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-          child: RepaintBoundary(child: _withdrawCard()),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-          child: RepaintBoundary(child: _platformCard()),
-        ),
+        Padding(padding: const EdgeInsets.fromLTRB(20, 26, 20, 0), child: _header()),
+        Padding(padding: const EdgeInsets.fromLTRB(20, 16, 20, 0), child: _currencySelector()),
+        Padding(padding: const EdgeInsets.fromLTRB(16, 20, 16, 0), child: _heroCard()),
+        Padding(padding: const EdgeInsets.fromLTRB(16, 12, 16, 0), child: _clearedPendingRow()),
+        Padding(padding: const EdgeInsets.fromLTRB(16, 16, 16, 0), child: _withdrawCard()),
+        Padding(padding: const EdgeInsets.fromLTRB(16, 16, 16, 0), child: _platformCard()),
         SizedBox(height: bottom + 40),
       ]),
     );
   }
 
-  Widget _topBar() {
-    return Container(
-      height: 62,
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      decoration: const BoxDecoration(
-        color: _page,
-        border: Border(bottom: BorderSide(color: _blkBorder)),
-      ),
-      child: Row(children: [
-        GestureDetector(
-          onTap: () => Navigator.pop(context),
-          child: Container(
-            width: 36, height: 36,
+  Widget _topBar() => Container(
+        height: 62,
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: _white10))),
+        child: Row(children: [
+          Container(
+            width: 38, height: 38,
             decoration: BoxDecoration(
-              color: _blk2,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: _blkBorder),
+              color: _black2, shape: BoxShape.circle, border: Border.all(color: _white20),
+              image: _photoURL != null
+                  ? DecorationImage(image: CachedNetworkImageProvider(_photoURL!), fit: BoxFit.cover)
+                  : null,
             ),
-            child: const Icon(Icons.arrow_back_ios_new_rounded, color: _wht, size: 16),
+            child: _photoURL == null ? const Icon(Icons.person_rounded, color: _grey, size: 18) : null,
           ),
-        ),
-        const Spacer(),
-        _AvatarButton(photoURL: _photoURL, uid: _uid, onUpdated: (u) {
-          if (mounted) setState(() => _photoURL = u);
-        }),
-      ]),
-    );
-  }
-
-  Widget _pageHeader() {
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      _eyebrow(Icons.attach_money_rounded, '444MUSIC · EARNINGS'),
-      const SizedBox(height: 14),
-      Text('Earnings', style: _head(28, FontWeight.w900)),
-      const SizedBox(height: 6),
-      Text('Your balance across every platform, all in one place.',
-          style: _body(13, FontWeight.w400, height: 1.5)),
-    ]);
-  }
-
-  Widget _eyebrow(IconData icon, String label) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-        decoration: BoxDecoration(
-          color: const Color(0x14FFFFFF),
-          borderRadius: BorderRadius.circular(99),
-          border: Border.all(color: const Color(0x29FFFFFF)),
-        ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(icon, size: 11, color: _wht),
-          const SizedBox(width: 6),
-          Text(label,
-              style: _body(10, FontWeight.w700, color: _wht)
-                  .copyWith(letterSpacing: 1.2)),
+          const Spacer(),
+          GestureDetector(
+            onTap: () => Navigator.pop(context),
+            child: Container(
+              width: 36, height: 36,
+              decoration: BoxDecoration(
+                color: _black2, borderRadius: BorderRadius.circular(10), border: Border.all(color: _white10)),
+              child: const Icon(Icons.menu_rounded, color: _white, size: 18),
+            ),
+          ),
         ]),
       );
 
-  Widget _currencySelector() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Wrap(
-          crossAxisAlignment: WrapCrossAlignment.center,
-          spacing: 10,
-          runSpacing: 8,
-          children: [
-            Text(
-              'VIEW EARNINGS IN',
-              style: _body(10, FontWeight.w700, color: _text2)
-                  .copyWith(letterSpacing: 0.5),
-            ),
-            ConstrainedBox(
-              constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width - 40),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-                decoration: BoxDecoration(
-                  color: _blk2,
-                  borderRadius: BorderRadius.circular(99),
-                  border: Border.all(color: _blkBorderH),
-                ),
-                child: DropdownButtonHideUnderline(
-                  child: DropdownButton<String>(
-                    value: _selectedCurrency,
-                    dropdownColor: _blk2,
-                    isDense: true,
-                    icon: const Icon(Icons.keyboard_arrow_down_rounded,
-                        color: _text2, size: 16),
-                    style: _body(13, FontWeight.w700, color: _wht),
-                    selectedItemBuilder: (context) => _currencyOptions
-                        .map((opt) => Align(
-                              alignment: Alignment.centerLeft,
-                              child: Text(opt['label']!,
-                                  maxLines: 1, overflow: TextOverflow.ellipsis),
-                            ))
-                        .toList(),
-                    items: _currencyOptions
-                        .map((opt) => DropdownMenuItem(
-                              value: opt['code'],
-                              child: Text(opt['label']!,
-                                  maxLines: 1, overflow: TextOverflow.ellipsis),
-                            ))
-                        .toList(),
-                    onChanged: (v) {
-                      if (v != null) setState(() => _selectedCurrency = v);
-                    },
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        Text(
-          _selectedCurrency == 'USD'
-              ? 'Your real balance, shown in USD.'
-              : 'Approximate $_selectedCurrency preview — your real balance is always tracked in USD.',
-          style: _body(11, FontWeight.w500, color: const Color(0xFF5C5C5C), height: 1.4),
-        ),
-      ],
-    );
-  }
+  Widget _header() => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text('Earnings', style: _head(26, FontWeight.w900)),
+        const SizedBox(height: 6),
+        Text('Your balance across every platform.', style: _body(13, FontWeight.w500)),
+      ]);
 
-  Widget _statRow() {
-    return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      Expanded(
-        flex: 13,
-        child: _HeroStatCard(
-          icon: Icons.account_balance_wallet_rounded,
-          value: _formatSelected(_balance),
-          suffix: _selectedCurrency,
-          label: 'Available Balance',
+  Widget _currencySelector() => Row(children: [
+        Text('VIEW IN', style: _body(10, FontWeight.w700).copyWith(letterSpacing: 0.6)),
+        const SizedBox(width: 10),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+          decoration: BoxDecoration(
+            color: _black2, borderRadius: BorderRadius.circular(99), border: Border.all(color: _white20)),
+          child: DropdownButtonHideUnderline(
+            child: DropdownButton<String>(
+              value: _selectedCurrency,
+              dropdownColor: _black2,
+              isDense: true,
+              icon: const Icon(Icons.keyboard_arrow_down_rounded, color: _grey, size: 16),
+              style: _body(13, FontWeight.w700, c: _white),
+              items: _currencyOptions
+                  .map((o) => DropdownMenuItem(value: o['code'], child: Text(o['label']!)))
+                  .toList(),
+              onChanged: (v) { if (v != null) setState(() => _selectedCurrency = v); },
+            ),
+          ),
         ),
-      ),
-      const SizedBox(width: 12),
-      Expanded(
-        flex: 10,
-        child: _PlainStatCard(
-          icon: Icons.check_rounded,
-          value: _formatSelected(_cleared),
-          label: 'Cleared',
-        ),
-      ),
-      const SizedBox(width: 12),
-      Expanded(
-        flex: 10,
-        child: _PlainStatCard(
-          icon: Icons.hourglass_bottom_rounded,
-          value: _formatSelected(_pending),
-          label: 'Pending',
-        ),
-      ),
-    ]);
-  }
+      ]);
 
+  // ── HERO BALANCE CARD — flat, no blur shadow ──
+  Widget _heroCard() => Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(20, 22, 20, 20),
+        decoration: BoxDecoration(
+          color: _black2,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: _white10),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Container(
+            width: 36, height: 36,
+            decoration: BoxDecoration(color: _white10, borderRadius: BorderRadius.circular(10)),
+            child: const Icon(Icons.account_balance_wallet_rounded, color: _white, size: 17),
+          ),
+          const SizedBox(height: 16),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: RichText(
+              maxLines: 1,
+              text: TextSpan(children: [
+                TextSpan(text: _fmt(_balance), style: _head(30, FontWeight.w900, ls: -1)),
+                TextSpan(text: ' $_selectedCurrency', style: _body(13, FontWeight.w600)),
+              ]),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text('AVAILABLE BALANCE', style: _body(10, FontWeight.w700).copyWith(letterSpacing: 0.8)),
+        ]),
+      );
+
+  // ── CLEARED / PENDING — white cards, flat ──
+  Widget _clearedPendingRow() => Row(children: [
+        Expanded(child: _plainWhiteCard(Icons.check_rounded, _fmt(_cleared), 'CLEARED')),
+        const SizedBox(width: 12),
+        Expanded(child: _plainWhiteCard(Icons.hourglass_bottom_rounded, _fmt(_pending), 'PENDING')),
+      ]);
+
+  Widget _plainWhiteCard(IconData icon, String value, String label) => Container(
+        padding: const EdgeInsets.fromLTRB(16, 18, 14, 16),
+        decoration: BoxDecoration(
+          color: _white,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: _inkBorder),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Container(
+            width: 30, height: 30,
+            decoration: BoxDecoration(color: const Color(0x0D000000), borderRadius: BorderRadius.circular(8)),
+            child: Icon(icon, color: _ink1, size: 14),
+          ),
+          const SizedBox(height: 12),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(value, maxLines: 1, style: _head(18, FontWeight.w900, c: _ink1, ls: -0.5)),
+          ),
+          const SizedBox(height: 4),
+          Text(label, style: _body(9, FontWeight.w700, c: _ink2).copyWith(letterSpacing: 0.6)),
+        ]),
+      );
+
+  // ── WITHDRAW CARD — white, flat, no blur shadow on the button ──
   Widget _withdrawCard() {
     final pct = (_balance / _minWithdrawal).clamp(0.0, 1.0);
-    return _WhiteCard(
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(color: _white, borderRadius: BorderRadius.circular(18)),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
           const Icon(Icons.arrow_upward_rounded, color: _ink1, size: 15),
           const SizedBox(width: 8),
-          Text('Ready to withdraw',
-              style: _head(13, FontWeight.w800, color: _ink1)),
+          Text('Ready to withdraw', style: _head(14, FontWeight.w800, c: _ink1)),
         ]),
         const SizedBox(height: 8),
         Text(
-          'Minimum withdrawal is ${_formatSelected(_minWithdrawal)}. Balances update once platform '
-          'reports come in, usually 45–60 days after month end.',
-          style: _body(12.5, FontWeight.w500, color: _ink2, height: 1.55),
+          'Minimum withdrawal is ${_fmt(_minWithdrawal)}. Balances update once platform reports come in, usually 45–60 days after month end.',
+          style: _body(12.5, FontWeight.w500, c: _ink2, h: 1.5),
         ),
         const SizedBox(height: 16),
-        AnimatedBuilder(
-          animation: _reveal,
-          builder: (_, __) => ClipRRect(
-            borderRadius: BorderRadius.circular(99),
-            child: Container(
-              height: 6,
-              color: const Color(0x14000000),
-              child: FractionallySizedBox(
-                alignment: Alignment.centerLeft,
-                widthFactor: pct * _reveal.value,
-                child: Container(
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(colors: [_ink1, Color(0xFF3A3A3A)]),
-                    borderRadius: BorderRadius.circular(99),
-                  ),
-                ),
-              ),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(99),
+          child: Container(
+            height: 6, color: const Color(0x14000000),
+            child: FractionallySizedBox(
+              alignment: Alignment.centerLeft, widthFactor: pct,
+              child: Container(color: _ink1),
             ),
           ),
         ),
         const SizedBox(height: 8),
-        Row(children: [
-          Flexible(
-            child: Text('Progress to payout',
-                overflow: TextOverflow.ellipsis,
-                style: _body(11.5, FontWeight.w600, color: _ink2)),
-          ),
-          const SizedBox(width: 8),
-          Flexible(
-            child: Text(
-              '${_formatSelected(_balance, decimals: 0)} / ${_formatSelected(_minWithdrawal, decimals: 0)}',
-              textAlign: TextAlign.right,
-              overflow: TextOverflow.ellipsis,
-              style: _body(11.5, FontWeight.w800, color: _ink1),
-            ),
-          ),
+        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+          Text('Progress to payout', style: _body(11.5, FontWeight.w600, c: _ink2)),
+          Text('${_fmt(_balance, decimals: 0)} / ${_fmt(_minWithdrawal, decimals: 0)}',
+              style: _body(11.5, FontWeight.w800, c: _ink1)),
         ]),
         const SizedBox(height: 18),
         GestureDetector(
@@ -460,18 +341,11 @@ class _EarningsScreenState extends State<EarningsScreen>
           child: Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(vertical: 15),
-            decoration: BoxDecoration(
-              color: _ink1,
-              borderRadius: BorderRadius.circular(12),
-              boxShadow: [
-                BoxShadow(color: Colors.black.withValues(alpha: 0.28), blurRadius: 22, offset: const Offset(0, 8)),
-              ],
-            ),
+            decoration: BoxDecoration(color: _ink1, borderRadius: BorderRadius.circular(12)),
             child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-              const Icon(Icons.arrow_upward_rounded, color: _wht, size: 16),
+              const Icon(Icons.arrow_upward_rounded, color: _white, size: 16),
               const SizedBox(width: 9),
-              Text('Withdraw Earnings',
-                  style: _body(14, FontWeight.w700, color: _wht)),
+              Text('Withdraw Earnings', style: _body(14, FontWeight.w700, c: _white)),
             ]),
           ),
         ),
@@ -479,78 +353,59 @@ class _EarningsScreenState extends State<EarningsScreen>
     );
   }
 
+  // ── PLATFORM BREAKDOWN — black card, flat ──
   Widget _platformCard() {
     final total = (_spotify + _apple + _youtube + _amazon).clamp(1.0, double.infinity);
     int pct(double v) => (v / total * 100).round();
-
     final rows = [
-      (icon: Icons.music_note_rounded, name: 'Spotify', value: _spotify),
-      (icon: Icons.apple_rounded, name: 'Apple Music', value: _apple),
-      (icon: Icons.play_circle_fill_rounded, name: 'YouTube', value: _youtube),
-      (icon: Icons.shopping_bag_rounded, name: 'Amazon Music', value: _amazon),
+      (icon: Icons.music_note_rounded, name: 'Spotify', v: _spotify),
+      (icon: Icons.apple_rounded, name: 'Apple Music', v: _apple),
+      (icon: Icons.play_circle_fill_rounded, name: 'YouTube', v: _youtube),
+      (icon: Icons.shopping_bag_rounded, name: 'Amazon Music', v: _amazon),
     ];
-
-    return _BlackCard(
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: _black2, borderRadius: BorderRadius.circular(18), border: Border.all(color: _white10)),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        _cardTitle(Icons.pie_chart_rounded, 'Earnings by Platform'),
+        Row(children: [
+          const Icon(Icons.pie_chart_rounded, color: _white, size: 15),
+          const SizedBox(width: 8),
+          Text('Earnings by Platform', style: _head(15, FontWeight.w800, ls: -0.3)),
+        ]),
         const SizedBox(height: 18),
         ...rows.map((r) => Padding(
               padding: const EdgeInsets.only(bottom: 10),
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                 decoration: BoxDecoration(
-                  color: _blk2,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: _blkBorder),
-                ),
+                  color: _black3, borderRadius: BorderRadius.circular(12), border: Border.all(color: _white10)),
                 child: Row(children: [
                   Container(
                     width: 32, height: 32,
-                    decoration: BoxDecoration(
-                      color: _page,
-                      borderRadius: BorderRadius.circular(9),
-                      border: Border.all(color: _blkBorderH),
-                    ),
-                    child: Icon(r.icon, color: _text2, size: 15),
+                    decoration: BoxDecoration(color: _black, borderRadius: BorderRadius.circular(9)),
+                    child: Icon(r.icon, color: _grey, size: 15),
                   ),
                   const SizedBox(width: 14),
-                  SizedBox(
-                    width: 100,
-                    child: Text(r.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: _body(13, FontWeight.w700, color: _text1)),
-                  ),
+                  SizedBox(width: 100, child: Text(r.name, maxLines: 1, overflow: TextOverflow.ellipsis,
+                      style: _body(13, FontWeight.w700, c: _white))),
                   Expanded(
-                    child: AnimatedBuilder(
-                      animation: _reveal,
-                      builder: (_, __) => ClipRRect(
-                        borderRadius: BorderRadius.circular(99),
-                        child: Container(
-                          height: 5, color: _page,
-                          child: FractionallySizedBox(
-                            alignment: Alignment.centerLeft,
-                            widthFactor: (r.value / total) * _reveal.value,
-                            child: Container(
-                              decoration: BoxDecoration(
-                                gradient: const LinearGradient(colors: [Color(0xFFCFCFCF), _wht]),
-                                borderRadius: BorderRadius.circular(99),
-                              ),
-                            ),
-                          ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(99),
+                      child: Container(
+                        height: 5, color: _black,
+                        child: FractionallySizedBox(
+                          alignment: Alignment.centerLeft,
+                          widthFactor: r.v / total,
+                          child: Container(color: _white),
                         ),
                       ),
                     ),
                   ),
                   const SizedBox(width: 12),
-                  SizedBox(
-                    width: 40,
-                    child: Text('${pct(r.value)}%',
-                        textAlign: TextAlign.right,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: _head(13, FontWeight.w800, color: _text1)),
-                  ),
+                  SizedBox(width: 36, child: Text('${pct(r.v)}%', textAlign: TextAlign.right,
+                      style: _head(12.5, FontWeight.w800))),
                 ]),
               ),
             )),
@@ -558,65 +413,28 @@ class _EarningsScreenState extends State<EarningsScreen>
     );
   }
 
-  Widget _cardTitle(IconData icon, String label) => Row(children: [
-        Icon(icon, color: _wht, size: 15),
-        const SizedBox(width: 8),
-        Text(label, style: _head(15, FontWeight.w800, letterSpacing: -0.3)),
-      ]);
-
-  Widget _popup() {
-    return GestureDetector(
-      onTap: () => setState(() => _showPopup = false),
-      child: Container(
-        color: Colors.black.withValues(alpha: 0.82),
-        child: Center(
-          child: GestureDetector(
-            onTap: () {},
-            child: AnimatedScale(
-              scale: 1, duration: const Duration(milliseconds: 260), curve: _ease,
+  Widget _popup() => GestureDetector(
+        onTap: () => setState(() => _showPopup = false),
+        child: Container(
+          color: Colors.black.withValues(alpha: 0.8),
+          child: Center(
+            child: GestureDetector(
+              onTap: () {},
               child: Container(
                 margin: const EdgeInsets.symmetric(horizontal: 26),
                 padding: const EdgeInsets.fromLTRB(24, 26, 24, 24),
-                decoration: BoxDecoration(
-                  color: _wht,
-                  borderRadius: BorderRadius.circular(20),
-                  boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.6), blurRadius: 60)],
-                ),
+                decoration: BoxDecoration(color: _white, borderRadius: BorderRadius.circular(20)),
                 child: Column(mainAxisSize: MainAxisSize.min, children: [
                   Container(
                     width: 52, height: 52,
-                    decoration: BoxDecoration(
-                      color: const Color(0x0F000000),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
+                    decoration: BoxDecoration(color: const Color(0x0F000000), borderRadius: BorderRadius.circular(14)),
                     child: const Icon(Icons.warning_amber_rounded, color: _ink1, size: 22),
                   ),
                   const SizedBox(height: 16),
-                  Text('Minimum Not Reached', style: _head(18, FontWeight.w800, color: _ink1)),
+                  Text('Minimum Not Reached', style: _head(18, FontWeight.w800, c: _ink1)),
                   const SizedBox(height: 8),
                   Text('Your balance is below the minimum withdrawal threshold.',
-                      textAlign: TextAlign.center,
-                      style: _body(13, FontWeight.w500, color: _ink2, height: 1.5)),
-                  const SizedBox(height: 14),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                    decoration: BoxDecoration(
-                      color: const Color(0x0A000000),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Wrap(
-                      alignment: WrapAlignment.center,
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      spacing: 5,
-                      children: [
-                        const Icon(Icons.attach_money_rounded, color: _ink1, size: 15),
-                        Text('Your balance must reach', style: _body(12.5, FontWeight.w500, color: _ink2)),
-                        Text(_formatSelected(_minWithdrawal),
-                            style: _head(15, FontWeight.w800, color: _ink1)),
-                        Text('to withdraw', style: _body(12.5, FontWeight.w500, color: _ink2)),
-                      ],
-                    ),
-                  ),
+                      textAlign: TextAlign.center, style: _body(13, FontWeight.w500, c: _ink2, h: 1.5)),
                   const SizedBox(height: 20),
                   GestureDetector(
                     onTap: () => setState(() => _showPopup = false),
@@ -624,9 +442,8 @@ class _EarningsScreenState extends State<EarningsScreen>
                       width: double.infinity,
                       padding: const EdgeInsets.symmetric(vertical: 14),
                       decoration: BoxDecoration(color: _ink1, borderRadius: BorderRadius.circular(11)),
-                      child: Text('Got it',
-                          textAlign: TextAlign.center,
-                          style: _body(14, FontWeight.w700, color: _wht)),
+                      child: Text('Got it', textAlign: TextAlign.center,
+                          style: _body(14, FontWeight.w700, c: _white)),
                     ),
                   ),
                 ]),
@@ -634,152 +451,5 @@ class _EarningsScreenState extends State<EarningsScreen>
             ),
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _AvatarButton extends StatefulWidget {
-  final String? photoURL;
-  final String? uid;
-  final ValueChanged<String> onUpdated;
-  const _AvatarButton({required this.photoURL, required this.uid, required this.onUpdated});
-  @override
-  State<_AvatarButton> createState() => _AvatarButtonState();
-}
-
-class _AvatarButtonState extends State<_AvatarButton> {
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 38, height: 38,
-      decoration: BoxDecoration(
-        color: _blk2,
-        shape: BoxShape.circle,
-        border: Border.all(color: _blkBorderH),
-        image: widget.photoURL != null
-            ? DecorationImage(image: CachedNetworkImageProvider(widget.photoURL!), fit: BoxFit.cover)
-            : null,
-      ),
-      child: widget.photoURL == null
-          ? const Icon(Icons.person_rounded, color: _text2, size: 18)
-          : null,
-    );
-  }
-}
-
-class _HeroStatCard extends StatelessWidget {
-  final IconData icon;
-  final String value, suffix, label;
-  final String? badge;
-  const _HeroStatCard({required this.icon, required this.value, this.suffix = '', required this.label, this.badge});
-  @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.fromLTRB(18, 20, 16, 18),
-        decoration: BoxDecoration(
-          color: _blk,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: _blkBorderH),
-          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.55), blurRadius: 40, offset: const Offset(0, 16))],
-        ),
-        child: Stack(children: [
-          if (badge != null)
-            Positioned(
-              top: 0, right: 0,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
-                decoration: BoxDecoration(color: const Color(0x1FFFFFFF), borderRadius: BorderRadius.circular(99)),
-                child: Text(badge!, style: _body(10, FontWeight.w700, color: _wht)),
-              ),
-            ),
-          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Container(
-              width: 36, height: 36,
-              decoration: BoxDecoration(color: const Color(0x1AFFFFFF), borderRadius: BorderRadius.circular(10)),
-              child: Icon(icon, color: _wht, size: 16),
-            ),
-            const SizedBox(height: 14),
-            FittedBox(
-              fit: BoxFit.scaleDown,
-              alignment: Alignment.centerLeft,
-              child: RichText(
-                maxLines: 1,
-                text: TextSpan(children: [
-                  TextSpan(text: value, style: _head(24, FontWeight.w900, letterSpacing: -1)),
-                  if (suffix.isNotEmpty)
-                    TextSpan(text: ' $suffix', style: _body(11, FontWeight.w600, color: _text2)),
-                ]),
-              ),
-            ),
-            const SizedBox(height: 5),
-            Text(label.toUpperCase(),
-                style: _body(9.5, FontWeight.w700, color: const Color(0x8CFFFFFF)).copyWith(letterSpacing: 0.7)),
-          ]),
-        ]),
-      );
-}
-
-class _PlainStatCard extends StatelessWidget {
-  final IconData icon;
-  final String value, label;
-  const _PlainStatCard({required this.icon, required this.value, required this.label});
-  @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.fromLTRB(16, 18, 14, 16),
-        decoration: BoxDecoration(
-          color: _wht,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: _inkBorder),
-        ),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Container(
-            width: 32, height: 32,
-            decoration: BoxDecoration(color: const Color(0x0F000000), borderRadius: BorderRadius.circular(9)),
-            child: Icon(icon, color: _ink1, size: 15),
-          ),
-          const SizedBox(height: 13),
-          FittedBox(
-            fit: BoxFit.scaleDown,
-            alignment: Alignment.centerLeft,
-            child: Text(value,
-                maxLines: 1,
-                style: _head(18, FontWeight.w900, color: _ink1, letterSpacing: -0.5)),
-          ),
-          const SizedBox(height: 4),
-          Text(label.toUpperCase(),
-              style: _body(9, FontWeight.w700, color: _ink2).copyWith(letterSpacing: 0.6)),
-        ]),
-      );
-}
-
-class _WhiteCard extends StatelessWidget {
-  final Widget child;
-  const _WhiteCard({required this.child});
-  @override
-  Widget build(BuildContext context) => Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: _wht,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: _inkBorder),
-        ),
-        child: child,
-      );
-}
-
-class _BlackCard extends StatelessWidget {
-  final Widget child;
-  const _BlackCard({required this.child});
-  @override
-  Widget build(BuildContext context) => Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: _blk,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: _blkBorder),
-        ),
-        child: child,
       );
 }
