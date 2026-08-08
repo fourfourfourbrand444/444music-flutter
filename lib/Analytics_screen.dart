@@ -1,13 +1,15 @@
 // ═══════════════════════════════════════════════════════════════════
-//  444MUSIC — Analytics Screen (merged: old stable structure + new
-//  monochrome theme matching screenshot). No BoxShadow blurs, no
-//  RepaintBoundary stacking, simple fade entrance — same pattern that
-//  fixed the Earnings screen ghosting.
+//  444MUSIC — Analytics Screen (full rebuild using the exact same
+//  proven-stable pattern as the working earnings_screen.dart: flat
+//  Container cards, no BoxShadow, no CustomPaint/canvas repainting,
+//  no AnimatedBuilder-driven redraws, simple one-shot fade entrance.
+//  The line chart is replaced with a simple bar chart built from
+//  plain Containers — same technique as Earnings' platform bars —
+//  so there is no repaint-per-frame surface left anywhere on screen.
 //  Route: /analytics
 //  Firebase: analytics/{uid} + submissions where userId==uid
 // ═══════════════════════════════════════════════════════════════════
 
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -15,15 +17,18 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
-// ─── PALETTE ───────────────────────────────────────────────────────
-const _black   = Color(0xFF000000);
-const _black2  = Color(0xFF111111);
-const _black3  = Color(0xFF1A1A1A);
-const _white   = Color(0xFFFFFFFF);
-const _white10 = Color(0x1AFFFFFF);
-const _white20 = Color(0x33FFFFFF);
-const _grey    = Color(0xFF8A8A8A);
-const _greyDark= Color(0xFF444444);
+// ─── PALETTE (same as earnings_screen.dart) ──────────────────────
+const _black    = Color(0xFF000000);
+const _black2   = Color(0xFF111111);
+const _black3   = Color(0xFF1A1A1A);
+const _white    = Color(0xFFFFFFFF);
+const _white10  = Color(0x1AFFFFFF);
+const _white20  = Color(0x33FFFFFF);
+const _grey     = Color(0xFF8A8A8A);
+const _greyDark = Color(0xFF444444);
+const _ink1     = Color(0xFF0D0D0D);
+const _ink2     = Color(0xFF6E6E6E);
+const _inkBorder= Color(0x14000000);
 
 TextStyle _head(double s, FontWeight w, {Color c = _white, double? ls}) =>
     GoogleFonts.nunito(fontSize: s, fontWeight: w, color: c, letterSpacing: ls);
@@ -74,7 +79,8 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
       statusBarColor: Colors.transparent,
       systemNavigationBarColor: _black,
     ));
-    // simple fade only — matches the fix applied to earnings_screen.dart
+    // Same lightweight one-shot fade as earnings_screen.dart — no
+    // repeating/continuous animation driving any repaint.
     _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 500));
     _fade = CurvedAnimation(parent: _ctrl, curve: Curves.easeOut);
     _load();
@@ -185,7 +191,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
         Text('All-time performance across every release and store.', style: _body(13, FontWeight.w500)),
       ]);
 
-  // ── STATS ── flat, no shadow ──
+  // ── STATS — same flat pattern as Earnings' hero/plain cards ──
   Widget _statRow() => Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Expanded(
           flex: 13,
@@ -231,24 +237,26 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
   Widget _plainStat(IconData icon, String value, String label) => Container(
         padding: const EdgeInsets.fromLTRB(16, 18, 14, 16),
         decoration: BoxDecoration(
-          color: _black2, borderRadius: BorderRadius.circular(18), border: Border.all(color: _white10)),
+          color: _white, borderRadius: BorderRadius.circular(18), border: Border.all(color: _inkBorder)),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Container(
             width: 32, height: 32,
-            decoration: BoxDecoration(color: _white10, borderRadius: BorderRadius.circular(8)),
-            child: Icon(icon, color: _white, size: 15),
+            decoration: BoxDecoration(color: const Color(0x0D000000), borderRadius: BorderRadius.circular(8)),
+            child: Icon(icon, color: _ink1, size: 15),
           ),
           const SizedBox(height: 13),
           FittedBox(
             fit: BoxFit.scaleDown, alignment: Alignment.centerLeft,
-            child: Text(value, maxLines: 1, style: _head(18, FontWeight.w900, ls: -0.5)),
+            child: Text(value, maxLines: 1, style: _head(18, FontWeight.w900, c: _ink1, ls: -0.5)),
           ),
           const SizedBox(height: 4),
-          Text(label.toUpperCase(), style: _body(9, FontWeight.w700).copyWith(letterSpacing: 0.6)),
+          Text(label.toUpperCase(), style: _body(9, FontWeight.w700, c: _ink2).copyWith(letterSpacing: 0.6)),
         ]),
       );
 
-  // ── CHART — CustomPaint only, no BoxShadow on the card ──
+  // ── CHART — plain bar chart, built the same way as Earnings'
+  // progress bars (Container + FractionallySizedBox). No CustomPaint,
+  // no canvas, no per-frame repaint of any kind. ──
   Widget _chartCard() {
     late List<double> values;
     late List<String> labels;
@@ -257,6 +265,8 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
       case _Period.d30: values = _scale(_w30, _totalStreams.toDouble()); labels = _labels30; break;
       case _Period.all: values = _scale(_wAll, _totalStreams.toDouble()); labels = _labelsAll; break;
     }
+    final maxVal = values.isEmpty ? 1.0 : values.reduce((a, b) => a > b ? a : b).clamp(1.0, double.infinity);
+
     return _card(
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
@@ -273,12 +283,41 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
           ),
         ]),
         const SizedBox(height: 20),
-        // AnimatedBuilder drives the CustomPaint chart only — this is
-        // canvas-drawn, not a shadow/blur widget, so it's not part of
-        // the ghosting problem. Kept as-is from the stable old file.
-        AnimatedBuilder(
-          animation: _fade,
-          builder: (_, __) => _LineChart(values: values, labels: labels, progress: _fade.value),
+        SizedBox(
+          height: 140,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: List.generate(values.length, (i) {
+              final frac = (values[i] / maxVal).clamp(0.02, 1.0);
+              return Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      Expanded(
+                        child: Align(
+                          alignment: Alignment.bottomCenter,
+                          child: FractionallySizedBox(
+                            heightFactor: frac,
+                            widthFactor: 1,
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: _white,
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(labels[i], style: _body(9, FontWeight.w600, c: _greyDark)),
+                    ],
+                  ),
+                ),
+              );
+            }),
+          ),
         ),
       ]),
     );
@@ -296,7 +335,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
         ),
       );
 
-  // ── SOURCE OF STREAMS ──
+  // ── SOURCE OF STREAMS — identical pattern to Earnings' platform card ──
   Widget _sourceCard() {
     final total = (_spotify + _apple + _youtube).clamp(1, 1 << 30);
     int pct(int v) => (v / total * 100).round();
@@ -322,15 +361,15 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                 decoration: BoxDecoration(
-                    color: _black3, borderRadius: BorderRadius.circular(14), border: Border.all(color: _white10)),
+                    color: _black3, borderRadius: BorderRadius.circular(12), border: Border.all(color: _white10)),
                 child: Row(children: [
                   Container(
                     width: 32, height: 32,
-                    decoration: BoxDecoration(color: _black, borderRadius: BorderRadius.circular(8)),
+                    decoration: BoxDecoration(color: _black, borderRadius: BorderRadius.circular(9)),
                     child: Icon(r.icon, color: _white, size: 15),
                   ),
                   const SizedBox(width: 14),
-                  SizedBox(width: 92, child: Text(r.name, maxLines: 1, overflow: TextOverflow.ellipsis,
+                  SizedBox(width: 100, child: Text(r.name, maxLines: 1, overflow: TextOverflow.ellipsis,
                       style: _body(13, FontWeight.w700, c: _white))),
                   Expanded(
                     child: ClipRRect(
@@ -345,10 +384,8 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
                     ),
                   ),
                   const SizedBox(width: 12),
-                  Text(_fmt(r.value), style: _head(12.5, FontWeight.w800)),
-                  const SizedBox(width: 8),
-                  SizedBox(width: 34, child: Text('${pct(r.value)}%', textAlign: TextAlign.right,
-                      style: _body(10.5, FontWeight.w700, c: _greyDark))),
+                  SizedBox(width: 40, child: Text('${pct(r.value)}%', textAlign: TextAlign.right,
+                      style: _head(13, FontWeight.w800))),
                 ]),
               ),
             )),
@@ -388,7 +425,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                   decoration: BoxDecoration(
-                      color: _black3, borderRadius: BorderRadius.circular(14), border: Border.all(color: _white10)),
+                      color: _black3, borderRadius: BorderRadius.circular(12), border: Border.all(color: _white10)),
                   child: Row(children: [
                     Text((i + 1).toString().padLeft(2, '0'), style: _body(10.5, FontWeight.w700, c: _greyDark)),
                     const SizedBox(width: 12),
@@ -434,126 +471,4 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
             color: _black2, borderRadius: BorderRadius.circular(18), border: Border.all(color: _white10)),
         child: child,
       );
-}
-
-// ════════════════════════════════════════════════════════════════════
-//  LINE CHART — unchanged from the old, stable file. Pure CustomPaint,
-//  no BoxShadow, not part of the ghosting bug.
-// ════════════════════════════════════════════════════════════════════
-class _LineChart extends StatelessWidget {
-  final List<double> values;
-  final List<String> labels;
-  final double progress;
-  const _LineChart({required this.values, required this.labels, required this.progress});
-
-  @override
-  Widget build(BuildContext context) => SizedBox(
-        height: 180,
-        child: CustomPaint(
-          painter: _LineChartPainter(values: values, labels: labels, progress: progress),
-          size: const Size(double.infinity, 180),
-        ),
-      );
-}
-
-class _LineChartPainter extends CustomPainter {
-  final List<double> values;
-  final List<String> labels;
-  final double progress;
-  const _LineChartPainter({required this.values, required this.labels, required this.progress});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (values.isEmpty) return;
-    const padLeft = 36.0, padBottom = 24.0, padTop = 8.0, padRight = 8.0;
-    final w = size.width - padLeft - padRight;
-    final h = size.height - padBottom - padTop;
-    final maxVal = values.reduce(math.max).clamp(1.0, double.infinity);
-
-    final gridPaint = Paint()..color = const Color(0xFF1A1A1A)..strokeWidth = 1;
-    for (int i = 0; i <= 4; i++) {
-      final y = padTop + h - (i / 4) * h;
-      canvas.drawLine(Offset(padLeft, y), Offset(size.width - padRight, y), gridPaint);
-      final val = maxVal * i / 4;
-      final label = val >= 1000 ? '${(val / 1000).toStringAsFixed(0)}k' : val.toInt().toString();
-      final tp = TextPainter(
-        text: TextSpan(text: label, style: _body(9, FontWeight.w600, c: _greyDark)),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      tp.paint(canvas, Offset(0, y - tp.height / 2));
-    }
-
-    final step = values.length > 1 ? w / (values.length - 1) : w;
-    final pts = List.generate(values.length, (i) {
-      final x = padLeft + i * step;
-      final y = padTop + h - (values[i] / maxVal) * h;
-      return Offset(x, y);
-    });
-
-    final visible = (progress * (values.length - 1)).clamp(0.0, values.length - 1.0);
-
-    Path curvedPath(bool asFill) {
-      final path = Path();
-      if (asFill) {
-        path.moveTo(pts[0].dx, padTop + h);
-        path.lineTo(pts[0].dx, pts[0].dy);
-      } else {
-        path.moveTo(pts[0].dx, pts[0].dy);
-      }
-      for (int i = 1; i < values.length; i++) {
-        final frac = (visible - (i - 1)).clamp(0.0, 1.0);
-        if (frac <= 0) break;
-        final target = Offset(
-          pts[i - 1].dx + (pts[i].dx - pts[i - 1].dx) * frac,
-          pts[i - 1].dy + (pts[i].dy - pts[i - 1].dy) * frac,
-        );
-        final cp1 = Offset(pts[i - 1].dx + (pts[i].dx - pts[i - 1].dx) * 0.4, pts[i - 1].dy);
-        final cp2 = Offset(pts[i - 1].dx + (pts[i].dx - pts[i - 1].dx) * 0.6, target.dy);
-        path.cubicTo(cp1.dx, cp1.dy, cp2.dx, cp2.dy, target.dx, target.dy);
-      }
-      if (asFill) {
-        final lastVisible = pts[visible.floor()];
-        path.lineTo(lastVisible.dx, padTop + h);
-        path.close();
-      }
-      return path;
-    }
-
-    if (visible > 0) {
-      final fillPaint = Paint()
-        ..shader = LinearGradient(
-          begin: Alignment.topCenter, end: Alignment.bottomCenter,
-          colors: [const Color(0x26FFFFFF), const Color(0x00FFFFFF)],
-        ).createShader(Rect.fromLTWH(0, padTop, size.width, h));
-      canvas.drawPath(curvedPath(true), fillPaint);
-
-      final linePaint = Paint()
-        ..color = _white
-        ..strokeWidth = 2.2
-        ..style = PaintingStyle.stroke
-        ..strokeCap = StrokeCap.round
-        ..strokeJoin = StrokeJoin.round;
-      canvas.drawPath(curvedPath(false), linePaint);
-
-      final dotPaint = Paint()..color = _white;
-      final dotBorder = Paint()..color = _black2..style = PaintingStyle.stroke..strokeWidth = 2;
-      for (int i = 0; i < values.length; i++) {
-        if (i > visible) break;
-        canvas.drawCircle(pts[i], 4, dotPaint);
-        canvas.drawCircle(pts[i], 4, dotBorder);
-      }
-    }
-
-    for (int i = 0; i < labels.length; i++) {
-      final x = padLeft + i * step;
-      final tp = TextPainter(
-        text: TextSpan(text: labels[i], style: _body(9, FontWeight.w600, c: _greyDark)),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      tp.paint(canvas, Offset(x - tp.width / 2, size.height - padBottom + 6));
-    }
-  }
-
-  @override
-  bool shouldRepaint(_LineChartPainter old) => old.progress != progress || old.values != values;
 }
