@@ -1340,13 +1340,6 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
                   _buildCoverStrip(),
                   const SizedBox(height: 20),
 
-                  if (_isApproved) ...[
-                    _MetaSectionLabel(label: 'Smart Link & UPC', icon: Icons.link_rounded),
-                    const SizedBox(height: 10),
-                    _generatingLink ? _buildGeneratingCard() : _buildSmartLinkCard(),
-                    const SizedBox(height: 22),
-                  ],
-
                   _MetaSectionLabel(label: 'Status', icon: Icons.info_outline_rounded),
                   const SizedBox(height: 10),
                   _buildStatusRow(),
