@@ -1,7 +1,10 @@
 // ═══════════════════════════════════════════════════════════════════
-//  444MUSIC — Premium Home Screen v4 (Professional Distro Layout)
-//  Font: Outfit (bold, clean, heavy — matches select screen)
-//  Home = welcome / overview / value prop. Dashboard = live data (separate screen, unchanged).
+//  444MUSIC — Premium Home Screen v5
+//  Sliding hero (analytics-style images, auto-advance every 5s, caption
+//  slides with it) → wave-curve divider → trimmed "This release" panel
+//  (stores + 100% yours only, no plays count, short caption so it never
+//  overflows). Rest of the screen (stats row, why-us, dashboard CTA,
+//  bottom nav, sidebar) is unchanged from v4.
 // ═══════════════════════════════════════════════════════════════════
 import 'dart:async';
 import 'dart:convert';
@@ -27,7 +30,6 @@ const _white10    = Color(0x1AFFFFFF);
 const _white06    = Color(0x0FFFFFFF);
 const _grey       = Color(0xFF888888);
 const _greyDark   = Color(0xFF444444);
-// Single premium accent — used sparingly (tags, section labels, icon glyphs only)
 const _gold       = Color(0xFFCBA135);
 const _gold70     = Color(0xB3CBA135);
 
@@ -54,8 +56,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   final _user = FirebaseAuth.instance.currentUser;
 
-  // Live name from Firestore (kept in sync with ProfileScreen's edit-name save)
   String? _liveName;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _nameSub;
 
   @override
   void initState() {
@@ -76,7 +78,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         .animate(CurvedAnimation(parent: _entranceCtrl, curve: Curves.easeOutCubic));
     _entranceCtrl.forward();
 
-    // Keep greeting/sidebar name in sync with ProfileScreen's saved name
     if (_user != null) {
       _nameSub = FirebaseFirestore.instance
           .collection('users')
@@ -90,8 +91,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       });
     }
   }
-
-  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _nameSub;
 
   @override
   void dispose() {
@@ -142,7 +141,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             ],
           ),
 
-          // Bottom nav
           Positioned(
             bottom: 0, left: 0, right: 0,
             child: _BottomNav(
@@ -157,7 +155,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             ),
           ),
 
-          // Sidebar overlay
           if (_sidebarOpen)
             GestureDetector(
               onTap: _closeSidebar,
@@ -167,7 +164,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
             ),
 
-          // Sidebar drawer
           if (_sidebarOpen)
             Positioned(
               top: 0, right: 0, bottom: 0,
@@ -241,15 +237,21 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 ),
               ),
 
-              const SizedBox(height: 24),
+              const SizedBox(height: 20),
 
-              // ── HERO CARD ──
+              // ── SLIDING HERO ──
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 22),
-                child: _HeroCard(onUpload: () => _navigate('/upload')),
+                child: const _SlideHero(),
               ),
 
-              const SizedBox(height: 20),
+              // ── WAVE CURVE ──
+              const _WaveDivider(),
+
+              // ── RELEASE PANEL (stores + 100% yours only, short caption) ──
+              const _ReleasePanel(),
+
+              const SizedBox(height: 24),
 
               // ── STATS ROW ──
               Padding(
@@ -267,7 +269,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
               const SizedBox(height: 28),
 
-              // ── WHY 444MUSIC (compact trust strip) ──
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 22),
                 child: Text(
@@ -308,7 +309,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
               const SizedBox(height: 28),
 
-              // ── DASHBOARD HANDOFF CTA ──
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 22),
                 child: _DashboardCta(onTap: () => _navigate('/dashboard')),
@@ -324,10 +324,261 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  PROFILE AVATAR — live Firestore photo (mirrors ProfileScreen exactly)
-//  Field: users/{uid}.profilePic — either a plain image URL or a
-//  base64 data URI (data:image/jpeg;base64,...) saved by _pickAvatar()
-//  in profile_screen.dart. Falls back to Auth photoURL, then an icon.
+//  SLIDING HERO — auto-advances every 5s, caption cross-fades with image
+//  Swap the imageAsset paths below for your own professional analytics
+//  style images (a Spotify for Artists-style dashboard shot, an Apple
+//  Music for Artists-style dashboard shot, a laptop displaying a song
+//  analytics chart). Use your own screenshots or licensed stock photos —
+//  not scraped Apple/Spotify app screenshots, since those are their
+//  trademarked UI, not yours to redistribute in a commercial app.
+// ════════════════════════════════════════════════════════════════════
+class _HeroSlide {
+  final String imageAsset;
+  final String title;
+  final String caption;
+  const _HeroSlide({required this.imageAsset, required this.title, required this.caption});
+}
+
+final List<_HeroSlide> _heroSlides = [
+  _HeroSlide(
+    imageAsset: 'assets/images/slide_streaming_dashboard.jpg',
+    title: 'Streaming dashboard',
+    caption: 'Live stream counts, updated daily',
+  ),
+  _HeroSlide(
+    imageAsset: 'assets/images/slide_fan_insights.jpg',
+    title: 'Fan insights',
+    caption: 'See exactly where your fans are',
+  ),
+  _HeroSlide(
+    imageAsset: 'assets/images/slide_full_reports.jpg',
+    title: 'Full reports',
+    caption: 'Every store, one dashboard',
+  ),
+];
+
+class _SlideHero extends StatefulWidget {
+  const _SlideHero();
+  @override
+  State<_SlideHero> createState() => _SlideHeroState();
+}
+
+class _SlideHeroState extends State<_SlideHero> {
+  final _controller = PageController();
+  Timer? _timer;
+  int _index = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (!mounted) return;
+      final next = (_index + 1) % _heroSlides.length;
+      _controller.animateToPage(
+        next,
+        duration: const Duration(milliseconds: 500),
+        curve: Curves.easeInOut,
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(20),
+      child: SizedBox(
+        height: 150,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            PageView.builder(
+              controller: _controller,
+              itemCount: _heroSlides.length,
+              onPageChanged: (i) => setState(() => _index = i),
+              itemBuilder: (context, i) {
+                final s = _heroSlides[i];
+                return Image.asset(
+                  s.imageAsset,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) => Container(color: _black3),
+                );
+              },
+            ),
+
+            Positioned(
+              top: 10, right: 12,
+              child: Row(
+                children: List.generate(_heroSlides.length, (i) {
+                  final active = i == _index;
+                  return AnimatedContainer(
+                    duration: const Duration(milliseconds: 250),
+                    margin: const EdgeInsets.only(left: 4),
+                    width: active ? 14 : 5,
+                    height: 3,
+                    decoration: BoxDecoration(
+                      color: active ? _white : _white40,
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                  );
+                }),
+              ),
+            ),
+
+            Positioned(
+              left: 0, right: 0, bottom: 0,
+              child: Container(
+                padding: const EdgeInsets.fromLTRB(14, 26, 14, 12),
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [Colors.transparent, Color(0xCC000000)],
+                  ),
+                ),
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 350),
+                  child: Column(
+                    key: ValueKey(_index),
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        _heroSlides[_index].title,
+                        style: GoogleFonts.outfit(
+                          color: _white, fontSize: 13, fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        _heroSlides[_index].caption,
+                        style: GoogleFonts.outfit(
+                          color: _white70, fontSize: 11, fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  WAVE DIVIDER — black-to-white curve
+// ════════════════════════════════════════════════════════════════════
+class _WaveClipper extends CustomClipper<Path> {
+  @override
+  Path getClip(Size size) {
+    final path = Path();
+    path.lineTo(0, size.height * 0.55);
+    path.cubicTo(
+      size.width * 0.25, size.height * 1.25,
+      size.width * 0.55, -size.height * 0.25,
+      size.width, size.height * 0.55,
+    );
+    path.lineTo(size.width, size.height);
+    path.lineTo(0, size.height);
+    path.close();
+    return path;
+  }
+
+  @override
+  bool shouldReclip(CustomClipper<Path> oldClipper) => false;
+}
+
+class _WaveDivider extends StatelessWidget {
+  const _WaveDivider();
+  @override
+  Widget build(BuildContext context) {
+    return ClipPath(
+      clipper: _WaveClipper(),
+      child: Container(height: 34, width: double.infinity, color: _white),
+    );
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  RELEASE PANEL — stores + 100% yours only, brief caption (no overflow)
+// ════════════════════════════════════════════════════════════════════
+class _ReleasePanel extends StatelessWidget {
+  const _ReleasePanel();
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: _white,
+      padding: const EdgeInsets.fromLTRB(22, 0, 22, 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'This release',
+            style: GoogleFonts.outfit(
+              color: _black, fontSize: 17, fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: const [
+              Expanded(child: _ReleaseStat(icon: Icons.public_rounded, value: '30+',  label: 'stores')),
+              Expanded(child: _ReleaseStat(icon: Icons.star_rounded,   value: '100%', label: 'yours')),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Text(
+            'Your catalog and payouts, tracked in one place.',
+            style: GoogleFonts.outfit(
+              color: const Color(0xFF555555),
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+              height: 1.4,
+            ),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ReleaseStat extends StatelessWidget {
+  final IconData icon;
+  final String value, label;
+  const _ReleaseStat({required this.icon, required this.value, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, color: _black, size: 18),
+        const SizedBox(height: 6),
+        Text(
+          value,
+          style: GoogleFonts.outfit(color: _black, fontSize: 14, fontWeight: FontWeight.w800),
+        ),
+        Text(
+          label,
+          style: GoogleFonts.outfit(color: const Color(0xFF777777), fontSize: 11, fontWeight: FontWeight.w500),
+        ),
+      ],
+    );
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  PROFILE AVATAR — live Firestore photo
 // ════════════════════════════════════════════════════════════════════
 class _ProfileAvatar extends StatelessWidget {
   final String? uid;
@@ -386,88 +637,33 @@ class _ProfileAvatar extends StatelessWidget {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  HERO CARD
+//  STAT CHIP
 // ════════════════════════════════════════════════════════════════════
-class _HeroCard extends StatelessWidget {
-  final VoidCallback onUpload;
-  const _HeroCard({required this.onUpload});
+class _StatChip extends StatelessWidget {
+  final String value, label;
+  const _StatChip({required this.value, required this.label});
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(22, 24, 22, 22),
+      padding: const EdgeInsets.symmetric(vertical: 16),
       decoration: BoxDecoration(
         color: _black2,
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(color: _white10),
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-            decoration: BoxDecoration(
-              color: _gold.withOpacity(0.14),
-              borderRadius: BorderRadius.circular(99),
-              border: Border.all(color: _gold.withOpacity(0.35)),
-            ),
-            child: Text(
-              '444MUSIC DISTRIBUTION',
-              style: GoogleFonts.outfit(
-                color: _gold,
-                fontSize: 10,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 1.4,
-              ),
-            ),
-          ),
-          const SizedBox(height: 14),
           Text(
-            'Your music,\neverywhere it matters',
+            value,
             style: GoogleFonts.outfit(
-              color: _white,
-              fontSize: 26,
-              fontWeight: FontWeight.w800,
-              height: 1.12,
-              letterSpacing: -0.4,
+              color: _white, fontSize: 22, fontWeight: FontWeight.w800, letterSpacing: -0.5,
             ),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 3),
           Text(
-            'Get onto Spotify, Apple Music, Boomplay and 30+ stores. Keep 100% of your royalties.',
-            style: GoogleFonts.outfit(
-              color: _white70,
-              fontSize: 13,
-              fontWeight: FontWeight.w500,
-              height: 1.45,
-            ),
-          ),
-          const SizedBox(height: 20),
-          GestureDetector(
-            onTap: onUpload,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
-              decoration: BoxDecoration(
-                color: _white,
-                borderRadius: BorderRadius.circular(99),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.cloud_upload_rounded, color: _black, size: 17),
-                  const SizedBox(width: 9),
-                  Text(
-                    'Upload a Release',
-                    style: GoogleFonts.outfit(
-                      color: _black,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                ],
-              ),
-            ),
+            label,
+            style: GoogleFonts.outfit(color: _grey, fontSize: 11, fontWeight: FontWeight.w600),
           ),
         ],
       ),
@@ -476,7 +672,7 @@ class _HeroCard extends StatelessWidget {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  WHY ROW (compact, single-line, icon + text)
+//  WHY ROW
 // ════════════════════════════════════════════════════════════════════
 class _WhyRow extends StatelessWidget {
   final IconData icon;
@@ -501,11 +697,7 @@ class _WhyRow extends StatelessWidget {
           Expanded(
             child: Text(
               text,
-              style: GoogleFonts.outfit(
-                color: _white90,
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-              ),
+              style: GoogleFonts.outfit(color: _white90, fontSize: 13, fontWeight: FontWeight.w600),
             ),
           ),
         ],
@@ -521,48 +713,6 @@ class _WhyDivider extends StatelessWidget {
     padding: EdgeInsets.symmetric(horizontal: 16),
     child: Divider(color: _white10, height: 1),
   );
-}
-
-// ════════════════════════════════════════════════════════════════════
-//  STAT CHIP
-// ════════════════════════════════════════════════════════════════════
-class _StatChip extends StatelessWidget {
-  final String value, label;
-  const _StatChip({required this.value, required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 16),
-      decoration: BoxDecoration(
-        color: _black2,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: _white10),
-      ),
-      child: Column(
-        children: [
-          Text(
-            value,
-            style: GoogleFonts.outfit(
-              color: _white,
-              fontSize: 22,
-              fontWeight: FontWeight.w800,
-              letterSpacing: -0.5,
-            ),
-          ),
-          const SizedBox(height: 3),
-          Text(
-            label,
-            style: GoogleFonts.outfit(
-              color: _grey,
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -591,19 +741,14 @@ class _DashboardCta extends StatelessWidget {
                   Text(
                     'See your full dashboard',
                     style: GoogleFonts.outfit(
-                      color: _black,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: -0.2,
+                      color: _black, fontSize: 16, fontWeight: FontWeight.w800, letterSpacing: -0.2,
                     ),
                   ),
                   const SizedBox(height: 4),
                   Text(
                     'Releases, streams and earnings',
                     style: GoogleFonts.outfit(
-                      color: const Color(0xFF666666),
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
+                      color: const Color(0xFF666666), fontSize: 12, fontWeight: FontWeight.w500,
                     ),
                   ),
                 ],
@@ -612,10 +757,7 @@ class _DashboardCta extends StatelessWidget {
             const SizedBox(width: 14),
             Container(
               width: 44, height: 44,
-              decoration: const BoxDecoration(
-                color: _black,
-                shape: BoxShape.circle,
-              ),
+              decoration: const BoxDecoration(color: _black, shape: BoxShape.circle),
               child: const Icon(Icons.arrow_forward_rounded, color: _white, size: 20),
             ),
           ],
@@ -695,10 +837,7 @@ class _BottomNav extends StatelessWidget {
                           color: _white,
                           shape: BoxShape.circle,
                           boxShadow: [
-                            BoxShadow(
-                              color: _white.withOpacity(0.2),
-                              blurRadius: 16, spreadRadius: 2,
-                            ),
+                            BoxShadow(color: _white.withOpacity(0.2), blurRadius: 16, spreadRadius: 2),
                           ],
                         ),
                         child: const Icon(Icons.cloud_upload_rounded, color: _black, size: 24),
@@ -739,10 +878,7 @@ class _BottomNav extends StatelessWidget {
                         duration: const Duration(milliseconds: 300),
                         curve: Curves.easeOutCubic,
                         height: 3, width: isActive ? 18 : 0,
-                        decoration: BoxDecoration(
-                          color: _white,
-                          borderRadius: BorderRadius.circular(99),
-                        ),
+                        decoration: BoxDecoration(color: _white, borderRadius: BorderRadius.circular(99)),
                       ),
                     ],
                   ),
@@ -757,7 +893,7 @@ class _BottomNav extends StatelessWidget {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  SIDEBAR (unchanged, avatar now live too)
+//  SIDEBAR (unchanged)
 // ════════════════════════════════════════════════════════════════════
 class _SidebarPanel extends StatelessWidget {
   final VoidCallback onClose;
@@ -780,11 +916,9 @@ class _SidebarPanel extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header
           Container(
             padding: EdgeInsets.fromLTRB(24, top + 20, 24, 20),
-            decoration: const BoxDecoration(
-                border: Border(bottom: BorderSide(color: _white10))),
+            decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: _white10))),
             child: Row(
               children: [
                 CachedNetworkImage(
@@ -792,9 +926,7 @@ class _SidebarPanel extends StatelessWidget {
                   height: 26, color: _white, colorBlendMode: BlendMode.srcIn,
                   errorWidget: (_, __, ___) => Text(
                     '444Music',
-                    style: GoogleFonts.outfit(
-                      color: _white, fontSize: 20, fontWeight: FontWeight.w800,
-                    ),
+                    style: GoogleFonts.outfit(color: _white, fontSize: 20, fontWeight: FontWeight.w800),
                   ),
                 ),
                 const Spacer(),
@@ -813,7 +945,6 @@ class _SidebarPanel extends StatelessWidget {
             ),
           ),
 
-          // User badge
           Padding(
             padding: const EdgeInsets.fromLTRB(24, 20, 24, 20),
             child: Container(
@@ -833,17 +964,13 @@ class _SidebarPanel extends StatelessWidget {
                       children: [
                         Text(
                           userName,
-                          style: GoogleFonts.outfit(
-                            color: _white, fontSize: 14, fontWeight: FontWeight.w800,
-                          ),
+                          style: GoogleFonts.outfit(color: _white, fontSize: 14, fontWeight: FontWeight.w800),
                           overflow: TextOverflow.ellipsis,
                         ),
                         const SizedBox(height: 2),
                         Text(
                           userEmail,
-                          style: GoogleFonts.outfit(
-                            color: _grey, fontSize: 11, fontWeight: FontWeight.w400,
-                          ),
+                          style: GoogleFonts.outfit(color: _grey, fontSize: 11, fontWeight: FontWeight.w400),
                           overflow: TextOverflow.ellipsis,
                         ),
                       ],
@@ -854,7 +981,6 @@ class _SidebarPanel extends StatelessWidget {
             ),
           ),
 
-          // Nav items
           Expanded(
             child: SingleChildScrollView(
               physics: const BouncingScrollPhysics(),
@@ -880,7 +1006,6 @@ class _SidebarPanel extends StatelessWidget {
             ),
           ),
 
-          // Logout
           Padding(
             padding: EdgeInsets.fromLTRB(16, 0, 16, bottom + 16),
             child: GestureDetector(
@@ -896,22 +1021,16 @@ class _SidebarPanel extends StatelessWidget {
                 decoration: BoxDecoration(
                   color: Colors.red.shade900.withOpacity(0.15),
                   borderRadius: BorderRadius.circular(14),
-                  border: Border.all(
-                      color: Colors.red.shade900.withOpacity(0.25)),
+                  border: Border.all(color: Colors.red.shade900.withOpacity(0.25)),
                 ),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const Icon(Icons.logout_rounded,
-                        color: Color(0xFFFF6B6B), size: 18),
+                    const Icon(Icons.logout_rounded, color: Color(0xFFFF6B6B), size: 18),
                     const SizedBox(width: 10),
                     Text(
                       'Logout',
-                      style: GoogleFonts.outfit(
-                        color: const Color(0xFFFF6B6B),
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                      ),
+                      style: GoogleFonts.outfit(color: const Color(0xFFFF6B6B), fontSize: 14, fontWeight: FontWeight.w700),
                     ),
                   ],
                 ),
@@ -932,12 +1051,7 @@ class _NavSection extends StatelessWidget {
     padding: const EdgeInsets.fromLTRB(24, 4, 24, 8),
     child: Text(
       label.toUpperCase(),
-      style: GoogleFonts.outfit(
-        color: _greyDark,
-        fontSize: 9,
-        fontWeight: FontWeight.w800,
-        letterSpacing: 2,
-      ),
+      style: GoogleFonts.outfit(color: _greyDark, fontSize: 9, fontWeight: FontWeight.w800, letterSpacing: 2),
     ),
   );
 }
@@ -946,8 +1060,7 @@ class _NavItem extends StatefulWidget {
   final IconData icon;
   final String label, route;
   final void Function(String) onTap;
-  const _NavItem({required this.icon, required this.label,
-    required this.route, required this.onTap});
+  const _NavItem({required this.icon, required this.label, required this.route, required this.onTap});
   @override
   State<_NavItem> createState() => _NavItemState();
 }
@@ -974,15 +1087,10 @@ class _NavItemState extends State<_NavItem> {
             const SizedBox(width: 14),
             Text(
               widget.label,
-              style: GoogleFonts.outfit(
-                color: _hover ? _white : _grey,
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-              ),
+              style: GoogleFonts.outfit(color: _hover ? _white : _grey, fontSize: 14, fontWeight: FontWeight.w600),
             ),
             const Spacer(),
-            Icon(Icons.arrow_forward_ios_rounded,
-                color: _hover ? _white40 : Colors.transparent, size: 12),
+            Icon(Icons.arrow_forward_ios_rounded, color: _hover ? _white40 : Colors.transparent, size: 12),
           ],
         ),
       ),
@@ -1016,19 +1124,9 @@ class _PlaceholderTab extends StatelessWidget {
         children: [
           Icon(icon, color: _grey, size: 48),
           const SizedBox(height: 16),
-          Text(
-            label,
-            style: GoogleFonts.outfit(
-              color: _white, fontSize: 24, fontWeight: FontWeight.w800,
-            ),
-          ),
+          Text(label, style: GoogleFonts.outfit(color: _white, fontSize: 24, fontWeight: FontWeight.w800)),
           const SizedBox(height: 8),
-          Text(
-            'Coming soon',
-            style: GoogleFonts.outfit(
-              color: _grey, fontSize: 13, fontWeight: FontWeight.w400,
-            ),
-          ),
+          Text('Coming soon', style: GoogleFonts.outfit(color: _grey, fontSize: 13, fontWeight: FontWeight.w400)),
         ],
       ),
     );

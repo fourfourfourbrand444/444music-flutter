@@ -7,14 +7,20 @@
 //  Firebase: users/{uid} → earnings, clearedEarnings, pendingEarnings,
 //            spotifyEarnings, appleEarnings, youtubeEarnings, amazonEarnings
 //
-//  NEW — Currency preview dropdown (display-only, mirrors the pattern
-//  used on pricing_screen.dart): balances are stored and computed in
-//  USD everywhere in Firestore/logic. The dropdown only changes what's
+//  Currency preview dropdown (display-only, mirrors the pattern used
+//  on pricing_screen.dart): balances are stored and computed in USD
+//  everywhere in Firestore/logic. The dropdown only changes what's
 //  RENDERED on screen — withdrawal eligibility, the $50 minimum check,
 //  and all backend calls still use the raw USD figures. Rates below
 //  are USD-based and derived from the same GHC snapshot used on
 //  pricing.html/pricing_screen.dart, so the two screens stay coherent.
 //  Keep in sync with that file if you refresh rates.
+//
+//  v2 patch: overflow-safety only — currency row now wraps instead of
+//  a fixed Row, the progress-to-payout line and both stat-card values
+//  are guarded (FittedBox / Flexible+ellipsis) so a long converted
+//  amount (NGN, XOF, etc.) can never push past the screen edge.
+//  Nothing else — animations, layout, avatar button — changed.
 // ═══════════════════════════════════════════════════════════════════
 
 import 'package:flutter/material.dart';
@@ -40,7 +46,6 @@ const _text2      = Color(0xFF969696);
 const _ink1       = Color(0xFF0D0D0D);
 const _ink2       = Color(0xFF6E6E6E);
 
-// slow, smooth, luxury-grade easing — matches "very slow easing in"
 const _ease = Curves.easeOutCubic;
 const _entranceDuration = Duration(milliseconds: 900);
 
@@ -49,15 +54,9 @@ TextStyle _head(double size, FontWeight w, {Color color = _wht, double? letterSp
 TextStyle _body(double size, FontWeight w, {Color color = _text2, double? height}) =>
     GoogleFonts.plusJakartaSans(fontSize: size, fontWeight: w, color: color, height: height);
 
-// ─── CURRENCY DISPLAY — display only, mirrors pricing_screen.dart ────
-// Rates are USD → target currency (earnings are stored in USD).
-// Derived from the same GHC snapshot as pricing_screen.dart:
-//   1 USD ≈ 11.454 GHC (inverse of the 0.0873 GHC→USD rate used there)
-// so both screens quote consistent real-world values. Static snapshot
-// as of mid-2026 — refresh periodically, or swap for a live FX API.
 class _CurrencyInfo {
   final String symbol;
-  final double rate; // USD → this currency
+  final double rate;
   const _CurrencyInfo({required this.symbol, required this.rate});
 }
 
@@ -93,7 +92,6 @@ class EarningsScreen extends StatefulWidget {
 
 class _EarningsScreenState extends State<EarningsScreen>
     with SingleTickerProviderStateMixin {
-  // Real minimum withdrawal — logic-critical, always in USD. Already $50.
   static const double _minWithdrawal = 50.0;
 
   double _balance = 0, _cleared = 0, _pending = 0;
@@ -103,13 +101,12 @@ class _EarningsScreenState extends State<EarningsScreen>
   String? _photoURL;
   String? _uid;
 
-  // ── Currency preview — display only, defaults to USD ──
   String _selectedCurrency = 'USD';
 
   late final AnimationController _ctrl;
   late final Animation<double> _fade;
   late final Animation<Offset> _slide;
-  late final Animation<double> _reveal; // drives bars / threshold fill
+  late final Animation<double> _reveal;
 
   @override
   void initState() {
@@ -168,8 +165,6 @@ class _EarningsScreenState extends State<EarningsScreen>
   }
 
   void _handleWithdraw() {
-    // Eligibility ALWAYS checked in real USD balance — the currency
-    // dropdown never affects this, only what's displayed on screen.
     if (_balance < _minWithdrawal) {
       setState(() => _showPopup = true);
     } else {
@@ -177,7 +172,6 @@ class _EarningsScreenState extends State<EarningsScreen>
     }
   }
 
-  // ── Currency conversion helpers — display only ──
   _CurrencyInfo get _currencyInfo =>
       _currencyRates[_selectedCurrency] ?? _currencyRates['USD']!;
 
@@ -206,7 +200,6 @@ class _EarningsScreenState extends State<EarningsScreen>
     );
   }
 
-  // ══════════════════════════════════════════════════════════════════
   Widget _buildBody() {
     final top = MediaQuery.of(context).padding.top;
     final bottom = MediaQuery.of(context).padding.bottom;
@@ -231,7 +224,6 @@ class _EarningsScreenState extends State<EarningsScreen>
     );
   }
 
-  // ── TOPBAR ──
   Widget _topBar() {
     return Container(
       height: 62,
@@ -261,7 +253,6 @@ class _EarningsScreenState extends State<EarningsScreen>
     );
   }
 
-  // ── PAGE HEADER ──
   Widget _pageHeader() {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _eyebrow(Icons.attach_money_rounded, '444MUSIC · EARNINGS'),
@@ -289,44 +280,57 @@ class _EarningsScreenState extends State<EarningsScreen>
         ]),
       );
 
-  // ── CURRENCY SELECTOR — display only, mirrors pricing_screen.dart ──
+  // PATCHED: Row → Wrap, dropdown width-constrained, every label
+  // ellipsis-clamped — a long label can no longer overflow.
   Widget _currencySelector() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
+        Wrap(
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 10,
+          runSpacing: 8,
           children: [
             Text(
               'VIEW EARNINGS IN',
               style: _body(10, FontWeight.w700, color: _text2)
                   .copyWith(letterSpacing: 0.5),
             ),
-            const SizedBox(width: 10),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-              decoration: BoxDecoration(
-                color: _blk2,
-                borderRadius: BorderRadius.circular(99),
-                border: Border.all(color: _blkBorderH),
-              ),
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<String>(
-                  value: _selectedCurrency,
-                  dropdownColor: _blk2,
-                  isDense: true,
-                  icon: const Icon(Icons.keyboard_arrow_down_rounded,
-                      color: _text2, size: 16),
-                  style: _body(13, FontWeight.w700, color: _wht),
-                  items: _currencyOptions
-                      .map((opt) => DropdownMenuItem(
-                            value: opt['code'],
-                            child: Text(opt['label']!,
-                                overflow: TextOverflow.ellipsis),
-                          ))
-                      .toList(),
-                  onChanged: (v) {
-                    if (v != null) setState(() => _selectedCurrency = v);
-                  },
+            ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width - 40),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+                decoration: BoxDecoration(
+                  color: _blk2,
+                  borderRadius: BorderRadius.circular(99),
+                  border: Border.all(color: _blkBorderH),
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    value: _selectedCurrency,
+                    dropdownColor: _blk2,
+                    isDense: true,
+                    icon: const Icon(Icons.keyboard_arrow_down_rounded,
+                        color: _text2, size: 16),
+                    style: _body(13, FontWeight.w700, color: _wht),
+                    selectedItemBuilder: (context) => _currencyOptions
+                        .map((opt) => Align(
+                              alignment: Alignment.centerLeft,
+                              child: Text(opt['label']!,
+                                  maxLines: 1, overflow: TextOverflow.ellipsis),
+                            ))
+                        .toList(),
+                    items: _currencyOptions
+                        .map((opt) => DropdownMenuItem(
+                              value: opt['code'],
+                              child: Text(opt['label']!,
+                                  maxLines: 1, overflow: TextOverflow.ellipsis),
+                            ))
+                        .toList(),
+                    onChanged: (v) {
+                      if (v != null) setState(() => _selectedCurrency = v);
+                    },
+                  ),
                 ),
               ),
             ),
@@ -343,7 +347,6 @@ class _EarningsScreenState extends State<EarningsScreen>
     );
   }
 
-  // ── STAT ROW: hero (black) + 2 plain (white) ──
   Widget _statRow() {
     return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Expanded(
@@ -376,17 +379,14 @@ class _EarningsScreenState extends State<EarningsScreen>
     ]);
   }
 
-  // ── WITHDRAW CARD (white) ──
   Widget _withdrawCard() {
-    // pct/eligibility computed from real USD balance, never the
-    // display currency — only the text below is converted.
     final pct = (_balance / _minWithdrawal).clamp(0.0, 1.0);
     return _WhiteCard(
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
           const Icon(Icons.arrow_upward_rounded, color: _ink1, size: 15),
           const SizedBox(width: 8),
-          Text('READY TO WITHDRAW',
+          Text('Ready to withdraw',
               style: _head(13, FontWeight.w800, color: _ink1)),
         ]),
         const SizedBox(height: 8),
@@ -417,11 +417,21 @@ class _EarningsScreenState extends State<EarningsScreen>
           ),
         ),
         const SizedBox(height: 8),
-        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          Text('Progress to payout', style: _body(11.5, FontWeight.w600, color: _ink2)),
-          Text(
-            '${_formatSelected(_balance, decimals: 0)} / ${_formatSelected(_minWithdrawal, decimals: 0)}',
-            style: _body(11.5, FontWeight.w800, color: _ink1),
+        // PATCHED: spaceBetween Row → Flexible+ellipsis pair.
+        Row(children: [
+          Flexible(
+            child: Text('Progress to payout',
+                overflow: TextOverflow.ellipsis,
+                style: _body(11.5, FontWeight.w600, color: _ink2)),
+          ),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              '${_formatSelected(_balance, decimals: 0)} / ${_formatSelected(_minWithdrawal, decimals: 0)}',
+              textAlign: TextAlign.right,
+              overflow: TextOverflow.ellipsis,
+              style: _body(11.5, FontWeight.w800, color: _ink1),
+            ),
           ),
         ]),
         const SizedBox(height: 18),
@@ -449,7 +459,6 @@ class _EarningsScreenState extends State<EarningsScreen>
     );
   }
 
-  // ── PLATFORM BREAKDOWN (black) ──
   Widget _platformCard() {
     final total = (_spotify + _apple + _youtube + _amazon).clamp(1.0, double.infinity);
     int pct(double v) => (v / total * 100).round();
@@ -487,7 +496,10 @@ class _EarningsScreenState extends State<EarningsScreen>
                   const SizedBox(width: 14),
                   SizedBox(
                     width: 100,
-                    child: Text(r.name, style: _body(13, FontWeight.w700, color: _text1)),
+                    child: Text(r.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: _body(13, FontWeight.w700, color: _text1)),
                   ),
                   Expanded(
                     child: AnimatedBuilder(
@@ -515,6 +527,8 @@ class _EarningsScreenState extends State<EarningsScreen>
                     width: 40,
                     child: Text('${pct(r.value)}%',
                         textAlign: TextAlign.right,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: _head(13, FontWeight.w800, color: _text1)),
                   ),
                 ]),
@@ -530,7 +544,6 @@ class _EarningsScreenState extends State<EarningsScreen>
         Text(label, style: _head(15, FontWeight.w800, letterSpacing: -0.3)),
       ]);
 
-  // ── POPUP ──
   Widget _popup() {
     return GestureDetector(
       onTap: () => setState(() => _showPopup = false),
@@ -606,10 +619,6 @@ class _EarningsScreenState extends State<EarningsScreen>
   }
 }
 
-// ════════════════════════════════════════════════════════════════════
-//  SHARED WIDGETS — reused identically in analytics_screen.dart
-// ════════════════════════════════════════════════════════════════════
-
 class _AvatarButton extends StatefulWidget {
   final String? photoURL;
   final String? uid;
@@ -670,12 +679,19 @@ class _HeroStatCard extends StatelessWidget {
               child: Icon(icon, color: _wht, size: 16),
             ),
             const SizedBox(height: 14),
-            RichText(
-              text: TextSpan(children: [
-                TextSpan(text: value, style: _head(24, FontWeight.w900, letterSpacing: -1)),
-                if (suffix.isNotEmpty)
-                  TextSpan(text: ' $suffix', style: _body(11, FontWeight.w600, color: _text2)),
-              ]),
+            // PATCHED: FittedBox so a long converted value scales down
+            // instead of overflowing this card's width.
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: RichText(
+                maxLines: 1,
+                text: TextSpan(children: [
+                  TextSpan(text: value, style: _head(24, FontWeight.w900, letterSpacing: -1)),
+                  if (suffix.isNotEmpty)
+                    TextSpan(text: ' $suffix', style: _body(11, FontWeight.w600, color: _text2)),
+                ]),
+              ),
             ),
             const SizedBox(height: 5),
             Text(label.toUpperCase(),
@@ -704,7 +720,14 @@ class _PlainStatCard extends StatelessWidget {
             child: Icon(icon, color: _ink1, size: 15),
           ),
           const SizedBox(height: 13),
-          Text(value, style: _head(18, FontWeight.w900, color: _ink1, letterSpacing: -0.5)),
+          // PATCHED: FittedBox guard, same reasoning as the hero card.
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(value,
+                maxLines: 1,
+                style: _head(18, FontWeight.w900, color: _ink1, letterSpacing: -0.5)),
+          ),
           const SizedBox(height: 4),
           Text(label.toUpperCase(),
               style: _body(9, FontWeight.w700, color: _ink2).copyWith(letterSpacing: 0.6)),
