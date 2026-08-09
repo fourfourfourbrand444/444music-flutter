@@ -416,11 +416,6 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
           icon: Icons.play_circle_rounded,
           color: _youtube,
           count: _data.youtubeStreams),
-      _StoreInfo(
-          name: 'Boomplay',
-          icon: Icons.headphones_rounded,
-          color: _boomplay,
-          count: _data.boomplayStreams),
     ];
 
     return _Card(
