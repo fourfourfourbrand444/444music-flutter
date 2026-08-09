@@ -710,19 +710,27 @@ class _LoginPanelState extends State<_LoginPanel> {
     }
   }
 
-  Future<void> _doForgot() async {
-    final email = _emailCtrl.text.trim();
-    if (email.isEmpty) {
-      setState(() => _errEmail = true);
-      _showMsg('Enter your email first.', _warnOrange, icon: Icons.error_outline); return;
-    }
-    try {
-      await FirebaseAuth.instance.sendPasswordResetEmail(email: email);
-      _showMsg('Reset link sent — check your inbox or spam folder.', _successGrn, icon: Icons.check_circle_outline);
-    } on FirebaseAuthException catch (e) {
-      _showMsg(e.message ?? 'Error sending reset.', _errorRed, icon: Icons.error_outline);
-    }
-  }
+ Future<void> _doForgot() async {
+     final email = _emailCtrl.text.trim();
+     if (email.isEmpty) {
+       setState(() => _errEmail = true);
+       _showMsg('Enter your email first.', _warnOrange, icon: Icons.error_outline); return;
+     }
+     try {
+       final res = await http.post(
+         Uri.parse('$_backendBaseUrl/api/verification/forgot-password'),
+         headers: {'Content-Type': 'application/json'},
+         body: jsonEncode({'email': email}),
+       );
+       if (res.statusCode == 200) {
+         _showMsg('Reset link sent — check your inbox.', _successGrn, icon: Icons.check_circle_outline);
+       } else {
+         _showMsg('Error sending reset. Try again.', _errorRed, icon: Icons.error_outline);
+       }
+     } catch (_) {
+       _showMsg('Network error. Try again.', _errorRed, icon: Icons.error_outline);
+     }
+   }
 
   @override
   void dispose() {
