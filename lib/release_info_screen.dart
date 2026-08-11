@@ -6,7 +6,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter_svg/flutter_svg.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 // ─── PALETTE ────────────────────────────────────────────────────────────────
 const _bg          = Color(0xFF080808);
@@ -24,50 +24,21 @@ const _white06     = Color(0x0FFFFFFF);
 const _grey        = Color(0xFF888888);
 const _greyDark    = Color(0xFF444444);
 const _green       = Color(0xFF4ADE80);
+const _greenDim    = Color(0x1F4ADE80);
+const _greenBorder = Color(0x334ADE80);
 const _red         = Color(0xFFF87171);
 const _amber       = Color(0xFFF59E0B);
 
 // ─── BRAND ICONS (Simple Icons CDN) ──────────────────────────────────────────
-const _spotifyIconUrl     = 'https://cdn.simpleicons.org/spotify/1DB954';
-const _appleMusicIconUrl  = 'https://cdn.simpleicons.org/applemusic/fc3c44';
+const _spotifyIconUrl    = 'https://cdn.simpleicons.org/spotify/1DB954';
+const _appleMusicIconUrl = 'https://cdn.simpleicons.org/applemusic/fc3c44';
 
-// ─── MODELS ─────────────────────────────────────────────────────────────────
-class ArtistResult {
-  final String name;
-  final String genre;
-  final String imageUrl;
-  const ArtistResult({
-    required this.name,
-    required this.genre,
-    required this.imageUrl,
-  });
-}
-
+// ─── CREDITS MODEL (unchanged) ───────────────────────────────────────────────
 class CreditEntry {
   String name;
   String role;
   String ipi;
   CreditEntry({this.name = '', this.role = '', this.ipi = ''});
-}
-
-// NEW — featured / secondary artist entry
-class _FeaturedArtistEntry {
-  ArtistResult artist;
-  String role; // 'Featuring Artist' or 'Secondary Artist'
-  String url;  // optional Spotify/Apple Music profile link
-  // Which track (matched by title) this artist is featured on. Empty
-  // means unassigned — resolved automatically to the release's only
-  // track when there's no ambiguity, or left for the admin/artist to
-  // pick via the track dropdown when there's more than one track.
-  // This is what keeps featured artists from different tracks from
-  // collapsing into a single undifferentiated list.
-  String track;
-  _FeaturedArtistEntry({
-    required this.artist,
-    this.role = 'Featuring Artist',
-    this.url = '',
-    this.track = '',
-  });
 }
 
 // ─── CONSTANTS ──────────────────────────────────────────────────────────────
@@ -101,58 +72,11 @@ const _writerRoles = [
   'Arranger', 'Top-Liner', 'Concept Writer',
 ];
 
-// Version options for the release (single / EP / album track version)
 const _versionOptions = [
   'Original', 'Radio Edit', 'Extended Mix', 'Remix', 'Acoustic',
   'Live', 'Instrumental', 'Remastered', 'Cover', 'Sped Up', 'Slowed',
   'Other',
 ];
-
-// NEW — featured artist role options
-const _featuredRoleOptions = ['Featuring Artist', 'Secondary Artist'];
-
-// ── SHARED ARTIST SEARCH (no state — used by both Main and Featured) ───────
-// Extracted so both search boxes can share the exact same logic without
-// duplicating it, and so we can guard against out-of-order responses.
-Future<List<ArtistResult>> _searchArtistsRemote(String q) async {
-  final itunesUrl = Uri.parse(
-      'https://itunes.apple.com/search?term=${Uri.encodeComponent(q)}'
-          '&entity=musicArtist&limit=8&media=music');
-  final proxies = [
-    'https://corsproxy.io/?${Uri.encodeComponent(itunesUrl.toString())}',
-    'https://api.allorigins.win/raw?url=${Uri.encodeComponent(itunesUrl.toString())}',
-  ];
-  for (final proxy in proxies) {
-    try {
-      final res = await http
-          .get(Uri.parse(proxy))
-          .timeout(const Duration(seconds: 6));
-      if (res.statusCode == 200) {
-        var body = res.body;
-        try {
-          final outer = jsonDecode(body) as Map?;
-          if (outer != null && outer.containsKey('contents')) {
-            body = outer['contents'] as String;
-          }
-        } catch (_) {}
-        final data    = jsonDecode(body) as Map?;
-        final results = (data?['results'] as List?) ?? [];
-        if (results.isNotEmpty) {
-          return results
-              .where((r) => r['artistName'] != null)
-              .map((r) => ArtistResult(
-            name: r['artistName'] as String,
-            genre: (r['primaryGenreName'] as String?) ?? '',
-            imageUrl: ((r['artworkUrl100'] as String?) ?? '')
-                .replaceAll('100x100bb', '300x300bb'),
-          ))
-              .toList();
-        }
-      }
-    } catch (_) {}
-  }
-  return [];
-}
 
 // ════════════════════════════════════════════════════════════════════════════
 //  SCREEN
@@ -168,7 +92,6 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
     with TickerProviderStateMixin {
 
   // ── controllers ─────────────────────────────────────────────────────────
-  final _artistCtrl    = TextEditingController();
   final _titleCtrl     = TextEditingController();
   final _languageCtrl  = TextEditingController();
   final _labelCtrl     = TextEditingController();
@@ -187,48 +110,29 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
   String    _explicit    = 'No';
   DateTime? _releaseDate;
 
-  // song details / ownership state
-  String     _previouslyReleased        = 'No';       // Yes / No radio
-  String     _version                   = 'Original'; // dropdown, required
-  String     _vocalType                 = 'Vocals';   // Vocals / Instrumental radio
-  bool       _originalOwnershipConfirmed = false;      // agreement checkbox, required
-  DateTime?  _previousReleaseDate;                     // only used when previouslyReleased == 'Yes'
+  String     _previouslyReleased         = 'No';
+  String     _version                    = 'Original';
+  String     _vocalType                  = 'Vocals';
+  bool       _originalOwnershipConfirmed = false;
+  DateTime?  _previousReleaseDate;
 
-  final List<ArtistResult> _selectedArtists = [];
-  List<ArtistResult>       _searchResults   = [];
-  bool                     _searching       = false;
-  Timer?                   _searchTimer;
-  int                      _mainSearchGen   = 0; // guards against stale responses
+  // NEW — payment verification state
+  String? _paymentReference;
+  bool    _paymentVerified  = false;
+  bool    _paymentArgLoaded = false;
 
-  final _artistFocus     = FocusNode();
-  final _artistLayerLink = LayerLink();
-  OverlayEntry? _overlayEntry;
+  // NEW — read-only artist data synced straight from Upload Files.
+  // Each entry: { 'title': String, 'url': String,
+  //               'artists': List<Map<String,String>> [{name,type,spotifyUrl,appleUrl}] }
+  // This is the ONLY source of artist info on this screen now — there is
+  // no search, add, edit, or remove here. If anything about an artist is
+  // wrong, the fix happens on Upload Files, so the two screens can never
+  // disagree about who's tagged what. Per-track separation is preserved
+  // end-to-end so a Track 1 featuring vs. Track 2 featuring never bleeds
+  // together on an EP/Album.
+  String? _coverUrl;
+  List<Map<String, dynamic>> _audioFiles = [];
 
-  // NEW — Featured / Secondary Artists state
-  String _hasFeaturedArtists = 'No';
-  final List<_FeaturedArtistEntry> _featuredArtists = [];
-  final _featArtistCtrl    = TextEditingController();
-  final _featArtistFocus   = FocusNode();
-  final _featArtistLayerLink = LayerLink();
-  OverlayEntry? _featOverlayEntry;
-  List<ArtistResult> _featSearchResults = [];
-  bool                _featSearching     = false;
-  Timer?              _featSearchTimer;
-  int                 _featSearchGen     = 0;
-
- // NEW — payment verification state
-    String? _paymentReference;
-    bool    _paymentVerified  = false;
-    bool    _paymentArgLoaded = false;
-
-    // NEW — files carried forward from Upload, saved onto the submission
-    // doc in Firestore so they're never only findable in a one-time email.
-    // Each entry now also carries `featuring` per track (previously only
-    // title/artist/url made it across), so per-track featured artists are
-    // never dropped or forced into one release-wide bucket.
-    String? _coverUrl;
-    List<Map<String, String>> _audioFiles = [];
-  // producer, musician, writer only (no publishing)
   final Map<String, List<CreditEntry>> _credits = {
     'producer': [],
     'musician': [],
@@ -260,52 +164,57 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
             .animate(CurvedAnimation(
             parent: _entranceCtrl, curve: Curves.easeOutCubic));
     _entranceCtrl.forward();
-    _artistFocus.addListener(_onArtistFocusChange);
-    _featArtistFocus.addListener(_onFeatArtistFocusChange);
   }
 
-  // NEW — reads the payment reference passed from Upload, then verifies it
-  // against the pendingPayments collection written by the webhook.
   @override
-     void didChangeDependencies() {
-       super.didChangeDependencies();
-       if (!_paymentArgLoaded) {
-         final args = ModalRoute.of(context)?.settings.arguments;
-         if (args is Map) {
-           final ref = args['paymentReference'];
-           if (ref is String && ref.isNotEmpty) {
-             _paymentReference = ref;
-             _verifyPayment(ref);
-           }
-           final cover = args['coverUrl'];
-           if (cover is String && cover.isNotEmpty) _coverUrl = cover;
-           final audio = args['audioFiles'];
-           if (audio is List) {
-             _audioFiles = audio
-                 .whereType<Map>()
-                 .map((m) => {
-                       'title':     (m['title']     ?? '').toString(),
-                       'artist':    (m['artist']    ?? '').toString(),
-                       'featuring': (m['featuring'] ?? '').toString(),
-                       'url':       (m['url']       ?? '').toString(),
-                     })
-                 .where((m) => (m['url'] ?? '').isNotEmpty)
-                 .toList();
-           }
-         } else if (args is String && args.isNotEmpty) {
-           // Backward-compatible fallback in case anything still sends the
-           // old raw-string payment reference.
-           _paymentReference = args;
-           _verifyPayment(args);
-         }
-         // Carry Main Artist / Release Title / per-track Featuring over
-         // from the Files/Upload screen, mirroring the web Release Info
-         // page — done once, right after the incoming arguments (including
-         // _audioFiles) have been parsed above.
-         _prefillFromUpload();
-         _paymentArgLoaded = true;
-       }
-     }
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_paymentArgLoaded) {
+      final args = ModalRoute.of(context)?.settings.arguments;
+      if (args is Map) {
+        final ref = args['paymentReference'];
+        if (ref is String && ref.isNotEmpty) {
+          _paymentReference = ref;
+          _verifyPayment(ref);
+        }
+        final cover = args['coverUrl'];
+        if (cover is String && cover.isNotEmpty) _coverUrl = cover;
+
+        // Parse the NEW per-track artists shape passed from Upload Files:
+        // audioFiles: [{ title, artists: [{name,type,spotifyUrl,appleUrl}], url }]
+        final audio = args['audioFiles'];
+        if (audio is List) {
+          _audioFiles = audio.whereType<Map>().map((m) {
+            final rawArtists = m['artists'];
+            final artists = <Map<String, String>>[];
+            if (rawArtists is List) {
+              for (final a in rawArtists) {
+                if (a is Map) {
+                  artists.add({
+                    'name':       (a['name'] ?? '').toString(),
+                    'type':       (a['type'] ?? 'featured').toString(),
+                    'spotifyUrl': (a['spotifyUrl'] ?? '').toString(),
+                    'appleUrl':   (a['appleUrl'] ?? '').toString(),
+                  });
+                }
+              }
+            }
+            return {
+              'title':   (m['title'] ?? '').toString(),
+              'url':     (m['url'] ?? '').toString(),
+              'artists': artists,
+            };
+          }).where((m) => (m['url'] as String).isNotEmpty).toList();
+        }
+      } else if (args is String && args.isNotEmpty) {
+        // Backward-compatible fallback for a raw payment reference string.
+        _paymentReference = args;
+        _verifyPayment(args);
+      }
+      _prefillTitleFromUpload();
+      _paymentArgLoaded = true;
+    }
+  }
 
   Future<void> _verifyPayment(String reference) async {
     try {
@@ -321,230 +230,84 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
     }
   }
 
-  // NEW — mirrors the web version's prefillFromUpload(): carries Main
-  // Artist, Release Title, and per-track Featuring over from the
-  // Files/Upload screen so none of it needs to be retyped here. Crucially,
-  // each featured artist is pulled and tagged PER TRACK — never merged
-  // across tracks — so a track with "Wizkid, Tems" in its Featuring field
-  // becomes two entries, both correctly tied to that same track, and they
-  // never bleed into another track's featured artist list.
-  void _prefillFromUpload() {
-    if (_audioFiles.isEmpty) return;
-
-    final firstTrack = _audioFiles.first;
-
-    // Main artist — taken from the first track (tracks on one release are
-    // almost always credited to the same main artist).
-    final firstArtist = (firstTrack['artist'] ?? '').trim();
-    if (firstArtist.isNotEmpty &&
-        !_selectedArtists
-            .any((a) => a.name.toLowerCase() == firstArtist.toLowerCase())) {
-      _selectedArtists.add(ArtistResult(name: firstArtist, genre: '', imageUrl: ''));
-    }
-
-    // Release title — only safe to prefill for a single track, since for
-    // an EP/Album the overall release title is usually different from any
-    // one track's title.
+  // Only safe to prefill the release title for a single-track release —
+  // for an EP/Album the overall title is usually different from any one
+  // track's title.
+  void _prefillTitleFromUpload() {
     if (_audioFiles.length == 1) {
-      final title = (firstTrack['title'] ?? '').trim();
+      final title = (_audioFiles.first['title'] as String? ?? '').trim();
       if (title.isNotEmpty && _titleCtrl.text.trim().isEmpty) {
         _titleCtrl.text = title;
       }
     }
-
-    // Featuring artist(s) — pulled per TRACK, not merged across tracks.
-    var anyFeaturing = false;
-    for (final f in _audioFiles) {
-      final featuring = (f['featuring'] ?? '').trim();
-      if (featuring.isEmpty) continue;
-      final names = featuring
-          .split(',')
-          .map((s) => s.trim())
-          .where((s) => s.isNotEmpty);
-      for (final name in names) {
-        if (_featuredArtists
-            .any((x) => x.artist.name.toLowerCase() == name.toLowerCase())) {
-          continue;
-        }
-        final trackTitle = (f['title'] ?? '').trim();
-        final resolvedTrack = trackTitle.isNotEmpty
-            ? trackTitle
-            : (_audioFiles.length == 1 ? (firstTrack['title'] ?? '') : '');
-        _featuredArtists.add(_FeaturedArtistEntry(
-          artist: ArtistResult(name: name, genre: '', imageUrl: ''),
-          track: resolvedTrack,
-        ));
-        anyFeaturing = true;
-      }
-    }
-    if (anyFeaturing) _hasFeaturedArtists = 'Yes';
-
     if (mounted) setState(() {});
   }
 
-  @override
-  void dispose() {
-    _entranceCtrl.dispose();
-    _artistFocus.removeListener(_onArtistFocusChange);
-    _artistFocus.dispose();
-    _searchTimer?.cancel();
-    _removeOverlay();
-    _featArtistFocus.removeListener(_onFeatArtistFocusChange);
-    _featArtistFocus.dispose();
-    _featSearchTimer?.cancel();
-    _removeFeatOverlay();
-    _featArtistCtrl.dispose();
-    for (final c in [
-      _artistCtrl, _titleCtrl, _languageCtrl,
-      _labelCtrl, _copyrightCtrl, _isrcCtrl, _upcCtrl, _catalogCtrl,
-      _emailCtrl, _phoneCtrl, _lyricsCtrl,
-    ]) {
-      c.dispose();
+  // ── DERIVED — union of every artist tagged "main" across all tracks,
+  // deduped by name (case-insensitive). Almost always a single name for
+  // a normal release, but this stays general in case tracks differ. ──
+  List<String> get _mainArtistNames {
+    final names = <String>[];
+    for (final t in _audioFiles) {
+      final artists = (t['artists'] as List<Map<String, String>>? ?? []);
+      for (final a in artists) {
+        if (a['type'] == 'main') {
+          final n = a['name'] ?? '';
+          if (n.isNotEmpty &&
+              !names.any((x) => x.toLowerCase() == n.toLowerCase())) {
+            names.add(n);
+          }
+        }
+      }
     }
-    super.dispose();
+    return names;
   }
 
-  // ── MAIN ARTIST SEARCH ──────────────────────────────────────────────────
-  void _onArtistFocusChange() {
-    if (!_artistFocus.hasFocus) {
-      Future.delayed(const Duration(milliseconds: 200), _removeOverlay);
+  // Plain-text "Featuring" breakdown for the admin email — grouped by
+  // track so nothing gets merged across tracks.
+  String _formatFeaturingForEmail() {
+    final lines = <String>[];
+    for (int i = 0; i < _audioFiles.length; i++) {
+      final t = _audioFiles[i];
+      final artists = (t['artists'] as List<Map<String, String>>? ?? []);
+      final others = artists.where((a) => a['type'] != 'main').toList();
+      if (others.isEmpty) continue;
+      final title = t['title'] as String? ?? '';
+      final label = t['type'] == 'main' ? 'Main' : '';
+      final names = others.map((a) {
+        final type = a['type'] ?? 'featured';
+        final typeLabel = type == 'featured' ? 'Featured' : 'Secondary';
+        return '${a['name']} ($typeLabel)';
+      }).join(', ');
+      lines.add('Track ${i + 1}${title.isNotEmpty ? ' — $title' : ''}: $names');
     }
+    return lines.isEmpty ? 'None' : lines.join('\n');
   }
 
-  void _onArtistInput(String q) {
-    _searchTimer?.cancel();
-    if (q.trim().length < 2) { _removeOverlay(); return; }
-    _searchTimer = Timer(
-        const Duration(milliseconds: 400), () => _doSearch(q.trim()));
+  // Structured payload for the admin email / backend — one entry per
+  // track, each with its full tagged artist list (name, type, links).
+  List<Map<String, dynamic>> _getEmailArtistsPayload() {
+    return _audioFiles.map((t) {
+      return {
+        'track': t['title'] ?? '',
+        'artists': (t['artists'] as List<Map<String, String>>? ?? [])
+            .map((a) => {
+                  'name':       a['name'] ?? '',
+                  'type':       a['type'] ?? 'featured',
+                  'spotifyUrl': a['spotifyUrl'] ?? '',
+                  'appleUrl':   a['appleUrl'] ?? '',
+                })
+            .toList(),
+      };
+    }).toList();
   }
 
-  // FIXED — guards against stale/out-of-order responses using a generation
-  // counter. Previously, a slower earlier request could overwrite a faster
-  // later one with empty results, making it look like search needed
-  // several retries before it "worked".
-  Future<void> _doSearch(String q) async {
-    final myGen = ++_mainSearchGen;
-    setState(() { _searching = true; _searchResults = []; });
-    _showOverlay();
-    final results = await _searchArtistsRemote(q);
-    if (myGen != _mainSearchGen) return; // a newer search superseded this one
-    if (!mounted) return;
-    setState(() { _searchResults = results; _searching = false; });
-    _showOverlay();
-  }
-
-  void _showOverlay() {
-    _removeOverlay();
-    final overlay = Overlay.of(context);
-    _overlayEntry = OverlayEntry(
-      builder: (_) => _ArtistDropdown(
-        link:      _artistLayerLink,
-        results:   _searchResults,
-        searching: _searching,
-        query:     _artistCtrl.text.trim(),
-        onSelect: (artist) {
-          _addArtist(artist);
-          _removeOverlay();
-          _artistCtrl.clear();
-        },
-        onAddNew: (name) {
-          _addArtist(ArtistResult(name: name, genre: '', imageUrl: ''));
-          _removeOverlay();
-          _artistCtrl.clear();
-        },
-      ),
-    );
-    overlay.insert(_overlayEntry!);
-  }
-
-  void _removeOverlay() {
-    _overlayEntry?.remove();
-    _overlayEntry = null;
-  }
-
-  void _addArtist(ArtistResult a) {
-    if (_selectedArtists
-        .any((x) => x.name.toLowerCase() == a.name.toLowerCase())) return;
-    setState(() => _selectedArtists.add(a));
-  }
-
-  // ── FEATURED / SECONDARY ARTIST SEARCH (mirrors main artist search) ─────
-  void _onFeatArtistFocusChange() {
-    if (!_featArtistFocus.hasFocus) {
-      Future.delayed(const Duration(milliseconds: 200), _removeFeatOverlay);
-    }
-  }
-
-  void _onFeatArtistInput(String q) {
-    _featSearchTimer?.cancel();
-    if (q.trim().length < 2) { _removeFeatOverlay(); return; }
-    _featSearchTimer = Timer(
-        const Duration(milliseconds: 400), () => _doFeatSearch(q.trim()));
-  }
-
-  Future<void> _doFeatSearch(String q) async {
-    final myGen = ++_featSearchGen;
-    setState(() { _featSearching = true; _featSearchResults = []; });
-    _showFeatOverlay();
-    final results = await _searchArtistsRemote(q);
-    if (myGen != _featSearchGen) return;
-    if (!mounted) return;
-    setState(() { _featSearchResults = results; _featSearching = false; });
-    _showFeatOverlay();
-  }
-
-  void _showFeatOverlay() {
-    _removeFeatOverlay();
-    final overlay = Overlay.of(context);
-    _featOverlayEntry = OverlayEntry(
-      builder: (_) => _ArtistDropdown(
-        link:      _featArtistLayerLink,
-        results:   _featSearchResults,
-        searching: _featSearching,
-        query:     _featArtistCtrl.text.trim(),
-        onSelect: (artist) {
-          _addFeaturedArtist(artist);
-          _removeFeatOverlay();
-          _featArtistCtrl.clear();
-        },
-        onAddNew: (name) {
-          _addFeaturedArtist(ArtistResult(name: name, genre: '', imageUrl: ''));
-          _removeFeatOverlay();
-          _featArtistCtrl.clear();
-        },
-      ),
-    );
-    overlay.insert(_featOverlayEntry!);
-  }
-
-  void _removeFeatOverlay() {
-    _featOverlayEntry?.remove();
-    _featOverlayEntry = null;
-  }
-
-  // CHANGED — accepts an optional `track` tag so a featured artist can be
-  // tied to a specific track from the moment it's added (used both by the
-  // manual search-and-select flow below, and by _prefillFromUpload above).
-  // With only one track on the release there's no ambiguity, so it's
-  // auto-resolved; with several, it starts unassigned until picked via the
-  // track dropdown in _featuredArtistCard.
-  void _addFeaturedArtist(ArtistResult a, {String? track}) {
-    if (_featuredArtists
-        .any((x) => x.artist.name.toLowerCase() == a.name.toLowerCase())) return;
-    final resolvedTrack = (track != null && track.trim().isNotEmpty)
-        ? track.trim()
-        : (_audioFiles.length == 1 ? (_audioFiles.first['title'] ?? '') : '');
-    setState(() => _featuredArtists.add(
-        _FeaturedArtistEntry(artist: a, track: resolvedTrack)));
-  }
-
-  String _formatFeaturedArtists() {
-    if (_featuredArtists.isEmpty) return 'None';
-    return _featuredArtists.map((e) {
-      var line = '${e.artist.name} (${e.role})';
-      if (e.url.trim().isNotEmpty) line += ' — ${e.url.trim()}';
-      return line;
-    }).join('\n');
+  Future<void> _openUrl(String url) async {
+    final uri = Uri.tryParse(url);
+    if (uri == null) return;
+    try {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } catch (_) {}
   }
 
   // ── CREDITS ──────────────────────────────────────────────────────────────
@@ -601,7 +364,7 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
   }
 
   // ── NOTIFICATIONS (own backend) ────────────────────────────────────────
- static const _notifyUrl = 'https://four44music-broadcast-backend.onrender.com/api/submissions/notify';
+  static const _notifyUrl = 'https://four44music-broadcast-backend.onrender.com/api/submissions/notify';
   static const _appSecret = 'e993b17f0762667e27d5298839dacff4a7409bb74e11e9ecaf0bb2bb647120a8';
 
   String _formatCredits(List<CreditEntry> list) {
@@ -623,7 +386,7 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
       'email':          data['email'],
       'artist_name':    data['artistName'],
       'release_title':  data['releaseTitle'],
-      'featuring':      _formatFeaturedArtists(),
+      'featuring':      _formatFeaturingForEmail(),
       'release_type':   data['releaseType'],
       'genre':          data['genre'],
       'language':       (data['language'] as String).isEmpty
@@ -644,7 +407,6 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
           ? 'Auto-assign' : data['upc'],
       'catalog_number': (data['catalogNumber'] as String).isEmpty
           ? 'Not provided' : data['catalogNumber'],
-      // song details / ownership fields
       'version':               data['version'],
       'previously_released':   data['previouslyReleased'],
       'previous_release_date': (data['previousReleaseDate'] as String).isEmpty
@@ -659,15 +421,12 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
       'publishers':     'N/A',
       'lyrics':         (data['lyrics'] as String).isEmpty
           ? 'Not provided' : data['lyrics'],
-     'submitted_at':   DateTime.now().toLocal().toString(),
-            'status':         'Pending',
-            // NEW — payment status, always shown to admin regardless of frontend state
-            'payment_status': _paymentVerified ? 'Paid' : 'Not confirmed',
-            // NEW — cover art + audio links, embedded straight in the same
-            // admin email so nothing needs to be dug up separately later
-            'cover_url':   data['coverURL'] ?? '',
-            'audio_files': data['audioFiles'] ?? [],
-          };
+      'submitted_at':   DateTime.now().toLocal().toString(),
+      'status':         'Pending',
+      'payment_status': _paymentVerified ? 'Paid' : 'Not confirmed',
+      'cover_url':      data['coverURL'] ?? '',
+      'audio_files':    data['audioFiles'] ?? [],
+    };
 
     try {
       final response = await http
@@ -688,17 +447,17 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
 
   // ── VALIDATION ───────────────────────────────────────────────────────────
   String? _validate() {
-    if (_selectedArtists.isEmpty) return 'Please add at least one artist.';
+    if (_mainArtistNames.isEmpty) {
+      return 'No Main artist was found from your upload. Please go back to Upload Files and tag at least one artist as Main.';
+    }
     if (_titleCtrl.text.trim().isEmpty) return 'Release title is required.';
     if (_releaseDate == null) return 'Please select a release date.';
 
-    // Producer name is mandatory — at least one producer with a name
     final producers = _credits['producer']!;
     if (producers.isEmpty || producers.every((p) => p.name.trim().isEmpty)) {
       return 'Please add at least one producer name.';
     }
 
-    // version, previous-release status, and ownership agreement
     if (_version.trim().isEmpty) return 'Please select a version for this track.';
     if (_previouslyReleased.trim().isEmpty) {
       return 'Please indicate if this song has been released before.';
@@ -727,34 +486,8 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
     try {
       final user = FirebaseAuth.instance.currentUser;
 
-      // Merge each featured artist's track-tag into that specific track's
-      // own `featuring` value (mirrors the web fix), so the admin email's
-      // Audio Files section can show — per track — exactly which artist is
-      // featured on it, instead of every featured artist across every
-      // track being combined into one undifferentiated bucket. The
-      // separate merged "Featuring" summary (_formatFeaturedArtists,
-      // built from the full _featuredArtists list) is left completely
-      // as-is — this only ADDS the per-track breakdown alongside it.
-      final audioFilesWithFeaturing = _audioFiles.map((f) {
-        final title = f['title'] ?? '';
-        final namesForThisTrack = _featuredArtists
-            .where((fe) => fe.track.isNotEmpty && fe.track == title)
-            .map((fe) => fe.artist.name)
-            .toList();
-        final existingNames = (f['featuring'] ?? '')
-            .split(',')
-            .map((s) => s.trim())
-            .where((s) => s.isNotEmpty)
-            .toList();
-        final combined = <String>{...existingNames, ...namesForThisTrack}.toList();
-        return {
-          ...f,
-          'featuring': combined.join(', '),
-        };
-      }).toList();
-
       final data = {
-        'artistName':    _selectedArtists.map((a) => a.name).join(', '),
+        'artistName':    _mainArtistNames.join(', '),
         'releaseTitle':  _titleCtrl.text.trim(),
         'releaseType':   _releaseType,
         'genre':         _genre,
@@ -770,7 +503,6 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
         'upc':           _upcCtrl.text.trim(),
         'catalogNumber': _catalogCtrl.text.trim(),
         'lyrics':        _lyricsCtrl.text.trim(),
-        // song details / ownership
         'version':               _version,
         'previouslyReleased':    _previouslyReleased,
         'previousReleaseDate':   _previouslyReleased == 'Yes'
@@ -789,37 +521,26 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
               .map((c) => {'name': c.name, 'role': c.role, 'ipi': c.ipi})
               .toList(),
         },
-        // NEW — featured / secondary artists, structured for the admin side.
-        // Now also carries `track`, so which track each entry belongs to
-        // is preserved on the submission itself, not just at email time.
-        'featuredArtists': _featuredArtists.map((e) => {
-          'name':  e.artist.name,
-          'role':  e.role,
-          'url':   e.url.trim(),
-          'track': e.track.trim(),
-        }).toList(),
-        // NEW — payment status, recorded on the submission itself
-                 'paid':             _paymentVerified ? 'Paid' : 'Unpaid',
-                 'paymentReference': _paymentReference ?? '',
-                 // NEW — real Cloudinary URLs, saved permanently on the submission
-                 // so they're always findable later (Pay Now resend, admin lookup)
-                 // instead of only ever existing in a one-time email. Each entry's
-                 // `featuring` value is the merged, track-tagged version above.
-                 'coverURL':   _coverUrl ?? '',
-                 'audioFiles': audioFilesWithFeaturing,
-       'userId':    user?.uid ?? '',
-               'createdAt': DateTime.now().millisecondsSinceEpoch,
-               'status':    _paymentVerified ? 'Review' : 'Pending',
-             };
+        // Structured per-track artist payload for the admin side — each
+        // track keeps its own full tagged artist list (Main/Featured/
+        // Secondary + Spotify/Apple links), never merged across tracks.
+        'featuredArtists': _getEmailArtistsPayload(),
+        'paid':             _paymentVerified ? 'Paid' : 'Unpaid',
+        'paymentReference': _paymentReference ?? '',
+        'coverURL':   _coverUrl ?? '',
+        'officialCoverURL': _coverUrl ?? '',
+        // Saved exactly as synced from Upload Files — title, url, and the
+        // full per-track artists array — so nothing about who's featured
+        // where is ever lost or re-merged after this screen.
+        'audioFiles': _audioFiles,
+        'userId':    user?.uid ?? '',
+        'createdAt': DateTime.now().millisecondsSinceEpoch,
+        'status':    _paymentVerified ? 'Review' : 'Pending',
+      };
 
-      // 1 ── Save to Firestore
       await FirebaseFirestore.instance.collection('submissions').add(data);
-
-      // 2 ── Send notification emails via our own backend
       await _sendEmails(data);
 
-      // 3 ── NEW — mark the payment as claimed so the resume banner on
-      // Pricing doesn't show it as unclaimed anymore
       if (_paymentVerified && _paymentReference != null) {
         try {
           await FirebaseFirestore.instance
@@ -840,6 +561,19 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
         _statusMsg  = 'Something went wrong. Please try again.';
       });
     }
+  }
+
+  @override
+  void dispose() {
+    _entranceCtrl.dispose();
+    for (final c in [
+      _titleCtrl, _languageCtrl,
+      _labelCtrl, _copyrightCtrl, _isrcCtrl, _upcCtrl, _catalogCtrl,
+      _emailCtrl, _phoneCtrl, _lyricsCtrl,
+    ]) {
+      c.dispose();
+    }
+    super.dispose();
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -869,39 +603,17 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
                     children: [
                       const SizedBox(height: 8),
 
-                      // ── Artist Info ──────────────────────────────────────
+                      // ── Artist & Featuring — READ ONLY, synced ──────────
                       _sectionHeader(Icons.person_outline_rounded,
-                          'Artist Information',
-                          'Search and select your artist profile'),
-                      _buildArtistSearch(),
+                          'Artist & Featuring',
+                          'Synced from Upload Files — read only'),
+                      _buildArtistSummarySection(),
                       const SizedBox(height: 16),
                       _inputField('Phone Number', _phoneCtrl,
                           '+1 000 000 0000',
                           required: false,
                           keyboardType: TextInputType.phone),
                       _buildCountryRow(),
-
-                      // ── Featured & Secondary Artists (NEW) ───────────────
-                      _sectionHeader(Icons.group_add_outlined,
-                          'Featured & Secondary Artists',
-                          'Optional — add other artists on this track'),
-                      _radioField(
-                        'Add a featured or secondary artist?',
-                        _hasFeaturedArtists,
-                        const ['No', 'Yes'],
-                            (v) => setState(() => _hasFeaturedArtists = v),
-                      ),
-                      AnimatedSize(
-                        duration: const Duration(milliseconds: 220),
-                        curve: Curves.easeOut,
-                        alignment: Alignment.topCenter,
-                        child: _hasFeaturedArtists == 'Yes'
-                            ? Padding(
-                          padding: const EdgeInsets.only(top: 14),
-                          child: _buildFeaturedArtistsPanel(),
-                        )
-                            : const SizedBox(width: double.infinity),
-                      ),
 
                       // ── Release Details ──────────────────────────────────
                       _sectionHeader(Icons.music_note_outlined,
@@ -1055,7 +767,7 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
     );
   }
 
-  // ── TOP BAR ──────────────────────────────────────────────────────────────
+  // ── TOP BAR (Secure badge removed — matches web release-info.html) ──────
   Widget _buildTopBar(double top) {
     return Container(
       padding: EdgeInsets.only(top: top),
@@ -1088,27 +800,6 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
                       color: _white,
                       fontSize: 17,
                       fontWeight: FontWeight.w700)),
-            ),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-              decoration: BoxDecoration(
-                color: _white06,
-                borderRadius: BorderRadius.circular(99),
-                border: Border.all(color: _border),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.lock_outline_rounded,
-                      color: _grey, size: 10),
-                  const SizedBox(width: 5),
-                  Text('Secure',
-                      style: GoogleFonts.outfit(
-                          color: _grey,
-                          fontSize: 10,
-                          fontWeight: FontWeight.w600)),
-                ],
-              ),
             ),
           ],
         ),
@@ -1201,70 +892,105 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
     );
   }
 
-  // ── ARTIST SEARCH ─────────────────────────────────────────────────────────
-  Widget _buildArtistSearch() {
+  // ── READ-ONLY ARTIST SUMMARY (replaces the old search UI) ───────────────
+  Widget _buildArtistSummarySection() {
+    final mainNames = _mainArtistNames;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _fieldLabel('Main Artist (Primary)', required: true),
+        _fieldLabel('Main Artist', required: true),
         const SizedBox(height: 6),
-        CompositedTransformTarget(
-          link: _artistLayerLink,
-          child: Container(
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: _input,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: _border),
+          ),
+          child: mainNames.isEmpty
+              ? Text(
+              'No artist tagged "Main" was found — go back to Upload Files and tag one.',
+              style: GoogleFonts.inter(color: _red, fontSize: 12.5, height: 1.4))
+              : Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: mainNames.map((name) => _readOnlyPill(name)).toList(),
+          ),
+        ),
+
+        if (_audioFiles.isNotEmpty) ...[
+          const SizedBox(height: 16),
+          _fieldLabel('Per-Track Artists'),
+          const SizedBox(height: 8),
+          ..._audioFiles.asMap().entries.map(
+                  (e) => _trackArtistsCard(e.value, e.key)),
+        ],
+
+        const SizedBox(height: 12),
+        if (_audioFiles.isEmpty)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: _input,
+              color: const Color(0x18EF4444),
               borderRadius: BorderRadius.circular(10),
-              border: Border.all(
-                  color:
-                  _artistFocus.hasFocus ? _borderFocus : _border),
+              border: Border.all(color: const Color(0x33EF4444)),
             ),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            child: Column(
+            child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (_selectedArtists.isNotEmpty)
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: _selectedArtists
-                        .asMap()
-                        .entries
-                        .map((e) => _artistPill(e.value, e.key))
-                        .toList(),
+                const Icon(Icons.warning_amber_rounded, color: _red, size: 16),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'No artist details found from the Upload Files step. Please go back and add at least one artist tagged Main before continuing.',
+                    style: GoogleFonts.inter(color: _red, fontSize: 12, height: 1.45),
                   ),
-                if (_selectedArtists.isNotEmpty) const SizedBox(height: 8),
-                TextField(
-                  controller: _artistCtrl,
-                  focusNode: _artistFocus,
-                  style: GoogleFonts.inter(color: _white, fontSize: 14),
-                  decoration: InputDecoration(
-                    hintText: _selectedArtists.isEmpty
-                        ? 'Search artist on Apple Music…'
-                        : 'Add another artist…',
-                    hintStyle:
-                    GoogleFonts.inter(color: _greyDark, fontSize: 14),
-                    border: InputBorder.none,
-                    isDense: true,
-                    contentPadding:
-                    const EdgeInsets.symmetric(vertical: 4),
+                ),
+              ],
+            ),
+          )
+        else
+          GestureDetector(
+            onTap: () => Navigator.pop(context),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.info_outline_rounded, color: _greyDark, size: 13),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text.rich(
+                    TextSpan(
+                      style: GoogleFonts.inter(
+                          color: _greyDark, fontSize: 11.5, height: 1.5),
+                      children: [
+                        const TextSpan(
+                            text: 'Artist names, types, and links come from the '
+                                'Upload Files step. To change any of it, '),
+                        TextSpan(
+                          text: 'go back to Upload Files',
+                          style: GoogleFonts.inter(
+                              color: _grey,
+                              fontSize: 11.5,
+                              decoration: TextDecoration.underline),
+                        ),
+                        const TextSpan(text: '.'),
+                      ],
+                    ),
                   ),
-                  onChanged: _onArtistInput,
                 ),
               ],
             ),
           ),
-        ),
-        const SizedBox(height: 5),
-        Text('Results pulled from Apple Music',
-            style: GoogleFonts.inter(color: _greyDark, fontSize: 11)),
       ],
     );
   }
 
-  Widget _artistPill(ArtistResult a, int idx) {
+  Widget _readOnlyPill(String name) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(6, 4, 8, 4),
-      constraints: const BoxConstraints(maxWidth: 220),
+      padding: const EdgeInsets.fromLTRB(6, 4, 12, 4),
       decoration: BoxDecoration(
         color: _white10,
         borderRadius: BorderRadius.circular(99),
@@ -1276,96 +1002,29 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
           CircleAvatar(
             radius: 10,
             backgroundColor: _white20,
-            backgroundImage: a.imageUrl.isNotEmpty
-                ? NetworkImage(a.imageUrl)
-                : null,
-            child: a.imageUrl.isEmpty
-                ? Text(a.name[0].toUpperCase(),
+            child: Text(name.isNotEmpty ? name[0].toUpperCase() : '?',
                 style: GoogleFonts.outfit(
-                    color: _white70,
-                    fontSize: 9,
-                    fontWeight: FontWeight.w700))
-                : null,
+                    color: _white70, fontSize: 9, fontWeight: FontWeight.w700)),
           ),
           const SizedBox(width: 6),
-          Flexible(
-            child: Text(a.name,
-                overflow: TextOverflow.ellipsis,
-                style: GoogleFonts.inter(
-                    color: _white70,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500)),
-          ),
-          const SizedBox(width: 6),
-          GestureDetector(
-            onTap: () => setState(() => _selectedArtists.removeAt(idx)),
-            child: const Icon(Icons.close_rounded, color: _grey, size: 13),
-          ),
+          Text(name,
+              style: GoogleFonts.inter(
+                  color: _white70, fontSize: 12.5, fontWeight: FontWeight.w600)),
         ],
       ),
     );
   }
 
-  // ── FEATURED & SECONDARY ARTISTS PANEL (NEW) ──────────────────────────────
-  Widget _buildFeaturedArtistsPanel() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _fieldLabel('Search Artist'),
-        const SizedBox(height: 6),
-        CompositedTransformTarget(
-          link: _featArtistLayerLink,
-          child: Container(
-            decoration: BoxDecoration(
-              color: _input,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(
-                  color: _featArtistFocus.hasFocus ? _borderFocus : _border),
-            ),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            child: TextField(
-              controller: _featArtistCtrl,
-              focusNode: _featArtistFocus,
-              style: GoogleFonts.inter(color: _white, fontSize: 14),
-              decoration: InputDecoration(
-                hintText: 'Search artist on Apple Music…',
-                hintStyle: GoogleFonts.inter(color: _greyDark, fontSize: 14),
-                border: InputBorder.none,
-                isDense: true,
-                contentPadding: const EdgeInsets.symmetric(vertical: 4),
-              ),
-              onChanged: _onFeatArtistInput,
-            ),
-          ),
-        ),
-        const SizedBox(height: 5),
-        Text('Results pulled from Apple Music',
-            style: GoogleFonts.inter(color: _greyDark, fontSize: 11)),
-        if (_featuredArtists.isNotEmpty) ...[
-          const SizedBox(height: 14),
-          ..._featuredArtists.asMap().entries.map(
-                  (e) => _featuredArtistCard(e.value, e.key)),
-        ],
-      ],
-    );
-  }
-
-  Widget _featuredArtistCard(_FeaturedArtistEntry entry, int idx) {
-    // Distinct track titles across all uploaded tracks, used to populate
-    // the "which track" dropdown below. Only shown when there's more than
-    // one track — with a single track there's nothing to disambiguate.
-    final trackTitles = _audioFiles
-        .map((f) => f['title'] ?? '')
-        .where((t) => t.isNotEmpty)
-        .toSet()
-        .toList();
+  Widget _trackArtistsCard(Map<String, dynamic> track, int idx) {
+    final title    = track['title'] as String? ?? '';
+    final artists  = (track['artists'] as List<Map<String, String>>? ?? []);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: _surface,
-        borderRadius: BorderRadius.circular(10),
+        color: _card,
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(color: _border),
       ),
       child: Column(
@@ -1373,142 +1032,96 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
         children: [
           Row(
             children: [
-              CircleAvatar(
-                radius: 16,
-                backgroundColor: const Color(0xFF222222),
-                backgroundImage: entry.artist.imageUrl.isNotEmpty
-                    ? NetworkImage(entry.artist.imageUrl)
-                    : null,
-                child: entry.artist.imageUrl.isEmpty
-                    ? Text(
-                    entry.artist.name.isNotEmpty
-                        ? entry.artist.name[0].toUpperCase()
-                        : '?',
-                    style: GoogleFonts.outfit(
-                        color: _white70,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700))
-                    : null,
-              ),
-              const SizedBox(width: 10),
               Expanded(
-                child: Text(entry.artist.name,
-                    overflow: TextOverflow.ellipsis,
-                    style: GoogleFonts.inter(
-                        color: _white,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600)),
-              ),
-              GestureDetector(
-                onTap: () => setState(() => _featuredArtists.removeAt(idx)),
-                child: Container(
-                  width: 26, height: 26,
-                  decoration: BoxDecoration(
-                    color: const Color(0x18F87171),
-                    borderRadius: BorderRadius.circular(7),
-                    border: Border.all(color: const Color(0x33F87171)),
-                  ),
-                  child: const Icon(Icons.close_rounded,
-                      color: _red, size: 12),
+                child: Text(
+                  'Track ${idx + 1}${title.isNotEmpty ? ' — $title' : ''}',
+                  overflow: TextOverflow.ellipsis,
+                  style: GoogleFonts.outfit(
+                      color: _white70,
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.3),
                 ),
+              ),
+              Text(
+                '${artists.length} artist${artists.length == 1 ? '' : 's'}',
+                style: GoogleFonts.inter(color: _greyDark, fontSize: 10.5),
               ),
             ],
           ),
-          // NEW — "which track" picker. Only rendered when the release
-          // has more than one track, so each featured artist can be tied
-          // to the exact track it belongs to instead of being ambiguous.
-          if (trackTitles.length > 1) ...[
-            const SizedBox(height: 10),
-            Container(
-              decoration: BoxDecoration(
-                  color: _input,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: _border)),
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<String>(
-                  value: entry.track.isEmpty ? null : entry.track,
-                  isExpanded: true,
-                  hint: Text('Which track is this featured on?',
-                      style:
-                      GoogleFonts.inter(color: _greyDark, fontSize: 13)),
-                  dropdownColor: const Color(0xFF171717),
-                  icon: const Icon(Icons.keyboard_arrow_down_rounded,
-                      color: _grey, size: 16),
-                  style: GoogleFonts.inter(color: _white, fontSize: 13),
-                  items: trackTitles
-                      .map((t) => DropdownMenuItem(
-                      value: t,
-                      child: Text(t, overflow: TextOverflow.ellipsis)))
-                      .toList(),
-                  onChanged: (v) => setState(() => entry.track = v ?? ''),
-                ),
-              ),
-            ),
-          ],
-          const SizedBox(height: 10),
-          Container(
-            decoration: BoxDecoration(
-                color: _input,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: _border)),
-            padding: const EdgeInsets.symmetric(horizontal: 10),
-            child: DropdownButtonHideUnderline(
-              child: DropdownButton<String>(
-                value: entry.role,
-                isExpanded: true,
-                dropdownColor: const Color(0xFF171717),
-                icon: const Icon(Icons.keyboard_arrow_down_rounded,
-                    color: _grey, size: 16),
-                style: GoogleFonts.inter(color: _white, fontSize: 13),
-                items: _featuredRoleOptions
-                    .map((r) => DropdownMenuItem(
-                    value: r,
-                    child: Text(r, overflow: TextOverflow.ellipsis)))
-                    .toList(),
-                onChanged: (v) => setState(
-                        () => entry.role = v ?? 'Featuring Artist'),
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
-            decoration: BoxDecoration(
-              color: _input,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: _border),
-            ),
-            child: Row(
-              children: [
-                _MiniBrandIcon(
-                    url: _spotifyIconUrl,
-                    fallbackIcon: Icons.music_note_rounded),
-                const SizedBox(width: 6),
-                _MiniBrandIcon(
-                    url: _appleMusicIconUrl,
-                    fallbackIcon: Icons.apple_rounded),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: TextField(
-                    onChanged: (v) => entry.url = v,
-                    style: GoogleFonts.inter(color: _white, fontSize: 12.5),
-                    decoration: InputDecoration(
-                      hintText: 'Paste Spotify or Apple Music link (optional)',
-                      hintStyle:
-                      GoogleFonts.inter(color: _greyDark, fontSize: 12),
-                      isDense: true,
-                      border: InputBorder.none,
-                      contentPadding:
-                      const EdgeInsets.symmetric(vertical: 10),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
+          const SizedBox(height: 8),
+          if (artists.isEmpty)
+            Text('No artists on this track.',
+                style: GoogleFonts.inter(color: _greyDark, fontSize: 12))
+          else
+            ...artists.map((a) => _trackArtistChip(a)),
         ],
       ),
+    );
+  }
+
+  Widget _trackArtistChip(Map<String, String> a) {
+    final type     = a['type'] ?? 'featured';
+    final isMain   = type == 'main';
+    final typeLabel = isMain ? 'Main' : type == 'featured' ? 'Featured' : 'Secondary';
+    final spotify  = a['spotifyUrl'] ?? '';
+    final apple    = a['appleUrl'] ?? '';
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: _input,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: isMain ? _greenBorder : _border),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+            decoration: BoxDecoration(
+              color: isMain ? _greenDim : _white06,
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: isMain ? _greenBorder : _border),
+            ),
+            child: Text(typeLabel.toUpperCase(),
+                style: GoogleFonts.inter(
+                    color: isMain ? _green : _grey,
+                    fontSize: 8.5,
+                    fontWeight: FontWeight.w800)),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(a['name'] ?? '',
+                overflow: TextOverflow.ellipsis,
+                style: GoogleFonts.inter(
+                    color: _white, fontSize: 13, fontWeight: FontWeight.w600)),
+          ),
+          _trackLinkIcon(spotify, _spotifyIconUrl),
+          _trackLinkIcon(apple, _appleMusicIconUrl),
+        ],
+      ),
+    );
+  }
+
+  Widget _trackLinkIcon(String url, String iconUrl) {
+    final icon = SizedBox(
+      width: 13, height: 13,
+      child: Image.network(
+        iconUrl,
+        errorBuilder: (_, __, ___) =>
+            const Icon(Icons.music_note_rounded, size: 12, color: _grey),
+      ),
+    );
+    if (url.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 3),
+        child: Opacity(opacity: 0.28, child: icon),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 3),
+      child: GestureDetector(onTap: () => _openUrl(url), child: icon),
     );
   }
 
@@ -2195,259 +1808,6 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen>
           ),
         );
       }).toList(),
-    );
-  }
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-//  MINI BRAND ICON — small SVG icon with a safe fallback if the CDN fails
-// ════════════════════════════════════════════════════════════════════════════
-class _MiniBrandIcon extends StatelessWidget {
-  final String url;
-  final IconData fallbackIcon;
-  const _MiniBrandIcon({required this.url, required this.fallbackIcon});
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 16,
-      height: 16,
-      child: Builder(
-        builder: (ctx) {
-          try {
-            return SvgPicture.network(
-              url,
-              placeholderBuilder: (_) =>
-                  Icon(fallbackIcon, size: 14, color: _grey),
-            );
-          } catch (_) {
-            return Icon(fallbackIcon, size: 14, color: _grey);
-          }
-        },
-      ),
-    );
-  }
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-//  ARTIST DROPDOWN OVERLAY (shared by Main and Featured artist search)
-// ════════════════════════════════════════════════════════════════════════════
-class _ArtistDropdown extends StatelessWidget {
-  final LayerLink              link;
-  final List<ArtistResult>     results;
-  final bool                   searching;
-  final String                 query;
-  final ValueChanged<ArtistResult> onSelect;
-  final ValueChanged<String>   onAddNew;
-
-  const _ArtistDropdown({
-    required this.link,
-    required this.results,
-    required this.searching,
-    required this.query,
-    required this.onSelect,
-    required this.onAddNew,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Positioned(
-      width: MediaQuery.of(context).size.width - 40,
-      child: CompositedTransformFollower(
-        link: link,
-        showWhenUnlinked: false,
-        offset: const Offset(0, 4),
-        child: Material(
-          color: Colors.transparent,
-          child: Container(
-            constraints: const BoxConstraints(maxHeight: 320),
-            decoration: BoxDecoration(
-              color: const Color(0xFF171717),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: const Color(0x33FFFFFF)),
-              boxShadow: const [
-                BoxShadow(
-                    color: Color(0xCC000000),
-                    blurRadius: 40,
-                    offset: Offset(0, 10))
-              ],
-            ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: searching
-                  ? Padding(
-                padding: const EdgeInsets.all(20),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const SizedBox(
-                      width: 14, height: 14,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          valueColor:
-                          AlwaysStoppedAnimation(_grey)),
-                    ),
-                    const SizedBox(width: 10),
-                    Text('Searching…',
-                        style: GoogleFonts.inter(
-                            color: _grey, fontSize: 13)),
-                  ],
-                ),
-              )
-                  : ListView(
-                shrinkWrap: true,
-                padding: EdgeInsets.zero,
-                children: [
-                  if (results.isNotEmpty) ...[
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(
-                          14, 10, 14, 6),
-                      child: Text('FOUND ON APPLE MUSIC',
-                          style: GoogleFonts.outfit(
-                              color: _greyDark,
-                              fontSize: 9,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 1.2)),
-                    ),
-                    ...results.map((a) => _artistOption(a)),
-                    Container(
-                        height: 1,
-                        color: const Color(0x1AFFFFFF)),
-                  ],
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(
-                        14, 10, 14, 6),
-                    child: Text('NOT LISTED?',
-                        style: GoogleFonts.outfit(
-                            color: _greyDark,
-                            fontSize: 9,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 1.2)),
-                  ),
-                  _addNewOption(),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _artistOption(ArtistResult a) {
-    return InkWell(
-      onTap: () => onSelect(a),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        child: Row(
-          children: [
-            CircleAvatar(
-              radius: 18,
-              backgroundColor: const Color(0xFF222222),
-              backgroundImage: a.imageUrl.isNotEmpty
-                  ? NetworkImage(a.imageUrl)
-                  : null,
-              child: a.imageUrl.isEmpty
-                  ? Text(a.name[0].toUpperCase(),
-                  style: GoogleFonts.outfit(
-                      color: _white70,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700))
-                  : null,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(a.name,
-                      overflow: TextOverflow.ellipsis,
-                      style: GoogleFonts.inter(
-                          color: _white,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500)),
-                  if (a.genre.isNotEmpty)
-                    Text(a.genre,
-                        overflow: TextOverflow.ellipsis,
-                        style: GoogleFonts.inter(
-                            color: _grey, fontSize: 11)),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                color: const Color(0x1AFFFFFF),
-                borderRadius: BorderRadius.circular(99),
-                border: Border.all(color: const Color(0x33FFFFFF)),
-              ),
-              child: Text('Apple Music',
-                  style: GoogleFonts.outfit(
-                      color: _grey,
-                      fontSize: 9,
-                      fontWeight: FontWeight.w700)),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _addNewOption() {
-    return InkWell(
-      onTap: () => onAddNew(query),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        child: Row(
-          children: [
-            Container(
-              width: 36, height: 36,
-              decoration: BoxDecoration(
-                color: const Color(0x1AFFFFFF),
-                borderRadius: BorderRadius.circular(99),
-                border: Border.all(color: const Color(0x33FFFFFF)),
-              ),
-              child: const Icon(Icons.add_rounded,
-                  color: _white70, size: 18),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Add "$query" as new artist',
-                      overflow: TextOverflow.ellipsis,
-                      style: GoogleFonts.inter(
-                          color: _white,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500)),
-                  Text('Type your name exactly as it appears on stores',
-                      overflow: TextOverflow.ellipsis,
-                      style: GoogleFonts.inter(
-                          color: _grey, fontSize: 11)),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                color: const Color(0x1AFFFFFF),
-                borderRadius: BorderRadius.circular(99),
-                border: Border.all(color: const Color(0x33FFFFFF)),
-              ),
-              child: Text('New',
-                  style: GoogleFonts.outfit(
-                      color: _white70,
-                      fontSize: 9,
-                      fontWeight: FontWeight.w700)),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }

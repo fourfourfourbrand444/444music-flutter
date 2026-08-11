@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
+import 'package:url_launcher/url_launcher.dart';
 import 'dart:convert';
 
 // ─── PALETTE ────────────────────────────────────────────────────────
@@ -34,48 +35,70 @@ const _amberBorder = Color(0x33F59E0B);
 const _cloudinaryUrl    = 'https://api.cloudinary.com/v1_1/dlbgqtvqg/auto/upload';
 const _cloudinaryPreset = 'glmamp2y';
 
-// ─── EMAILJS ─────────────────────────────────────────────────────────
-const _emailjsUrl        = 'https://api.emailjs.com/api/v1.0/email/send';
-const _emailjsServiceId  = 'service_aykr0hz';
-const _emailjsTemplateId = 'template_hrekcw6';
-const _emailjsPublicKey  = 'JOJdEmnvcMiSbDeAz';
+// ─── BRAND ICONS (Simple Icons CDN) ──────────────────────────────────
+const _spotifyIconUrl    = 'https://cdn.simpleicons.org/spotify/1DB954';
+const _appleMusicIconUrl = 'https://cdn.simpleicons.org/applemusic/fc3c44';
+
+// ─── ARTIST ENTRY ──────────────────────────────────────────────────
+// Replaces the old flat artistName + featuring strings. `type` is one
+// of 'main' / 'featured' / 'secondary'. Only Track 1 (index 0) is ever
+// allowed to hold an artist tagged 'main' — enforced both in the
+// add/edit dialog (Main pill hidden on later tracks) and defensively
+// via _normalizeArtistTypes(), so a release can never end up with more
+// than one Main artist even if track order changes.
+class ArtistEntry {
+  String name;
+  String type;
+  String spotifyUrl;
+  String appleUrl;
+  ArtistEntry({
+    required this.name,
+    this.type = 'featured',
+    this.spotifyUrl = '',
+    this.appleUrl = '',
+  });
+
+  Map<String, String> toMap() => {
+        'name': name,
+        'type': type,
+        'spotifyUrl': spotifyUrl,
+        'appleUrl': appleUrl,
+      };
+}
 
 // ─── TRACK MODEL ─────────────────────────────────────────────────────
 class TrackModel {
   final String id;
-  String artistName;
+  List<ArtistEntry> artists;
   String releaseTitle;
-  String featuring;
   File? mp3File;
   String? mp3FileName;
   double progress;
   String status;
   String errorMsg;
   Map<String, String> errors;
-  // NEW — the real Cloudinary URL once this track finishes uploading.
-  // Carried forward to Release Info so the submission doc (and any email)
-  // can always find the actual audio file, instead of relying on a
-  // one-time email sent at upload time.
+  // The real Cloudinary URL once this track finishes uploading. Carried
+  // forward to Release Info so the submission doc (and any email) can
+  // always find the actual audio file.
   String? fileUrl;
 
   TrackModel({
     required this.id,
-    this.artistName    = '',
-    this.releaseTitle  = '',
-    this.featuring     = '',
+    List<ArtistEntry>? artists,
+    this.releaseTitle = '',
     this.mp3File,
     this.mp3FileName,
-    this.progress      = 0,
-    this.status        = 'idle',
-    this.errorMsg      = '',
+    this.progress = 0,
+    this.status = 'idle',
+    this.errorMsg = '',
     Map<String, String>? errors,
     this.fileUrl,
-  }) : errors = errors ?? {};
+  })  : artists = artists ?? [],
+        errors = errors ?? {};
 
   TrackModel copyWith({
-    String? artistName,
+    List<ArtistEntry>? artists,
     String? releaseTitle,
-    String? featuring,
     File? mp3File,
     String? mp3FileName,
     double? progress,
@@ -86,9 +109,8 @@ class TrackModel {
   }) {
     return TrackModel(
       id:           id,
-      artistName:   artistName   ?? this.artistName,
+      artists:      artists      ?? this.artists,
       releaseTitle: releaseTitle ?? this.releaseTitle,
-      featuring:    featuring    ?? this.featuring,
       mp3File:      mp3File      ?? this.mp3File,
       mp3FileName:  mp3FileName  ?? this.mp3FileName,
       progress:     progress     ?? this.progress,
@@ -99,6 +121,7 @@ class TrackModel {
     );
   }
 }
+
 // ════════════════════════════════════════════════════════════════════
 //  UPLOAD SCREEN
 // ════════════════════════════════════════════════════════════════════
@@ -121,8 +144,6 @@ class _UploadScreenState extends State<UploadScreen>
   bool   _allDone     = false;
   String _globalError = '';
 
-  // ── NEW: carries the payment reference forward from Pricing (or the
-  // resume banner) so Release Info can mark this submission as paid ──
   String? _paymentReference;
   bool _paymentArgLoaded = false;
 
@@ -154,9 +175,6 @@ class _UploadScreenState extends State<UploadScreen>
     _entranceCtrl.forward();
   }
 
-  // ── NEW: reads the payment reference passed via Navigator arguments.
-  // didChangeDependencies is the correct place for this (not initState),
-  // since ModalRoute isn't available yet in initState.
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -173,6 +191,15 @@ class _UploadScreenState extends State<UploadScreen>
   void dispose() {
     _entranceCtrl.dispose();
     super.dispose();
+  }
+
+  // ── LINK OPEN (Spotify / Apple Music profile icons) ────────────────
+  Future<void> _openUrl(String url) async {
+    final uri = Uri.tryParse(url);
+    if (uri == null) return;
+    try {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } catch (_) {}
   }
 
   // ── COVER ART PICKER ─────────────────────────────────────────────
@@ -270,6 +297,7 @@ class _UploadScreenState extends State<UploadScreen>
     setState(() {
       _tracks.removeWhere((t) => t.id == id);
       _expanded.remove(id);
+      _normalizeArtistTypes();
     });
   }
 
@@ -280,6 +308,18 @@ class _UploadScreenState extends State<UploadScreen>
     });
   }
 
+  // Only _tracks[0] may hold a Main-tagged artist. If track order shifts
+  // (Track 1 removed, a later track becomes index 0, etc.), any artist
+  // still tagged 'main' on a track that's no longer first is downgraded
+  // to 'featured' here — so a stray Main tag can never survive a reorder.
+  void _normalizeArtistTypes() {
+    for (var i = 1; i < _tracks.length; i++) {
+      for (final a in _tracks[i].artists) {
+        if (a.type == 'main') a.type = 'featured';
+      }
+    }
+  }
+
   // ── VALIDATE ─────────────────────────────────────────────────────
   bool _validateAll() {
     bool valid = true;
@@ -287,11 +327,16 @@ class _UploadScreenState extends State<UploadScreen>
       setState(() => _coverError = 'Cover art is required.');
       valid = false;
     }
-    for (final track in _tracks) {
+    for (int i = 0; i < _tracks.length; i++) {
+      final track = _tracks[i];
       final errs = <String, String>{};
-      if (track.artistName.trim().isEmpty)   errs['artistName']   = 'Required';
       if (track.releaseTitle.trim().isEmpty) errs['releaseTitle'] = 'Required';
-      if (track.mp3File == null)             errs['mp3']          = 'Please select an MP3 file.';
+      if (track.artists.isEmpty) {
+        errs['artists'] = 'Add at least one artist.';
+      } else if (i == 0 && !track.artists.any((a) => a.type == 'main')) {
+        errs['artists'] = 'Track 1 must have one artist tagged Main.';
+      }
+      if (track.mp3File == null) errs['mp3'] = 'Please select an MP3 file.';
       if (errs.isNotEmpty) {
         valid = false;
         _updateTrack(track.id, (t) => t.copyWith(errors: errs));
@@ -320,8 +365,6 @@ class _UploadScreenState extends State<UploadScreen>
     }
   }
 
-  // ── SEND EMAIL VIA EMAILJS ───────────────────────────────────────
-
   // ── UPLOAD ALL ───────────────────────────────────────────────────
   Future<void> _uploadAll() async {
     if (!_validateAll()) return;
@@ -345,15 +388,11 @@ class _UploadScreenState extends State<UploadScreen>
           sim = (sim + 8).clamp(0, 85);
           _updateTrack(track.id, (t) => t.copyWith(progress: sim));
         });
-      final fileUrl = await _uploadToCloudinary(track.mp3File!, 'tracks');
-              await ticker.cancel();
-              if (fileUrl == null) throw Exception('Cloudinary returned no URL');
-              // CHANGED — no longer emails here. The URL is saved on the track
-              // and carried forward to Release Info, which sends ONE combined
-              // email (metadata + cover + audio links) via the Brevo backend —
-              // replacing this old per-track EmailJS call.
-              _updateTrack(track.id,
-                      (t) => t.copyWith(progress: 100, status: 'success', fileUrl: fileUrl));
+        final fileUrl = await _uploadToCloudinary(track.mp3File!, 'tracks');
+        await ticker.cancel();
+        if (fileUrl == null) throw Exception('Cloudinary returned no URL');
+        _updateTrack(track.id,
+                (t) => t.copyWith(progress: 100, status: 'success', fileUrl: fileUrl));
       } catch (e) {
         anyError = true;
         _updateTrack(track.id, (t) => t.copyWith(
@@ -369,30 +408,29 @@ class _UploadScreenState extends State<UploadScreen>
     if (!anyError) {
       setState(() => _allDone = true);
       await Future.delayed(const Duration(milliseconds: 1800));
-      // ── CHANGED: carry the payment reference forward to Release Info ──
-      // CHANGED — now carries the cover art URL and every track's real
-            // Cloudinary URL forward too, not just the payment reference, so
-            // Release Info can save them onto the submission doc in Firestore
-            // instead of them only ever existing in a one-time email.
-            if (mounted) {
-              Navigator.pushReplacementNamed(
-                context,
-                '/release-info',
-                arguments: {
-                  'paymentReference': _paymentReference,
-                  'coverUrl': coverUrl,
-                  'audioFiles': _tracks
-                      .where((t) => t.fileUrl != null && t.fileUrl!.isNotEmpty)
-                      .map((t) => {
-                            'title':  t.releaseTitle,
-                            'artist': t.artistName,
-                            'featuring': t.featuring,
-                            'url':    t.fileUrl,
-                          })
-                      .toList(),
-                },
-              );
-            }
+      // Each track now carries its FULL artists array (name, type,
+      // spotifyUrl, appleUrl) — this is what Release Info reads to
+      // build its read-only summary, and there can only ever be one
+      // Main artist in this set since only _tracks[0] was ever allowed
+      // to tag one.
+      if (mounted) {
+        Navigator.pushReplacementNamed(
+          context,
+          '/release-info',
+          arguments: {
+            'paymentReference': _paymentReference,
+            'coverUrl': coverUrl,
+            'audioFiles': _tracks
+                .where((t) => t.fileUrl != null && t.fileUrl!.isNotEmpty)
+                .map((t) => {
+                      'title': t.releaseTitle,
+                      'artists': t.artists.map((a) => a.toMap()).toList(),
+                      'url': t.fileUrl,
+                    })
+                .toList(),
+          },
+        );
+      }
     } else {
       setState(() =>
       _globalError = 'Some tracks failed. Check errors and retry.');
@@ -431,8 +469,9 @@ class _UploadScreenState extends State<UploadScreen>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       _buildCoverSection(),
+                      _buildCoverWarning(),
                       Padding(
-                        padding: const EdgeInsets.fromLTRB(22, 32, 22, 0),
+                        padding: const EdgeInsets.fromLTRB(22, 20, 22, 0),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
@@ -502,7 +541,7 @@ class _UploadScreenState extends State<UploadScreen>
     );
   }
 
-  // ── TOP BAR ──────────────────────────────────────────────────────
+  // ── TOP BAR (Secure badge removed) ──────────────────────────────
   Widget _buildTopBar(double top) {
     return Container(
       padding: EdgeInsets.only(top: top),
@@ -529,21 +568,43 @@ class _UploadScreenState extends State<UploadScreen>
           const SizedBox(width: 14),
           Text('UPLOAD RELEASE',
               style: _t(20, FontWeight.w400, _white, ls: 1.5)),
-          const Spacer(),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-            decoration: BoxDecoration(
-              color: _white06,
-              borderRadius: BorderRadius.circular(99),
-              border: Border.all(color: _white10),
-            ),
-            child: Row(children: [
-              const Icon(Icons.lock_outline_rounded, color: _grey, size: 10),
-              const SizedBox(width: 5),
-              Text('Secure', style: _body(10, FontWeight.w600, _grey)),
-            ]),
-          ),
         ]),
+      ),
+    );
+  }
+
+  // ── COVER ART COMPLIANCE WARNING ────────────────────────────────
+  Widget _buildCoverWarning() {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(22, 20, 22, 0),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _amberDim,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _amberBorder),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.warning_amber_rounded, color: _amber, size: 16),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('COVER ART REQUIREMENTS',
+                    style: _t(13, FontWeight.w400, _amber, ls: 1.2)),
+                const SizedBox(height: 6),
+                Text(
+                  '•  The artist name and release title on your cover art must exactly match what you enter as your metadata below.\n'
+                  '•  No third-party logos — streaming platform logos (Spotify, Apple Music, YouTube, etc.), social media handles, or website URLs.\n'
+                  '•  Artwork that doesn\'t match your metadata, or includes any of the above, will be rejected during review.',
+                  style: _body(11.5, FontWeight.w500, _white70, h: 1.6),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -648,6 +709,357 @@ class _UploadScreenState extends State<UploadScreen>
     );
   }
 
+  // ── ADD / EDIT ARTIST DIALOG ────────────────────────────────────
+  // isFirstTrack: only Track 1 may tag an artist as Main — the Main
+  // pill is hidden entirely for every other track. trackHasMain: used
+  // only to pick a sensible default type for a brand-new entry.
+  Future<ArtistEntry?> _showArtistDialog({
+    ArtistEntry? existing,
+    required bool isFirstTrack,
+    required bool trackHasMain,
+  }) {
+    final nameCtrl    = TextEditingController(text: existing?.name ?? '');
+    final spotifyCtrl = TextEditingController(text: existing?.spotifyUrl ?? '');
+    final appleCtrl   = TextEditingController(text: existing?.appleUrl ?? '');
+    String type = existing?.type ??
+        ((isFirstTrack && !trackHasMain) ? 'main' : 'featured');
+    if (!isFirstTrack && type == 'main') type = 'featured';
+    String? nameError;
+
+    return showDialog<ArtistEntry>(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.82),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) {
+            return Dialog(
+              backgroundColor: const Color(0xFF0F0F14),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(18),
+                  side: const BorderSide(color: _white20)),
+              insetPadding: const EdgeInsets.all(20),
+              child: SingleChildScrollView(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(22, 26, 22, 22),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(existing == null ? 'ADD TRACK ARTIST' : 'EDIT TRACK ARTIST',
+                          style: _t(18, FontWeight.w400, _white, ls: 1)),
+                      const SizedBox(height: 16),
+                      Row(children: [
+                        Text('ARTIST NAME',
+                            style: _t(13, FontWeight.w400, _greyDark, ls: 1.5)),
+                        const SizedBox(width: 4),
+                        Container(
+                            width: 5, height: 5,
+                            decoration: const BoxDecoration(
+                                color: _white40, shape: BoxShape.circle)),
+                      ]),
+                      const SizedBox(height: 6),
+                      TextField(
+                        controller: nameCtrl,
+                        autofocus: true,
+                        style: _body(13, FontWeight.w600, _white),
+                        decoration: InputDecoration(
+                          hintText: 'e.g. Wizkid',
+                          hintStyle: _body(13, FontWeight.w400, _greyDark),
+                          filled: true, fillColor: _black3,
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 13, vertical: 11),
+                          border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              borderSide: const BorderSide(color: _white10)),
+                          enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              borderSide: BorderSide(
+                                  color: nameError != null ? _redBorder : _white10)),
+                          focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              borderSide: const BorderSide(color: _white40)),
+                        ),
+                      ),
+                      if (nameError != null) ...[
+                        const SizedBox(height: 5),
+                        Text(nameError!, style: _body(10, FontWeight.w600, _red)),
+                      ],
+                      const SizedBox(height: 14),
+                      Text('ARTIST TYPE',
+                          style: _t(13, FontWeight.w400, _greyDark, ls: 1.5)),
+                      const SizedBox(height: 6),
+                      Wrap(spacing: 8, runSpacing: 8, children: [
+                        if (isFirstTrack)
+                          _typePill('main', type, (v) => setDialogState(() => type = v)),
+                        _typePill('featured', type, (v) => setDialogState(() => type = v)),
+                        _typePill('secondary', type, (v) => setDialogState(() => type = v)),
+                      ]),
+                      if (!isFirstTrack) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          'Main artist is set on Track 1 — this track can only have Featured or Secondary artists.',
+                          style: _body(10, FontWeight.w600, _greyDark, h: 1.5),
+                        ),
+                      ],
+                      const SizedBox(height: 14),
+                      Text('SPOTIFY PROFILE URL',
+                          style: _t(13, FontWeight.w400, _greyDark, ls: 1.5)),
+                      const SizedBox(height: 6),
+                      _urlField(spotifyCtrl, _spotifyIconUrl, 'Leave blank if none'),
+                      const SizedBox(height: 12),
+                      Text('APPLE MUSIC PROFILE URL',
+                          style: _t(13, FontWeight.w400, _greyDark, ls: 1.5)),
+                      const SizedBox(height: 6),
+                      _urlField(appleCtrl, _appleMusicIconUrl, 'Leave blank if none'),
+                      const SizedBox(height: 20),
+                      Row(children: [
+                        Expanded(child: GestureDetector(
+                          onTap: () {
+                            final name = nameCtrl.text.trim();
+                            if (name.isEmpty) {
+                              setDialogState(() => nameError = 'Required');
+                              return;
+                            }
+                            var chosenType = type;
+                            if (!isFirstTrack && chosenType == 'main') {
+                              chosenType = 'featured';
+                            }
+                            Navigator.pop(ctx, ArtistEntry(
+                              name: name,
+                              type: chosenType,
+                              spotifyUrl: spotifyCtrl.text.trim(),
+                              appleUrl: appleCtrl.text.trim(),
+                            ));
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(vertical: 13),
+                            decoration: BoxDecoration(
+                                color: _white, borderRadius: BorderRadius.circular(999)),
+                            alignment: Alignment.center,
+                            child: Text('SAVE ARTIST',
+                                style: _t(13, FontWeight.w400, _black, ls: 1)),
+                          ),
+                        )),
+                        const SizedBox(width: 10),
+                        Expanded(child: GestureDetector(
+                          onTap: () => Navigator.pop(ctx, null),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(vertical: 13),
+                            decoration: BoxDecoration(
+                                border: Border.all(color: _white20),
+                                borderRadius: BorderRadius.circular(999)),
+                            alignment: Alignment.center,
+                            child: Text('CANCEL',
+                                style: _t(13, FontWeight.w400, _grey, ls: 1)),
+                          ),
+                        )),
+                      ]),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _typePill(String value, String current, ValueChanged<String> onTap) {
+    final selected = current == value;
+    final label = value == 'main' ? 'Main' : value == 'featured' ? 'Featured' : 'Secondary';
+    return GestureDetector(
+      onTap: () => onTap(value),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: selected ? _white : Colors.transparent,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: selected ? _white : _white20),
+        ),
+        child: Text(label, style: _body(12, FontWeight.w700, selected ? _black : _grey)),
+      ),
+    );
+  }
+
+  Widget _urlField(TextEditingController ctrl, String iconUrl, String hint) {
+    return Container(
+      decoration: BoxDecoration(
+          color: _black3,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: _white10)),
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: Row(children: [
+        _MiniIcon(url: iconUrl),
+        const SizedBox(width: 8),
+        Expanded(
+          child: TextField(
+            controller: ctrl,
+            style: _body(13, FontWeight.w600, _white),
+            decoration: InputDecoration(
+              hintText: hint,
+              hintStyle: _body(13, FontWeight.w400, _greyDark),
+              isDense: true, border: InputBorder.none,
+              contentPadding: const EdgeInsets.symmetric(vertical: 11),
+            ),
+          ),
+        ),
+      ]),
+    );
+  }
+
+  // ── TRACK ARTISTS SECTION (chip list + Add Artist button) ──────
+  Widget _artistChipsSection(TrackModel track, int index) {
+    final isFirstTrack = index == 0;
+    final locked = _uploading || track.status == 'success';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(children: [
+          Text('TRACK ARTISTS',
+              style: _t(13, FontWeight.w400, _greyDark, ls: 1.5)),
+          const SizedBox(width: 4),
+          Container(
+              width: 5, height: 5,
+              decoration: const BoxDecoration(color: _white40, shape: BoxShape.circle)),
+        ]),
+        if (!isFirstTrack) ...[
+          const SizedBox(height: 6),
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Icon(Icons.info_outline_rounded, color: _greyDark, size: 12),
+            const SizedBox(width: 5),
+            Expanded(child: Text(
+              'Main artist is set on Track 1. Add Featured or Secondary artists here.',
+              style: _body(10, FontWeight.w600, _greyDark, h: 1.5),
+            )),
+          ]),
+        ],
+        const SizedBox(height: 8),
+        ...track.artists.asMap().entries.map(
+                (e) => _artistChip(track, e.key, e.value, isFirstTrack, locked)),
+        if (!locked)
+          GestureDetector(
+            onTap: () async {
+              final trackHasMain = track.artists.any((a) => a.type == 'main');
+              final result = await _showArtistDialog(
+                  isFirstTrack: isFirstTrack, trackHasMain: trackHasMain);
+              if (result != null) {
+                setState(() {
+                  track.artists.add(result);
+                  track.errors.remove('artists');
+                  _normalizeArtistTypes();
+                });
+              }
+            },
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 11),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: _white20),
+              ),
+              child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                const Icon(Icons.add_rounded, color: _grey, size: 12),
+                const SizedBox(width: 6),
+                Text('ADD ARTIST', style: _t(12, FontWeight.w400, _grey, ls: 1.2)),
+              ]),
+            ),
+          ),
+        if (track.errors['artists'] != null) ...[
+          const SizedBox(height: 6),
+          Row(children: [
+            const Icon(Icons.error_outline_rounded, color: _red, size: 11),
+            const SizedBox(width: 4),
+            Expanded(child: Text(track.errors['artists']!,
+                style: _body(10, FontWeight.w600, _red))),
+          ]),
+        ],
+      ],
+    );
+  }
+
+  Widget _artistChip(TrackModel track, int idx, ArtistEntry a, bool isFirstTrack, bool locked) {
+    final typeLabel = a.type == 'main' ? 'Main' : a.type == 'featured' ? 'Featured' : 'Secondary';
+    final isMain = a.type == 'main';
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+      decoration: BoxDecoration(
+        color: _black3,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: isMain ? _greenBorder : _white10),
+      ),
+      child: Row(children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+          decoration: BoxDecoration(
+            color: isMain ? _greenDim : _white06,
+            borderRadius: BorderRadius.circular(6),
+            border: isMain ? Border.all(color: _greenBorder) : null,
+          ),
+          child: Text(typeLabel.toUpperCase(),
+              style: _body(9, FontWeight.w800, isMain ? _green : _grey)),
+        ),
+        const SizedBox(width: 8),
+        Expanded(child: Text(a.name,
+            overflow: TextOverflow.ellipsis,
+            style: _body(13, FontWeight.w700, _white))),
+        _linkIcon(a.spotifyUrl, _spotifyIconUrl),
+        _linkIcon(a.appleUrl, _appleMusicIconUrl),
+        if (!locked) ...[
+          const SizedBox(width: 6),
+          GestureDetector(
+            onTap: () async {
+              final trackHasMain = track.artists.any((x) => x.type == 'main');
+              final result = await _showArtistDialog(
+                  existing: a, isFirstTrack: isFirstTrack, trackHasMain: trackHasMain);
+              if (result != null) {
+                setState(() {
+                  track.artists[idx] = result;
+                  _normalizeArtistTypes();
+                });
+              }
+            },
+            child: Container(
+              width: 24, height: 24,
+              decoration: BoxDecoration(
+                  color: _white06,
+                  borderRadius: BorderRadius.circular(7),
+                  border: Border.all(color: _white10)),
+              child: const Icon(Icons.edit_outlined, color: _grey, size: 11),
+            ),
+          ),
+          const SizedBox(width: 6),
+          GestureDetector(
+            onTap: () => setState(() => track.artists.removeAt(idx)),
+            child: Container(
+              width: 24, height: 24,
+              decoration: BoxDecoration(
+                  color: _redDim,
+                  borderRadius: BorderRadius.circular(7),
+                  border: Border.all(color: _redBorder)),
+              child: const Icon(Icons.close_rounded, color: _red, size: 10),
+            ),
+          ),
+        ],
+      ]),
+    );
+  }
+
+  Widget _linkIcon(String url, String iconUrl) {
+    final icon = SizedBox(width: 13, height: 13, child: _MiniIcon(url: iconUrl));
+    if (url.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 3),
+        child: Opacity(opacity: 0.28, child: icon),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 3),
+      child: GestureDetector(onTap: () => _openUrl(url), child: icon),
+    );
+  }
+
   // ── TRACK ROW ────────────────────────────────────────────────────
   Widget _buildTrackRow(TrackModel track, int index) {
     final isExpanded  = _expanded.contains(track.id);
@@ -655,11 +1067,15 @@ class _UploadScreenState extends State<UploadScreen>
     final hasError    = track.errors.isNotEmpty || track.errorMsg.isNotEmpty;
     final isUploading = track.status == 'uploading';
 
+    ArtistEntry? mainArtist;
+    for (final a in track.artists) {
+      if (a.type == 'main') { mainArtist = a; break; }
+    }
+
     final displayName = track.releaseTitle.isNotEmpty
         ? track.releaseTitle
-        : track.artistName.isNotEmpty
-        ? track.artistName
-        : 'Track ${index + 1}';
+        : (mainArtist != null ? mainArtist.name : 'Track ${index + 1}');
+    final hasName = track.releaseTitle.isNotEmpty || mainArtist != null;
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 200),
@@ -719,13 +1135,7 @@ class _UploadScreenState extends State<UploadScreen>
                   children: [
                     Text(
                       displayName,
-                      style: _body(
-                          14,
-                          FontWeight.w700,
-                          track.releaseTitle.isNotEmpty ||
-                              track.artistName.isNotEmpty
-                              ? _white
-                              : _greyDark),
+                      style: _body(14, FontWeight.w700, hasName ? _white : _greyDark),
                       overflow: TextOverflow.ellipsis,
                     ),
                     if (track.mp3FileName != null)
@@ -821,39 +1231,18 @@ class _UploadScreenState extends State<UploadScreen>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(children: [
-                  Expanded(child: _InputField(
-                    label:       'Artist Name',
-                    required:    true,
-                    placeholder: 'e.g. Burna Boy',
-                    value:       track.artistName,
-                    error:       track.errors['artistName'],
-                    enabled:     !_uploading && !isDone,
-                    onChanged:   (v) => _updateTrack(
-                        track.id, (t) => t.copyWith(artistName: v)),
-                  )),
-                  const SizedBox(width: 12),
-                  Expanded(child: _InputField(
-                    label:       'Track Title',
-                    required:    true,
-                    placeholder: 'e.g. Abundance',
-                    value:       track.releaseTitle,
-                    error:       track.errors['releaseTitle'],
-                    enabled:     !_uploading && !isDone,
-                    onChanged:   (v) => _updateTrack(
-                        track.id, (t) => t.copyWith(releaseTitle: v)),
-                  )),
-                ]),
-                const SizedBox(height: 14),
                 _InputField(
-                  label:       'Featuring',
-                  required:    false,
-                  placeholder: 'Leave blank if none',
-                  value:       track.featuring,
+                  label:       'Track Title',
+                  required:    true,
+                  placeholder: 'e.g. Abundance',
+                  value:       track.releaseTitle,
+                  error:       track.errors['releaseTitle'],
                   enabled:     !_uploading && !isDone,
                   onChanged:   (v) => _updateTrack(
-                      track.id, (t) => t.copyWith(featuring: v)),
+                      track.id, (t) => t.copyWith(releaseTitle: v)),
                 ),
+                const SizedBox(height: 14),
+                _artistChipsSection(track, index),
                 const SizedBox(height: 14),
                 _Mp3Zone(
                   fileName: track.mp3FileName,
@@ -1013,6 +1402,22 @@ class _UploadScreenState extends State<UploadScreen>
             child: Text(msg,
                 style: _body(12, FontWeight.w600, _red, h: 1.5))),
       ]),
+    );
+  }
+}
+
+// ── MINI BRAND ICON — small SVG icon with a safe fallback ─────────────
+class _MiniIcon extends StatelessWidget {
+  final String url;
+  const _MiniIcon({required this.url});
+
+  @override
+  Widget build(BuildContext context) {
+    return Image.network(
+      url,
+      width: 13, height: 13,
+      errorBuilder: (_, __, ___) =>
+          const Icon(Icons.music_note_rounded, size: 12, color: _grey),
     );
   }
 }
