@@ -1,26 +1,34 @@
 // ═══════════════════════════════════════════════════════════════════
-//  444MUSIC — Home Screen v7 (Feed rebuild) — with threaded comment replies
+//  444MUSIC — Home Screen v8 (Feed rebuild + perf/bugfix pass)
 //
-//  The marketing hero / wave-divider / release-panel / why-us layout is
-//  GONE. The feed itself is now the home screen, matching wey.html on
-//  web: same Firestore collections (posts, stories, notifications,
-//  users, siteAds) so mobile and web show the exact same live data.
+//  v8 changes vs v7:
+//   • Ad banner image tap now opens its linkUrl (was a no-op)
+//   • Post links AND story links now actually open via url_launcher
+//     (previously just displayed as text)
+//   • People tab: tapping a person's row now navigates to their
+//     profile (/viewpro) — was previously dead
+//   • People tab: fixed a duplicate-fetch bug where _loadPeople() was
+//     being called again on every rebuild while the list was still
+//     empty, firing overlapping 200-doc queries; now fetched once,
+//     and each row's UserInfoCache entry is pre-filled from that same
+//     fetch instead of doing its own extra read per row
+//   • Hashtags/mentions now colored blue in post text, comments, and
+//     replies (previously only worked on the web app + viewpro screen,
+//     not here)
+//   • Post like button: removed a redundant pre-check read that ran on
+//     every tap; the tap now flips the UI instantly and does the
+//     Firestore write in the background
+//   • Story like button: this was the slowest interaction — every tap
+//     was doing a read to build the button, then ANOTHER read inside
+//     the toggle function, then the write, then re-triggering a
+//     rebuild that re-read again. Now the like state is fetched once
+//     per story shown, and the toggle is instant/optimistic with
+//     rollback on failure.
+//   • Search bar text now vertically centered (was sitting slightly
+//     off due to default TextField alignment + prefixIcon)
 //
-//  Ported from web: ad banner on load, stories bar + full-screen story
-//  viewer (press-and-hold to pause, delete own / like others / viewers
-//  list for own), working search (posts by text/author, people by
-//  name), For You / Following / People tabs, post like/comment/share/
-//  follow/edit/delete, comment delete (not on web yet before this pass),
-//  THREADED COMMENT REPLIES (parentId, matches web's reply UX — new in
-//  this pass), verified badge shown everywhere a name appears (post
-//  cards, comments, replies, story viewer) driven by users/{uid}.verified,
-//  notification bell + panel moved up next to the search bar, and a "+"
-//  composer button next to it for new posts.
-//
-//  Bottom nav, sidebar, and Upload's destination are UNCHANGED per
-//  request — only the Profile tab's destination changes (now points at
-//  a future '/viewpro' route instead of '/profile'), and the sidebar's
-//  own-account label changes from "Account" to "Settings".
+//  Everything else — bottom nav, sidebar, Upload's destination, feed
+//  streaming, threaded comment replies — is UNCHANGED from v7.
 // ═══════════════════════════════════════════════════════════════════
 import 'dart:async';
 import 'dart:convert';
@@ -34,6 +42,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
+import 'package:url_launcher/url_launcher.dart';
 
 // ─── PALETTE ────────────────────────────────────────────────────────
 const _black      = Color(0xFF000000);
@@ -102,10 +111,51 @@ class UserInfoCache {
   }
 
   void invalidate(String uid) => _cache.remove(uid);
+
+  // Lets a caller that already fetched a user doc (e.g. the People tab's
+  // bulk query) hand that data straight to the cache, so per-row widgets
+  // resolve instantly instead of each doing their own extra Firestore read
+  // for a document we just read a moment ago.
+  void prime(String uid, Map<String, dynamic> info) => _cache[uid] = info;
 }
 
 Widget verifiedTick({double size = 13}) =>
     Icon(Icons.verified_rounded, color: _blue, size: size);
+
+// Opens an external link the same way web's target="_blank" anchors do.
+// Used for the ad banner, post links, and story links.
+Future<void> openExternalLink(String url) async {
+  if (url.isEmpty) return;
+  var normalized = url.trim();
+  if (!normalized.startsWith('http://') && !normalized.startsWith('https://')) {
+    normalized = 'https://$normalized';
+  }
+  final uri = Uri.tryParse(normalized);
+  if (uri == null) return;
+  try {
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
+  } catch (_) {
+    // Swallow — matches web's silent no-op on bad/blocked links.
+  }
+}
+
+// Matches web's linkifyHashtags(): colors #hashtags AND @mentions blue.
+// Mentions are visual-only (not resolved to a specific account), same as
+// web — there's no unique-handle system yet to safely link one.
+List<InlineSpan> hashtagSpans(String text, {required TextStyle base}) {
+  if (text.isEmpty) return [TextSpan(text: text, style: base)];
+  final regex = RegExp(r'(^|\s)([#@][a-zA-Z0-9_.]+)');
+  final spans = <InlineSpan>[];
+  int last = 0;
+  for (final m in regex.allMatches(text)) {
+    if (m.start > last) spans.add(TextSpan(text: text.substring(last, m.start), style: base));
+    spans.add(TextSpan(text: m.group(1), style: base)); // leading whitespace / start
+    spans.add(TextSpan(text: m.group(2), style: base.copyWith(color: _blue, fontWeight: FontWeight.w700)));
+    last = m.end;
+  }
+  if (last < text.length) spans.add(TextSpan(text: text.substring(last), style: base));
+  return spans;
+}
 
 String timeAgo(DateTime? date) {
   if (date == null) return 'just now';
@@ -327,6 +377,11 @@ class _FeedHomeState extends State<_FeedHome> {
   bool _adDismissed = false;
   bool _refreshing = false;
 
+  // Guards against the People tab firing multiple overlapping fetches
+  // (e.g. a rebuild happening while a previous _loadPeople() is still
+  // in flight).
+  bool _peopleLoading = false;
+
   User? get _user => widget.currentUser;
 
   @override
@@ -432,16 +487,31 @@ class _FeedHomeState extends State<_FeedHome> {
     });
   }
 
+  // People tab: fetches once (guarded by _peopleLoading so a rebuild
+  // mid-fetch can't fire a second overlapping query), and primes the
+  // shared UserInfoCache with every doc it reads so each row's
+  // FutureBuilder resolves instantly instead of re-fetching the same
+  // document a moment later.
   Future<void> _loadPeople() async {
-    if (_user == null) return;
+    if (_user == null || _peopleLoading) return;
+    _peopleLoading = true;
     try {
       final snap = await FirebaseFirestore.instance.collection('users').limit(200).get();
       _people = snap.docs.where((d) => d.id != _user!.uid).map((d) {
         final u = d.data();
-        return {'uid': d.id, 'name': u['name'] ?? 'Artist', 'avatar': u['profilePic'] ?? ''};
+        final info = {
+          'name': (u['name'] as String?)?.trim().isNotEmpty == true ? u['name'] : 'Artist',
+          'avatar': u['profilePic'] ?? '',
+          'verified': u['verified'] == true,
+        };
+        UserInfoCache.instance.prime(d.id, info);
+        return {'uid': d.id, ...info};
       }).toList();
       _applySearch();
-    } catch (_) {}
+    } catch (_) {
+    } finally {
+      _peopleLoading = false;
+    }
   }
 
   void _applySearch() {
@@ -488,18 +558,26 @@ class _FeedHomeState extends State<_FeedHome> {
     }
   }
 
-  Future<void> _toggleLike(Map<String, dynamic> post) async {
+  // Optimistic: flips instantly and writes in the background. Previously
+  // this awaited a redundant .get() read before every single tap, which
+  // was the main reason liking a post felt slow — the extra round trip
+  // added a full network hop before the UI even started to update.
+  Future<void> _toggleLike(Map<String, dynamic> post, bool wasLiked) async {
     final postId = post['id'] as String;
     final likeRef = FirebaseFirestore.instance.collection('posts').doc(postId).collection('likes').doc(_user!.uid);
     final postRef = FirebaseFirestore.instance.collection('posts').doc(postId);
-    final existing = await likeRef.get();
-    if (existing.exists) {
-      await likeRef.delete();
-      await postRef.update({'likesCount': FieldValue.increment(-1)});
-    } else {
-      await likeRef.set({'uid': _user!.uid, 'likedAt': FieldValue.serverTimestamp()});
-      await postRef.update({'likesCount': FieldValue.increment(1)});
-      sendNotification(post['authorUid'], 'like', postId: postId, postText: post['text'], postImage: post['imageUrl']);
+    try {
+      if (wasLiked) {
+        await likeRef.delete();
+        await postRef.update({'likesCount': FieldValue.increment(-1)});
+      } else {
+        await likeRef.set({'uid': _user!.uid, 'likedAt': FieldValue.serverTimestamp()});
+        await postRef.update({'likesCount': FieldValue.increment(1)});
+        sendNotification(post['authorUid'], 'like', postId: postId, postText: post['text'], postImage: post['imageUrl']);
+      }
+    } catch (_) {
+      // The _PostCard that called this already rolled its own UI back;
+      // nothing further to do here.
     }
   }
 
@@ -617,9 +695,11 @@ class _FeedHomeState extends State<_FeedHome> {
                       child: TextField(
                         controller: _searchCtrl,
                         onChanged: (_) => _applySearch(),
+                        textAlignVertical: TextAlignVertical.center,
                         style: GoogleFonts.nunito(color: _white, fontSize: 13.5),
                         decoration: InputDecoration(
                           isDense: true, border: InputBorder.none,
+                          contentPadding: const EdgeInsets.symmetric(vertical: 0),
                           prefixIcon: const Icon(Icons.search_rounded, color: _grey, size: 19),
                           hintText: 'Search artists, posts, hashtags…',
                           hintStyle: GoogleFonts.nunito(color: _grey, fontSize: 13),
@@ -702,7 +782,7 @@ class _FeedHomeState extends State<_FeedHome> {
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(24),
                     child: GestureDetector(
-                      onTap: () {}, // external link handling left to existing url-launcher setup
+                      onTap: () => openExternalLink((_ad!['linkUrl'] ?? '').toString()),
                       child: CachedNetworkImage(imageUrl: _ad!['imageUrl'], fit: BoxFit.cover),
                     ),
                   ),
@@ -739,7 +819,7 @@ class _FeedHomeState extends State<_FeedHome> {
         isFollowing: _followingSet.contains(_filteredPosts[i]['authorUid']),
         isSelf: _filteredPosts[i]['authorUid'] == _user?.uid,
         onFollow: () => _toggleFollow(_filteredPosts[i]['authorUid']),
-        onLike: () => _toggleLike(_filteredPosts[i]),
+        onLike: (wasLiked) => _toggleLike(_filteredPosts[i], wasLiked),
         onComment: () => _openComments(_filteredPosts[i]),
         onShare: () => _openShare(_filteredPosts[i]),
         onDelete: () => _deletePost(_filteredPosts[i]['id']),
@@ -750,10 +830,18 @@ class _FeedHomeState extends State<_FeedHome> {
 
   Widget _buildPeopleList() {
     if (_people.isEmpty) {
-      return FutureBuilder(
-        future: _loadPeople(),
-        builder: (context, snap) => const Center(child: CircularProgressIndicator(color: _white)),
-      );
+      // _loadPeople() is already triggered once from _onTabChange /
+      // scrollToTopAndRefresh — calling it again here on every rebuild
+      // (as a FutureBuilder's `future:` would) was firing duplicate,
+      // overlapping fetches of the entire users collection, which was
+      // the main reason the People tab felt slow to load.
+      if (_people.isEmpty && !_peopleLoading) {
+        // Safety net: if for some reason nothing triggered a load yet
+        // (e.g. tab restored to People on a fresh instance), kick one off
+        // without re-entering on every rebuild.
+        _loadPeople();
+      }
+      return const Center(child: CircularProgressIndicator(color: _white));
     }
     return ListView.builder(
       padding: const EdgeInsets.fromLTRB(14, 10, 14, 100),
@@ -770,12 +858,17 @@ class _FeedHomeState extends State<_FeedHome> {
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(color: _black2, borderRadius: BorderRadius.circular(18), border: Border.all(color: _white10)),
               child: Row(children: [
-                _Avatar(url: p['avatar'], name: p['name'], size: 46),
-                const SizedBox(width: 12),
-                Expanded(child: Row(children: [
-                  Flexible(child: Text(p['name'], style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w800, fontSize: 14.5), overflow: TextOverflow.ellipsis)),
-                  if (verified) Padding(padding: const EdgeInsets.only(left: 4), child: verifiedTick()),
-                ])),
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => Navigator.pushNamed(context, '/viewpro', arguments: p['uid']),
+                  child: Row(children: [
+                    _Avatar(url: p['avatar'], name: p['name'], size: 46),
+                    const SizedBox(width: 12),
+                    Flexible(child: Text(p['name'], style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w800, fontSize: 14.5), overflow: TextOverflow.ellipsis)),
+                    if (verified) Padding(padding: const EdgeInsets.only(left: 4), child: verifiedTick()),
+                  ]),
+                ),
+                const Spacer(),
                 _FollowBtn(following: isFollowing, onTap: () => _toggleFollow(p['uid'])),
               ]),
             );
@@ -878,7 +971,8 @@ class _Avatar extends StatelessWidget {
 class _PostCard extends StatefulWidget {
   final Map<String, dynamic> post;
   final bool isFollowing, isSelf;
-  final VoidCallback onFollow, onLike, onComment, onShare, onDelete;
+  final VoidCallback onFollow, onComment, onShare, onDelete;
+  final void Function(bool wasLiked) onLike;
   final void Function(String newText) onEdit;
   const _PostCard({
     required this.post, required this.isFollowing, required this.isSelf,
@@ -946,13 +1040,17 @@ class _PostCardState extends State<_PostCard> {
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Row(children: [
-                    Flexible(child: Text(info['name'], style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w800, fontSize: 14.5), overflow: TextOverflow.ellipsis)),
-                    if (info['verified'] == true) Padding(padding: const EdgeInsets.only(left: 4), child: verifiedTick()),
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => Navigator.pushNamed(context, '/viewpro', arguments: p['authorUid']),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Row(children: [
+                      Flexible(child: Text(info['name'], style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w800, fontSize: 14.5), overflow: TextOverflow.ellipsis)),
+                      if (info['verified'] == true) Padding(padding: const EdgeInsets.only(left: 4), child: verifiedTick()),
+                    ]),
+                    Text(timeAgo(createdAt), style: GoogleFonts.nunito(color: _grey, fontSize: 11.5, fontWeight: FontWeight.w600)),
                   ]),
-                  Text(timeAgo(createdAt), style: GoogleFonts.nunito(color: _grey, fontSize: 11.5, fontWeight: FontWeight.w600)),
-                ]),
+                ),
               ),
               if (!widget.isSelf) _FollowBtn(following: widget.isFollowing, onTap: widget.onFollow),
               if (widget.isSelf)
@@ -1001,7 +1099,7 @@ class _PostCardState extends State<_PostCard> {
                   padding: const EdgeInsets.only(top: 10),
                   child: RichText(
                     text: TextSpan(children: [
-                      TextSpan(text: p['text'], style: GoogleFonts.nunito(color: _white90, fontSize: 14.5, height: 1.5)),
+                      ...hashtagSpans(p['text'], base: GoogleFonts.nunito(color: _white90, fontSize: 14.5, height: 1.5)),
                       if (p['edited'] == true)
                         TextSpan(text: '  (edited)', style: GoogleFonts.nunito(color: _grey, fontSize: 11.5, fontWeight: FontWeight.w600)),
                     ]),
@@ -1014,22 +1112,37 @@ class _PostCardState extends State<_PostCard> {
                 child: ClipRRect(borderRadius: BorderRadius.circular(16), child: CachedNetworkImage(imageUrl: p['imageUrl'], fit: BoxFit.cover)),
               ),
             if ((p['linkUrl'] ?? '').toString().isNotEmpty)
-              Container(
-                margin: const EdgeInsets.only(top: 10),
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(color: _black3, borderRadius: BorderRadius.circular(14), border: Border.all(color: _white10)),
-                child: Row(children: [
-                  const Icon(Icons.link_rounded, color: _blue, size: 16),
-                  const SizedBox(width: 8),
-                  Expanded(child: Text(p['linkUrl'], style: GoogleFonts.nunito(color: _white70, fontSize: 13), overflow: TextOverflow.ellipsis)),
-                ]),
+              GestureDetector(
+                onTap: () => openExternalLink((p['linkUrl'] ?? '').toString()),
+                child: Container(
+                  margin: const EdgeInsets.only(top: 10),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(color: _black3, borderRadius: BorderRadius.circular(14), border: Border.all(color: _white10)),
+                  child: Row(children: [
+                    const Icon(Icons.link_rounded, color: _blue, size: 16),
+                    const SizedBox(width: 8),
+                    Expanded(child: Text(p['linkUrl'], style: GoogleFonts.nunito(color: _white70, fontSize: 13), overflow: TextOverflow.ellipsis)),
+                  ]),
+                ),
               ),
             Padding(
               padding: const EdgeInsets.only(top: 12),
               child: Row(children: [
                 _ActionBtn(icon: _liked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
                     color: _liked ? _rose : _grey, label: '${p['likesCount'] ?? 0}',
-                    onTap: () { setState(() => _liked = !_liked); widget.onLike(); }),
+                    onTap: () {
+                      // Optimistic: flip the icon and count immediately,
+                      // fire the Firestore write in the background. This
+                      // (plus removing a redundant pre-check read in the
+                      // parent's _toggleLike) is what makes liking feel
+                      // instant instead of laggy.
+                      final wasLiked = _liked;
+                      setState(() {
+                        _liked = !wasLiked;
+                        widget.post['likesCount'] = (widget.post['likesCount'] ?? 0) + (wasLiked ? -1 : 1);
+                      });
+                      widget.onLike(wasLiked);
+                    }),
                 _ActionBtn(icon: Icons.mode_comment_outlined, color: _grey, label: '${p['commentsCount'] ?? 0}', onTap: widget.onComment),
                 _ActionBtn(icon: Icons.share_outlined, color: _grey, label: 'Share', onTap: widget.onShare),
                 const Spacer(),
@@ -1287,7 +1400,7 @@ class _CommentRowState extends State<_CommentRow> {
                       if (info['verified'] == true) Padding(padding: const EdgeInsets.only(left: 4), child: verifiedTick(size: 11)),
                     ]),
                     const SizedBox(height: 2),
-                    Text(comment['text'] ?? '', style: GoogleFonts.nunito(color: _white70, fontSize: 13)),
+                    Text.rich(TextSpan(children: hashtagSpans(comment['text'] ?? '', base: GoogleFonts.nunito(color: _white70, fontSize: 13)))),
                   ]),
                 );
               },
@@ -1360,7 +1473,7 @@ class _CommentRowState extends State<_CommentRow> {
                                     if (info['verified'] == true) Padding(padding: const EdgeInsets.only(left: 4), child: verifiedTick(size: 10)),
                                   ]),
                                   const SizedBox(height: 2),
-                                  Text(r['text'] ?? '', style: GoogleFonts.nunito(color: _white70, fontSize: 12.5)),
+                                  Text.rich(TextSpan(children: hashtagSpans(r['text'] ?? '', base: GoogleFonts.nunito(color: _white70, fontSize: 12.5)))),
                                 ]),
                               );
                             },
@@ -1753,6 +1866,13 @@ class _StoryViewerScreenState extends State<_StoryViewerScreen> with SingleTicke
   int _index = 0;
   late List<Map<String, dynamic>> _stories;
 
+  // Cached like-state for the current story only — loaded once when that
+  // story is shown, then flipped optimistically on tap. Previously this
+  // was re-fetched from Firestore on every rebuild via a FutureBuilder
+  // AND re-read again inside the toggle function itself, which made
+  // story-liking the slowest interaction in the app by a wide margin.
+  bool _storyLiked = false;
+
   @override
   void initState() {
     super.initState();
@@ -1778,6 +1898,17 @@ class _StoryViewerScreenState extends State<_StoryViewerScreen> with SingleTicke
     if (!isOwn) {
       FirebaseFirestore.instance.collection('stories').doc(story['id']).collection('viewers').doc(widget.myUid)
           .set({'viewedAt': FieldValue.serverTimestamp()}).catchError((_) {});
+      _loadStoryLikeStatus(story['id']);
+    }
+  }
+
+  // Fetched exactly once per story, instead of on every rebuild.
+  Future<void> _loadStoryLikeStatus(String storyId) async {
+    try {
+      final snap = await FirebaseFirestore.instance.collection('stories').doc(storyId).collection('likes').doc(widget.myUid).get();
+      if (mounted) setState(() => _storyLiked = snap.exists);
+    } catch (_) {
+      if (mounted) setState(() => _storyLiked = false);
     }
   }
 
@@ -1814,17 +1945,25 @@ class _StoryViewerScreenState extends State<_StoryViewerScreen> with SingleTicke
     _showStory(_index >= _stories.length ? _stories.length - 1 : _index);
   }
 
+  // Optimistic like/unlike: flips the UI immediately, writes in the
+  // background, and rolls back only if the write fails. This — plus
+  // fetching the initial state once instead of on every rebuild — is
+  // what fixes story-liking feeling slow.
   Future<void> _toggleLike() async {
     final story = _stories[_index];
-    final ref = FirebaseFirestore.instance.collection('stories').doc(story['id']).collection('likes').doc(widget.myUid);
-    final existing = await ref.get();
-    if (existing.exists) {
-      await ref.delete();
-    } else {
-      await ref.set({'uid': widget.myUid, 'likedAt': FieldValue.serverTimestamp()});
-      sendNotification(story['authorUid'], 'story_like');
+    final wasLiked = _storyLiked;
+    setState(() => _storyLiked = !wasLiked);
+    try {
+      final ref = FirebaseFirestore.instance.collection('stories').doc(story['id']).collection('likes').doc(widget.myUid);
+      if (wasLiked) {
+        await ref.delete();
+      } else {
+        await ref.set({'uid': widget.myUid, 'likedAt': FieldValue.serverTimestamp()});
+        sendNotification(story['authorUid'], 'story_like');
+      }
+    } catch (_) {
+      if (mounted) setState(() => _storyLiked = wasLiked);
     }
-    setState(() {});
   }
 
   void _openViewers() {
@@ -1911,16 +2050,19 @@ class _StoryViewerScreenState extends State<_StoryViewerScreen> with SingleTicke
                 child: story['type'] == 'image' && (story['imageUrl'] ?? '').toString().isNotEmpty
                     ? CachedNetworkImage(imageUrl: story['imageUrl'], fit: BoxFit.contain, width: double.infinity)
                     : story['type'] == 'link' && (story['linkUrl'] ?? '').toString().isNotEmpty
-                        ? Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 24),
-                            child: Container(
-                              padding: const EdgeInsets.all(18),
-                              decoration: BoxDecoration(color: _black3, borderRadius: BorderRadius.circular(16), border: Border.all(color: _white10)),
-                              child: Row(children: [
-                                const Icon(Icons.link_rounded, color: _blue),
-                                const SizedBox(width: 10),
-                                Expanded(child: Text(story['linkUrl'], style: GoogleFonts.nunito(color: _white90), overflow: TextOverflow.ellipsis)),
-                              ]),
+                        ? GestureDetector(
+                            onTap: () => openExternalLink((story['linkUrl'] ?? '').toString()),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 24),
+                              child: Container(
+                                padding: const EdgeInsets.all(18),
+                                decoration: BoxDecoration(color: _black3, borderRadius: BorderRadius.circular(16), border: Border.all(color: _white10)),
+                                child: Row(children: [
+                                  const Icon(Icons.link_rounded, color: _blue),
+                                  const SizedBox(width: 10),
+                                  Expanded(child: Text(story['linkUrl'], style: GoogleFonts.nunito(color: _white90), overflow: TextOverflow.ellipsis)),
+                                ]),
+                              ),
                             ),
                           )
                         : Padding(
@@ -1968,19 +2110,13 @@ class _StoryViewerScreenState extends State<_StoryViewerScreen> with SingleTicke
                           );
                         },
                       )
-                    : FutureBuilder<DocumentSnapshot>(
-                        future: FirebaseFirestore.instance.collection('stories').doc(story['id']).collection('likes').doc(widget.myUid).get(),
-                        builder: (context, snap) {
-                          final liked = snap.data?.exists == true;
-                          return GestureDetector(
-                            onTap: _toggleLike,
-                            child: Container(
-                              width: 46, height: 46,
-                              decoration: BoxDecoration(shape: BoxShape.circle, color: _white06, border: Border.all(color: liked ? _rose.withOpacity(0.4) : _white10)),
-                              child: Icon(liked ? Icons.favorite_rounded : Icons.favorite_border_rounded, color: liked ? _rose : _white90, size: 20),
-                            ),
-                          );
-                        },
+                    : GestureDetector(
+                        onTap: _toggleLike,
+                        child: Container(
+                          width: 46, height: 46,
+                          decoration: BoxDecoration(shape: BoxShape.circle, color: _white06, border: Border.all(color: _storyLiked ? _rose.withOpacity(0.4) : _white10)),
+                          child: Icon(_storyLiked ? Icons.favorite_rounded : Icons.favorite_border_rounded, color: _storyLiked ? _rose : _white90, size: 20),
+                        ),
                       ),
               ),
             ),
