@@ -3,21 +3,43 @@
 //  Reached from: ReleasesScreen → "Check Reasons & Fix" (on a rejected card)
 //  Route: '/rejection', arguments: the full submission map (with '_id')
 //
+//  v2 — brought to exact parity with web's rejection-fix page:
+//   • "Other" (non-copyright) mode now shows the same editable fields
+//     web has — Artist Name, Release Title, Copyright Holder, Composer
+//     — pre-filled from the original submission, correctable before
+//     resubmit. These previously didn't exist here at all; only the
+//     file re-uploads did.
+//   • Added the "CURRENTLY ON FILE — WHAT WE RECEIVED" reference card
+//     (original cover + a way to hear the original audio) that web
+//     shows above the editable fields in Other mode.
+//   • Firestore update on submit now also writes artistName,
+//     releaseTitle, copyright, credits (updated composer), coverURL,
+//     and officialCoverURL — matching web's updateDoc call exactly.
+//     Previously only the file URLs were written; the corrected
+//     metadata was silently dropped.
+//   • notifyAdmin's cover URL now falls back the same way web's does:
+//     freshly-fixed cover → officialCoverURL → coverURL. Previously
+//     officialCoverURL was skipped entirely.
+//   • Added the same success-screen fallback web has: if the admin
+//     notify call fails, the fix is still saved but the success
+//     message says so, and the screen stays up longer (3.2s vs 1.4s)
+//     so the artist actually reads it.
+//
 //  Two modes, driven by rejectionCategory on the submission doc:
 //   • Copyright / License Issue → ONLY a license/proof upload field.
 //     Leaving it blank and going back is fine — release just stays
 //     'Rejected' until they come back with proof.
-//   • Other → re-upload BOTH the audio file (MP3) AND cover art
-//     (JPG/PNG). Artist Name and Release Title are shown read-only —
-//     pulled from the original submission — and cannot be edited here.
+//   • Other → shows what's currently on file, lets the artist correct
+//     Artist Name / Release Title / Copyright / Composer, and
+//     re-upload BOTH the audio file (MP3) AND cover art (JPG/PNG).
 //
 //  On submit: uploads to Cloudinary (same unsigned preset as UploadScreen),
 //  updates the SAME submissions/{id} doc back to status: 'Review', clears
-//  rejectionReason/rejectionCategory, writes the new file URL(s), and
-//  pings the admin backend so the fixed version is picked up — same
-//  notify pipeline used for new submissions, which already emails
-//  444musicdistro@gmail.com. paid / paymentVerified are never touched —
-//  no second payment is ever triggered.
+//  rejectionReason/rejectionCategory, writes the new file URL(s) + any
+//  corrected metadata, and pings the admin backend so the fixed version
+//  is picked up — same notify pipeline used for new submissions, which
+//  already emails 444musicdistro@gmail.com. paid / paymentVerified are
+//  never touched — no second payment is ever triggered.
 //
 //  NOTE — file_picker was replaced with file_selector for BOTH the PDF
 //  license/proof upload AND the audio re-upload. The audio picker used
@@ -35,6 +57,7 @@ import 'package:http/http.dart' as http;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 // ─── PALETTE (matches releases_screen.dart) ──────────────────────────
 const _black    = Color(0xFF000000);
@@ -88,8 +111,17 @@ class _RejectionFixScreenState extends State<RejectionFixScreen> {
   String? _pickedCoverFileName;
   int?    _pickedCoverFileSize;
 
+  // ── Editable metadata (Other category) — mirrors web's
+  // "Update Release Details" fields exactly.
+  final _artistNameCtrl   = TextEditingController();
+  final _releaseTitleCtrl = TextEditingController();
+  final _copyrightCtrl    = TextEditingController();
+  final _composerCtrl     = TextEditingController();
+
   bool   _submitting = false;
   bool   _done       = false;
+  bool   _notifyOk   = true;
+  int    _notifyStatus = 0;
   String _error      = '';
 
   String get _category =>
@@ -102,6 +134,23 @@ class _RejectionFixScreenState extends State<RejectionFixScreen> {
   String get _artistName   => (_data['artistName'] ?? '—').toString();
   String get _releaseTitle => (_data['releaseTitle'] ?? '—').toString();
 
+  // ── Original media on file — mirrors web's hasOriginalMedia /
+  // originalAudioUrl / originalCoverUrl exactly. Only relevant in
+  // Other mode; copyright mode never shows this.
+  String get _originalAudioUrl {
+    final files = _data['audioFiles'];
+    if (files is List && files.isNotEmpty && files.first is Map) {
+      return ((files.first as Map)['url'] ?? '').toString();
+    }
+    return '';
+  }
+
+  String get _originalCoverUrl =>
+      (_data['officialCoverURL'] ?? _data['coverURL'] ?? '').toString();
+
+  bool get _hasOriginalMedia =>
+      !_isCopyright && (_originalAudioUrl.isNotEmpty || _originalCoverUrl.isNotEmpty);
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -109,6 +158,10 @@ class _RejectionFixScreenState extends State<RejectionFixScreen> {
       final args = ModalRoute.of(context)?.settings.arguments;
       if (args is Map<String, dynamic>) _data = args;
       _dataLoaded = true;
+      _artistNameCtrl.text   = (_data['artistName'] ?? '').toString();
+      _releaseTitleCtrl.text = (_data['releaseTitle'] ?? '').toString();
+      _copyrightCtrl.text    = (_data['copyright'] ?? '').toString();
+      _composerCtrl.text     = _composerNameFromData();
       setState(() {});
     }
   }
@@ -120,6 +173,64 @@ class _RejectionFixScreenState extends State<RejectionFixScreen> {
       statusBarColor: Colors.transparent,
       systemNavigationBarColor: _black,
     ));
+  }
+
+  @override
+  void dispose() {
+    _artistNameCtrl.dispose();
+    _releaseTitleCtrl.dispose();
+    _copyrightCtrl.dispose();
+    _composerCtrl.dispose();
+    super.dispose();
+  }
+
+  // ── COMPOSER CREDIT HELPERS — mirror web's getComposerName() /
+  // buildUpdatedWriterCredits() exactly: only touch writer[0]'s name,
+  // never wipe an existing role/IPI, and leave everything alone if
+  // the field is left blank.
+  String _composerNameFromData() {
+    final credits = _data['credits'];
+    final writers = (credits is Map && credits['writer'] is List) ? credits['writer'] as List : const [];
+    if (writers.isNotEmpty && writers.first is Map) {
+      return ((writers.first as Map)['name'] ?? '').toString();
+    }
+    return '';
+  }
+
+  List<Map<String, dynamic>> _buildUpdatedWriterCredits(String composerName) {
+    final credits = _data['credits'];
+    final writers = (credits is Map && credits['writer'] is List)
+        ? List<dynamic>.from(credits['writer'])
+        : <dynamic>[];
+    final trimmed = composerName.trim();
+
+    List<Map<String, dynamic>> asMaps() =>
+        writers.map((w) => Map<String, dynamic>.from(w as Map)).toList();
+
+    if (trimmed.isEmpty) return asMaps(); // left blank on purpose — don't wipe existing credits
+
+    if (writers.isNotEmpty && writers.first is Map &&
+        ((writers.first as Map)['name'] ?? '').toString().trim().toLowerCase() == trimmed.toLowerCase()) {
+      return asMaps(); // unchanged
+    }
+
+    if (writers.isNotEmpty) {
+      final first = Map<String, dynamic>.from(writers.first as Map);
+      writers[0] = {
+        'name': trimmed,
+        'role': first['role'] ?? 'Composer',
+        'ipi': first['ipi'] ?? '',
+      };
+    } else {
+      writers.add({'name': trimmed, 'role': 'Composer', 'ipi': ''});
+    }
+    return asMaps();
+  }
+
+  Future<void> _launchUrl(String url) async {
+    final uri = Uri.tryParse(url);
+    if (uri == null) return;
+    if (await canLaunchUrl(uri)) await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 
   // ── PICKERS ─────────────────────────────────────────────────────────
@@ -263,12 +374,12 @@ class _RejectionFixScreenState extends State<RejectionFixScreen> {
   // ── NOTIFY ADMIN OF THE FIX ─────────────────────────────────────────
   // Builds the SAME shape of payload the backend's notifySubmission()
   // expects for a normal submission (email + snake_case metadata fields),
-  // pulling everything except the fixed file(s) from the original
-  // submission data already on hand — since the backend has no separate
-  // "resubmission" code path, sending anything less complete (as before)
-  // either got rejected for a missing 'email', or arrived without the
-  // fixed file actually rendering in the email body.
-  Future<void> _notifyAdmin({
+  // pulling everything except the fixed file(s) from _data — which, by
+  // the time this runs, may already carry the artist's corrected
+  // artist_name / release_title / copyright / songwriters, so the email
+  // just reflects the fix. Returns ok/status so the caller can tell the
+  // artist if the admin side didn't get it, same as web does.
+  Future<Map<String, dynamic>> _notifyAdmin({
     required String kind, // 'license' or 'audio_and_cover'
     String? licenseUrl,
     String? audioUrl,
@@ -279,7 +390,12 @@ class _RejectionFixScreenState extends State<RejectionFixScreen> {
     final musicianList = credits is Map ? credits['musician'] : null;
     final writerList   = credits is Map ? credits['writer']   : null;
 
-    final resolvedCoverUrl = coverUrl ?? (_data['coverURL'] ?? '').toString();
+    // Prefer the freshly-fixed cover from THIS resubmit; fall back to the
+    // official cover (original upload) before the possibly-stale
+    // dashboard-edited coverURL — matches web's
+    // `coverUrl || data.officialCoverURL || data.coverURL || ""` exactly.
+    final resolvedCoverUrl = coverUrl ??
+        ((_data['officialCoverURL'] ?? _data['coverURL'] ?? '').toString());
 
     List<Map<String, String>> resolvedAudioFiles;
     if (audioUrl != null) {
@@ -352,8 +468,10 @@ class _RejectionFixScreenState extends State<RejectionFixScreen> {
         body: jsonEncode(body),
       ).timeout(const Duration(seconds: 15));
       debugPrint('[Notify resubmit] status=${res.statusCode} body=${res.body}');
+      return {'ok': res.statusCode >= 200 && res.statusCode < 300, 'status': res.statusCode};
     } catch (e) {
       debugPrint('[Notify resubmit] ERROR: $e');
+      return {'ok': false, 'status': 0};
     }
   }
 
@@ -376,9 +494,25 @@ class _RejectionFixScreenState extends State<RejectionFixScreen> {
       }
     }
 
+    String newArtistName   = _data['artistName'] ?? '';
+    String newReleaseTitle = _data['releaseTitle'] ?? '';
+    String newCopyright    = (_data['copyright'] ?? '').toString();
+    String newComposer     = _composerNameFromData();
+
+    if (!_isCopyright) {
+      newArtistName   = _artistNameCtrl.text.trim();
+      newReleaseTitle = _releaseTitleCtrl.text.trim();
+      newCopyright    = _copyrightCtrl.text.trim();
+      newComposer     = _composerCtrl.text;
+      if (newArtistName.isEmpty)   { setState(() => _error = 'Artist name is required.'); return; }
+      if (newReleaseTitle.isEmpty) { setState(() => _error = 'Release title is required.'); return; }
+    }
+
     setState(() { _submitting = true; _error = ''; });
 
     try {
+      Map<String, dynamic> notifyResult = {'ok': true, 'status': 200};
+
       if (_isCopyright) {
         final url = await _uploadToCloudinary(_pickedLicenseFile!, 'license-proofs');
         if (url == null) {
@@ -397,7 +531,7 @@ class _RejectionFixScreenState extends State<RejectionFixScreen> {
           'licenseURL':        url,
         });
 
-        await _notifyAdmin(kind: 'license', licenseUrl: url);
+        notifyResult = await _notifyAdmin(kind: 'license', licenseUrl: url);
       } else {
         final audioUrl = await _uploadToCloudinary(_pickedAudioFile!, 'tracks');
         if (audioUrl == null) {
@@ -417,6 +551,13 @@ class _RejectionFixScreenState extends State<RejectionFixScreen> {
           return;
         }
 
+        final updatedWriters = _buildUpdatedWriterCredits(newComposer);
+        final updatedCredits = {
+          'producer': (_data['credits'] is Map ? _data['credits']['producer'] : null) ?? [],
+          'musician': (_data['credits'] is Map ? _data['credits']['musician'] : null) ?? [],
+          'writer':   updatedWriters,
+        };
+
         await FirebaseFirestore.instance.collection('submissions').doc(_id).update({
           'status':                 'Review',
           'rejectionReason':        FieldValue.delete(),
@@ -424,13 +565,38 @@ class _RejectionFixScreenState extends State<RejectionFixScreen> {
           'resubmittedAt':          FieldValue.serverTimestamp(),
           'resubmittedAudioURL':    audioUrl,
           'resubmittedCoverURL':    coverUrl,
+          // Also sync the two fields any future email (e.g. a later Pay
+          // Now resend) actually reads from. Without this, coverURL and
+          // officialCoverURL would stay frozen on the original — pre-fix
+          // — cover art forever, and only THIS immediate notify call
+          // would ever show the corrected artwork.
+          'coverURL':         coverUrl,
+          'officialCoverURL': coverUrl,
+          'artistName':   newArtistName,
+          'releaseTitle': newReleaseTitle,
+          'copyright':    newCopyright,
+          'credits':      updatedCredits,
         });
 
-        await _notifyAdmin(kind: 'audio_and_cover', audioUrl: audioUrl, coverUrl: coverUrl);
+        // Reflect the edits on the in-memory map too, so _notifyAdmin()
+        // — which reads straight off `_data` — sends the corrected
+        // metadata in the same admin email it always sends.
+        _data['artistName']   = newArtistName;
+        _data['releaseTitle'] = newReleaseTitle;
+        _data['copyright']    = newCopyright;
+        _data['credits']      = updatedCredits;
+
+        notifyResult = await _notifyAdmin(kind: 'audio_and_cover', audioUrl: audioUrl, coverUrl: coverUrl);
       }
 
-      setState(() { _submitting = false; _done = true; });
-      await Future.delayed(const Duration(milliseconds: 1400));
+      final ok = notifyResult['ok'] == true;
+      setState(() {
+        _submitting  = false;
+        _done        = true;
+        _notifyOk    = ok;
+        _notifyStatus = (notifyResult['status'] as int?) ?? 0;
+      });
+      await Future.delayed(Duration(milliseconds: ok ? 1400 : 3200));
       if (mounted) Navigator.pop(context);
     } catch (e) {
       debugPrint('[Resubmit] ERROR: $e');
@@ -587,7 +753,8 @@ class _RejectionFixScreenState extends State<RejectionFixScreen> {
     );
   }
 
-  // ── READ-ONLY TRACK DETAILS — cannot be edited here ──────────────
+  // ── READ-ONLY TRACK DETAILS — always shown, matches web's top
+  // "SUBMISSION DETAILS" card exactly (unedited original values).
   Widget _buildTrackDetailsCard() {
     return Container(
       padding: const EdgeInsets.all(16),
@@ -652,11 +819,27 @@ class _RejectionFixScreenState extends State<RejectionFixScreen> {
     );
   }
 
-  // ── OTHER MODE — audio re-upload + cover art re-upload ───────────
+  // ── OTHER MODE — currently-on-file reference, editable metadata,
+  // audio re-upload, cover re-upload. Order matches web exactly.
   Widget _buildOtherSection() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (_hasOriginalMedia) ...[
+          _buildOriginalMediaCard(),
+          const SizedBox(height: 20),
+        ],
+
+        Text('Update Release Details',
+            style: GoogleFonts.nunito(
+                color: _white, fontSize: 14, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 4),
+        Text('Fix anything that was wrong — this goes out with your resubmission.',
+            style: GoogleFonts.nunito(color: _grey, fontSize: 12, height: 1.5)),
+        const SizedBox(height: 12),
+        _buildEditableFieldsCard(),
+        const SizedBox(height: 20),
+
         Text('Re-upload Audio File',
             style: GoogleFonts.nunito(
                 color: _white, fontSize: 14, fontWeight: FontWeight.w800)),
@@ -673,6 +856,7 @@ class _RejectionFixScreenState extends State<RejectionFixScreen> {
           fileSize: _pickedAudioFileSize,
         ),
         const SizedBox(height: 20),
+
         Text('Re-upload Cover Art',
             style: GoogleFonts.nunito(
                 color: _white, fontSize: 14, fontWeight: FontWeight.w800)),
@@ -687,6 +871,118 @@ class _RejectionFixScreenState extends State<RejectionFixScreen> {
           sub: 'JPG / PNG only',
           fileName: _pickedCoverFileName,
           fileSize: _pickedCoverFileSize,
+        ),
+      ],
+    );
+  }
+
+  // ── CURRENTLY ON FILE — mirrors web's original-media-row exactly:
+  // a small cover thumbnail plus a way to hear the original audio.
+  Widget _buildOriginalMediaCard() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: _black3,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _white10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('CURRENTLY ON FILE — WHAT WE RECEIVED',
+              style: GoogleFonts.outfit(
+                  color: _greyDark, fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 1.5)),
+          const SizedBox(height: 12),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              if (_originalCoverUrl.isNotEmpty)
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: Image.network(
+                    _originalCoverUrl,
+                    width: 56, height: 56, fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => Container(
+                      width: 56, height: 56,
+                      decoration: BoxDecoration(color: _black4, borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                )
+              else
+                Container(
+                  width: 56, height: 56,
+                  decoration: BoxDecoration(
+                      color: _black4, borderRadius: BorderRadius.circular(10), border: Border.all(color: _white10)),
+                ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _originalAudioUrl.isNotEmpty
+                    ? GestureDetector(
+                        onTap: () => _launchUrl(_originalAudioUrl),
+                        child: Row(children: [
+                          const Icon(Icons.play_circle_fill_rounded, color: _white70, size: 22),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text('Play original audio on file',
+                                style: GoogleFonts.nunito(color: _white70, fontSize: 12.5, fontWeight: FontWeight.w700)),
+                          ),
+                        ]),
+                      )
+                    : Text('No audio on file yet.',
+                        style: GoogleFonts.nunito(color: _grey, fontSize: 12)),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── EDITABLE METADATA FIELDS — Artist Name, Release Title,
+  // Copyright Holder, Composer. Matches web's four .field-row inputs.
+  Widget _buildEditableFieldsCard() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: _black3,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _white10),
+      ),
+      child: Column(
+        children: [
+          _fieldRow('Artist Name', _artistNameCtrl, 'Artist name'),
+          const SizedBox(height: 12),
+          _fieldRow('Release Title', _releaseTitleCtrl, 'Release title'),
+          const SizedBox(height: 12),
+          _fieldRow('Copyright Holder', _copyrightCtrl, 'e.g. © 2026 Your Name'),
+          const SizedBox(height: 12),
+          _fieldRow('Composer', _composerCtrl, 'Composer / songwriter name'),
+        ],
+      ),
+    );
+  }
+
+  Widget _fieldRow(String label, TextEditingController ctrl, String hint) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label.toUpperCase(),
+            style: GoogleFonts.nunito(color: _grey, fontSize: 10.5, fontWeight: FontWeight.w800, letterSpacing: 0.6)),
+        const SizedBox(height: 6),
+        TextField(
+          controller: ctrl,
+          style: GoogleFonts.nunito(color: _white, fontSize: 13.5),
+          decoration: InputDecoration(
+            isDense: true,
+            filled: true,
+            fillColor: _black4,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
+            hintText: hint,
+            hintStyle: GoogleFonts.nunito(color: _greyDark),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: _white10)),
+            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: _white10)),
+            focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: _white40)),
+          ),
         ),
       ],
     );
@@ -816,28 +1112,39 @@ class _RejectionFixScreenState extends State<RejectionFixScreen> {
     );
   }
 
+  // ── SUCCESS — mirrors web's success-wrap, including the fallback
+  // copy when the admin notify call itself failed but the fix was
+  // still saved to Firestore.
   Widget _buildSuccess() {
     return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 64, height: 64,
-            decoration: BoxDecoration(
-              color: _greenDim,
-              shape: BoxShape.circle,
-              border: Border.all(color: _greenBrd),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 64, height: 64,
+              decoration: BoxDecoration(
+                color: _greenDim,
+                shape: BoxShape.circle,
+                border: Border.all(color: _greenBrd),
+              ),
+              child: const Icon(Icons.check_rounded, color: _green, size: 32),
             ),
-            child: const Icon(Icons.check_rounded, color: _green, size: 32),
-          ),
-          const SizedBox(height: 18),
-          Text('Sent for Review',
-              style: GoogleFonts.outfit(
-                  color: _white, fontSize: 17, fontWeight: FontWeight.w800)),
-          const SizedBox(height: 6),
-          Text('We\'ll take another look — no payment needed.',
-              style: GoogleFonts.nunito(color: _grey, fontSize: 12.5)),
-        ],
+            const SizedBox(height: 18),
+            Text('Sent for Review',
+                style: GoogleFonts.outfit(
+                    color: _white, fontSize: 17, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 6),
+            Text(
+              _notifyOk
+                  ? "We'll take another look — no payment needed."
+                  : "Your fix was saved, but we couldn't reach the admin notification service (status $_notifyStatus). The team may not see this until that's checked.",
+              textAlign: TextAlign.center,
+              style: GoogleFonts.nunito(color: _grey, fontSize: 12.5, height: 1.5),
+            ),
+          ],
+        ),
       ),
     );
   }
