@@ -1,38 +1,37 @@
 // ═══════════════════════════════════════════════════════════════════
-//  444MUSIC — Home Screen v8 (Feed rebuild + perf/bugfix pass)
+//  444MUSIC — Home Screen v9 (Feed weighting: recency + followers)
 //
-//  v8 changes vs v7:
-//   • Ad banner image tap now opens its linkUrl (was a no-op)
-//   • Post links AND story links now actually open via url_launcher
-//     (previously just displayed as text)
-//   • People tab: tapping a person's row now navigates to their
-//     profile (/viewpro) — was previously dead
-//   • People tab: fixed a duplicate-fetch bug where _loadPeople() was
-//     being called again on every rebuild while the list was still
-//     empty, firing overlapping 200-doc queries; now fetched once,
-//     and each row's UserInfoCache entry is pre-filled from that same
-//     fetch instead of doing its own extra read per row
-//   • Hashtags/mentions now colored blue in post text, comments, and
-//     replies (previously only worked on the web app + viewpro screen,
-//     not here)
-//   • Post like button: removed a redundant pre-check read that ran on
-//     every tap; the tap now flips the UI instantly and does the
-//     Firestore write in the background
-//   • Story like button: this was the slowest interaction — every tap
-//     was doing a read to build the button, then ANOTHER read inside
-//     the toggle function, then the write, then re-triggering a
-//     rebuild that re-read again. Now the like state is fetched once
-//     per story shown, and the toggle is instant/optimistic with
-//     rollback on failure.
-//   • Search bar text now vertically centered (was sitting slightly
-//     off due to default TextField alignment + prefixIcon)
+//  v9 changes vs v8:
+//   • Feed ordering is now a weighted-random shuffle, not strict
+//     newest-first. Every post gets a combined weight of:
+//       - recency (decays with age, but floors out instead of hitting
+//         zero — so a post from 3 days ago still lands mid-to-top
+//         fairly often, and a week-old post still has a real, if
+//         smaller, shot at showing up — never fully buried)
+//       - follower boost (accounts with more followers get a log-scaled
+//         visibility multiplier — more followers = more likely to
+//         surface, but it's capped so a mega-account doesn't totally
+//         drown out everyone else)
+//   • Positions are rolled once per post and held stable (in
+//     _shuffleKeys) so the feed doesn't jump around under a user's
+//     thumb while they're scrolling or while likes/comments update in
+//     the background. A fresh reshuffle only happens at three points:
+//     app open, re-tapping Home while already on Home, and switching
+//     feed tabs — same three refresh points as before.
+//   • users/{uid}.followersCount is now tracked (incremented/decremented
+//     in _toggleFollow) so the weighting has real follower numbers to
+//     work with instead of counting the followers subcollection on
+//     every shuffle. NOTE: this starts counting from zero going
+//     forward — existing follower relationships made before this
+//     update won't be reflected in followersCount until a one-time
+//     backfill is run (not included here since it wasn't asked for).
 //
-//  Everything else — bottom nav, sidebar, Upload's destination, feed
-//  streaming, threaded comment replies — is UNCHANGED from v7.
+//  Nothing from v8 was removed or replaced — all additions.
 // ═══════════════════════════════════════════════════════════════════
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' as io;
+import 'dart:math';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -83,10 +82,11 @@ Future<String?> _uploadToCloudinary(XFile file) async {
   }
 }
 
-// ─── Shared user-info cache (name/avatar/verified) ─────────────────────
-// A single app-wide cache so the verified tick and current avatar/name
-// are consistent everywhere a uid is rendered: feed cards, comments,
-// replies, story viewer, people list, notifications.
+// ─── Shared user-info cache (name/avatar/verified/followersCount) ──────
+// A single app-wide cache so the verified tick, avatar/name, and follower
+// count are consistent everywhere a uid is rendered: feed cards, comments,
+// replies, story viewer, people list, notifications, and the feed's
+// weighted-shuffle logic.
 class UserInfoCache {
   UserInfoCache._();
   static final UserInfoCache instance = UserInfoCache._();
@@ -94,7 +94,7 @@ class UserInfoCache {
 
   Future<Map<String, dynamic>> get(String uid) async {
     if (_cache.containsKey(uid)) return _cache[uid]!;
-    Map<String, dynamic> info = {'name': 'Artist', 'avatar': '', 'verified': false};
+    Map<String, dynamic> info = {'name': 'Artist', 'avatar': '', 'verified': false, 'followersCount': 0};
     try {
       final snap = await FirebaseFirestore.instance.collection('users').doc(uid).get();
       if (snap.exists) {
@@ -103,6 +103,7 @@ class UserInfoCache {
           'name': (d['name'] as String?)?.trim().isNotEmpty == true ? d['name'] : 'Artist',
           'avatar': d['profilePic'] ?? '',
           'verified': d['verified'] == true,
+          'followersCount': (d['followersCount'] as num?)?.toInt() ?? 0,
         };
       }
     } catch (_) {}
@@ -382,6 +383,16 @@ class _FeedHomeState extends State<_FeedHome> {
   // in flight).
   bool _peopleLoading = false;
 
+  // ── Weighted-shuffle feed state ──
+  // A per-session RNG (lives only on this device, so shuffles are
+  // naturally independent per user — same principle as Instagram/TikTok
+  // not showing the same order to two different people).
+  final Random _shuffleRandom = Random();
+  // Each post's rolled shuffle key, held stable until an explicit
+  // reshuffle point (see _resetShuffle) so the feed doesn't reorder
+  // itself under a user's thumb just because a like/comment came in.
+  final Map<String, double> _shuffleKeys = {};
+
   User? get _user => widget.currentUser;
 
   @override
@@ -396,6 +407,7 @@ class _FeedHomeState extends State<_FeedHome> {
     final info = await UserInfoCache.instance.get(_user!.uid);
     _myName = info['name']; _myAvatar = info['avatar'];
     await _loadFollowing();
+    _resetShuffle();
     _listenPosts();
     _listenNotifs();
     _listenStories();
@@ -418,10 +430,14 @@ class _FeedHomeState extends State<_FeedHome> {
       _scrollCtrl.animateTo(0, duration: const Duration(milliseconds: 350), curve: Curves.easeOutCubic);
     }
     setState(() => _refreshing = true);
-    // Posts already stream live; this just re-primes the People list and
-    // gives a brief refresh affordance so it *feels* like a manual pull,
-    // the way Instagram's re-tap-home does.
-    Future.wait([_loadFollowing(), if (_tab == _FeedTab.people) _loadPeople()]).then((_) {
+    // Instagram-style re-tap-home: fresh shuffle roll, not just a visual
+    // refresh — every post gets a new position drawn from its weight.
+    _resetShuffle();
+    Future.wait([
+      _loadFollowing(),
+      if (_tab == _FeedTab.people) _loadPeople(),
+      _applyRandomizedOrder(_allPosts).then((_) { if (mounted) _applySearch(); }),
+    ]).then((_) {
       if (mounted) setState(() => _refreshing = false);
     });
   }
@@ -450,15 +466,86 @@ class _FeedHomeState extends State<_FeedHome> {
     _postsSub?.cancel();
     _postsSub = FirebaseFirestore.instance
         .collection('posts').orderBy('createdAt', descending: true).limit(50)
-        .snapshots().listen((snap) {
+        .snapshots().listen((snap) async {
       var posts = snap.docs.map((d) => {'id': d.id, ...d.data()}).toList();
       if (_tab == _FeedTab.following) {
         posts = posts.where((p) => _followingSet.contains(p['authorUid']) || p['authorUid'] == _user?.uid).toList();
       }
+      // Weighted-random order — see _applyRandomizedOrder. Posts already
+      // holding a rolled key (unchanged since the last reshuffle point)
+      // keep their position even though this listener re-fires on every
+      // like/comment write to any of the 50 docs it's watching.
+      await _applyRandomizedOrder(posts);
       _allPosts = posts;
       _applySearch();
     });
   }
+
+  // ── Weighted-shuffle helpers ──────────────────────────────────────
+
+  // Recency weight: decays with age but floors out instead of hitting
+  // zero, so nothing is ever hard-buried. Half-life of 72 hours means a
+  // 3-day-old post still sits around 0.5 (a real, "medium" shot at
+  // landing near the top), and by a week it's settled at the 0.2 floor —
+  // lower odds than a fresh post, but never zero, so it can still
+  // surface mid-feed (or occasionally higher) rather than being pushed
+  // to the very bottom the way strict chronological order would do.
+  double _recencyWeight(DateTime? createdAt) {
+    if (createdAt == null) return 0.2;
+    final hoursOld = DateTime.now().difference(createdAt).inMinutes / 60.0;
+    const halfLifeHours = 72.0;
+    const floor = 0.2;
+    final decayed = pow(0.5, hoursOld / halfLifeHours).toDouble();
+    return decayed < floor ? floor : decayed;
+  }
+
+  // Follower boost: log-scaled so accounts with more followers get more
+  // visibility, but it's capped so a very large account can't fully
+  // drown out everyone else. 0 followers = no boost (1.0x); ~100
+  // followers ≈ 2x; ~1,000 ≈ 2.5x; ~10,000+ caps at 3.5x.
+  double _followerWeightFromCount(int followers) {
+    final boost = 1.0 + (log(followers < 0 ? 0 : followers + 1) / log(10)) * 0.5;
+    return boost.clamp(1.0, 3.5);
+  }
+
+  // A-Res weighted-random key: draws a uniform random number and raises
+  // it to 1/weight. Higher-weight items land closer to 1 more often, but
+  // it's still a genuine draw — not a fixed rank — so a lower-weight post
+  // can still occasionally land high, same as Instagram/TikTok-style
+  // feeds. Sorting descending by this key gives the shuffled order.
+  double _rollWeightedKey(double weight) {
+    final u = _shuffleRandom.nextDouble().clamp(1e-9, 1.0);
+    return pow(u, 1.0 / weight).toDouble();
+  }
+
+  // Rolls a shuffle key for any post that doesn't already have one, then
+  // sorts the list in place by key (descending). Posts that already have
+  // a key from an earlier pass keep it — that's what makes the order
+  // stable across background snapshot updates (likes/comments) and only
+  // change at real refresh points.
+  Future<void> _applyRandomizedOrder(List<Map<String, dynamic>> posts) async {
+    for (final p in posts) {
+      final id = p['id'] as String?;
+      if (id == null || _shuffleKeys.containsKey(id)) continue;
+      final createdAt = (p['createdAt'] is Timestamp) ? (p['createdAt'] as Timestamp).toDate() : null;
+      final recency = _recencyWeight(createdAt);
+      final authorUid = p['authorUid'] as String?;
+      int followers = 0;
+      if (authorUid != null) {
+        final info = await UserInfoCache.instance.get(authorUid);
+        followers = (info['followersCount'] as int?) ?? 0;
+      }
+      final followerBoost = _followerWeightFromCount(followers);
+      _shuffleKeys[id] = _rollWeightedKey(recency * followerBoost);
+    }
+    posts.sort((a, b) => (_shuffleKeys[b['id']] ?? 0).compareTo(_shuffleKeys[a['id']] ?? 0));
+  }
+
+  // Clears rolled keys so the next _applyRandomizedOrder pass re-rolls
+  // everything fresh. Called only at the three defined refresh points:
+  // app open (_bootstrap), re-tapping Home (scrollToTopAndRefresh), and
+  // switching feed tabs (_onTabChange) — not on every background update.
+  void _resetShuffle() => _shuffleKeys.clear();
 
   void _listenStories() {
     _storiesSub?.cancel();
@@ -503,6 +590,7 @@ class _FeedHomeState extends State<_FeedHome> {
           'name': (u['name'] as String?)?.trim().isNotEmpty == true ? u['name'] : 'Artist',
           'avatar': u['profilePic'] ?? '',
           'verified': u['verified'] == true,
+          'followersCount': (u['followersCount'] as num?)?.toInt() ?? 0,
         };
         UserInfoCache.instance.prime(d.id, info);
         return {'uid': d.id, ...info};
@@ -531,6 +619,7 @@ class _FeedHomeState extends State<_FeedHome> {
   void _onTabChange(_FeedTab t) {
     setState(() => _tab = t);
     _searchCtrl.clear();
+    _resetShuffle();
     if (t == _FeedTab.people) {
       _loadPeople();
     } else {
@@ -543,16 +632,25 @@ class _FeedHomeState extends State<_FeedHome> {
     setState(() => wasFollowing ? _followingSet.remove(targetUid) : _followingSet.add(targetUid));
     try {
       final me = _user!.uid;
+      final targetUserRef = FirebaseFirestore.instance.collection('users').doc(targetUid);
       if (wasFollowing) {
         await FirebaseFirestore.instance.collection('users').doc(me).collection('following').doc(targetUid).delete();
         await FirebaseFirestore.instance.collection('users').doc(targetUid).collection('followers').doc(me).delete();
+        // Keep users/{uid}.followersCount in sync so the feed's follower
+        // weighting has a cheap number to read instead of counting the
+        // followers subcollection on every shuffle.
+        await targetUserRef.update({'followersCount': FieldValue.increment(-1)});
       } else {
         await FirebaseFirestore.instance.collection('users').doc(me).collection('following').doc(targetUid)
             .set({'since': FieldValue.serverTimestamp()});
         await FirebaseFirestore.instance.collection('users').doc(targetUid).collection('followers').doc(me)
             .set({'since': FieldValue.serverTimestamp()});
+        await targetUserRef.update({'followersCount': FieldValue.increment(1)});
         sendNotification(targetUid, 'follow');
       }
+      // Their cached follower count is now stale — drop it so the next
+      // read (e.g. next time their posts get weighed) picks up the change.
+      UserInfoCache.instance.invalidate(targetUid);
     } catch (_) {
       setState(() => wasFollowing ? _followingSet.add(targetUid) : _followingSet.remove(targetUid));
     }
