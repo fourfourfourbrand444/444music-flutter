@@ -203,7 +203,45 @@ class _ProfileScreenState extends State<ProfileScreen> with TickerProviderStateM
     final data = jsonDecode(respStr) as Map<String, dynamic>;
     return data['secure_url'] as String?;
   }
+// ─── Cloudflare R2 (avatar uploads) ─────────────────────────────────
+// Same backend/bucket as posts and stories — see home_screen.dart for
+// the full explanation. This is the bytes-based twin of that helper,
+// since avatar upload here already works with raw bytes rather than
+// an XFile.
+const _r2BackendBaseUrl = 'https://four44music-backend.onrender.com';
 
+Future<String?> _uploadToR2(Uint8List bytes, String filename, {required String uid}) async {
+  try {
+    final ext = filename.toLowerCase().split('.').last;
+    final contentType = ext == 'png'
+        ? 'image/png'
+        : ext == 'webp'
+            ? 'image/webp'
+            : 'image/jpeg';
+
+    final urlResp = await http.post(
+      Uri.parse('$_r2BackendBaseUrl/r2/upload-url'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'kind': 'avatar', 'uid': uid, 'contentType': contentType}),
+    );
+    if (urlResp.statusCode != 200) return null;
+    final urlData = jsonDecode(urlResp.body) as Map<String, dynamic>;
+    final uploadUrl = urlData['uploadUrl'] as String?;
+    final publicUrl = urlData['publicUrl'] as String?;
+    if (uploadUrl == null || publicUrl == null) return null;
+
+    final putResp = await http.put(
+      Uri.parse(uploadUrl),
+      headers: {'Content-Type': contentType},
+      body: bytes,
+    );
+    if (putResp.statusCode != 200) return null;
+
+    return publicUrl;
+  } catch (_) {
+    return null;
+  }
+}
   Future<void> _pickAvatar() async {
     final picker = ImagePicker();
     final file   = await picker.pickImage(source: ImageSource.gallery, maxWidth: 800, imageQuality: 85);
@@ -218,7 +256,7 @@ class _ProfileScreenState extends State<ProfileScreen> with TickerProviderStateM
     });
 
     try {
-      final url = await _uploadToCloudinary(bytes, file.name);
+      final url = await _uploadToR2(bytes, file.name, uid: _user!.uid);
       if (url == null) throw Exception('Image upload failed');
       await _db.collection('users').doc(_user!.uid).set({'profilePic': url}, SetOptions(merge: true));
       if (!mounted) return;

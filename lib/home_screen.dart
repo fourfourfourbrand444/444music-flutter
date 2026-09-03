@@ -81,7 +81,41 @@ Future<String?> _uploadToCloudinary(XFile file) async {
     return null;
   }
 }
+const _backendBaseUrl = 'https://four44music-backend.onrender.com';
 
+String _guessImageContentType(String filename) {
+  final lower = filename.toLowerCase();
+  if (lower.endsWith('.png')) return 'image/png';
+  if (lower.endsWith('.webp')) return 'image/webp';
+  if (lower.endsWith('.heic')) return 'image/heic';
+  return 'image/jpeg';
+}
+
+Future<String?> _uploadToR2(XFile file, {required String kind, required String uid}) async {
+  try {
+    final bytes = await file.readAsBytes();
+    final contentType = _guessImageContentType(file.name);
+    final urlResp = await http.post(
+      Uri.parse('$_backendBaseUrl/r2/upload-url'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'kind': kind, 'uid': uid, 'contentType': contentType}),
+    );
+    if (urlResp.statusCode != 200) return null;
+    final urlData = jsonDecode(urlResp.body) as Map<String, dynamic>;
+    final uploadUrl = urlData['uploadUrl'] as String?;
+    final publicUrl = urlData['publicUrl'] as String?;
+    if (uploadUrl == null || publicUrl == null) return null;
+    final putResp = await http.put(
+      Uri.parse(uploadUrl),
+      headers: {'Content-Type': contentType},
+      body: bytes,
+    );
+    if (putResp.statusCode != 200) return null;
+    return publicUrl;
+  } catch (_) {
+    return null;
+  }
+}
 // ─── Shared user-info cache (name/avatar/verified/followersCount) ──────
 // A single app-wide cache so the verified tick, avatar/name, and follower
 // count are consistent everywhere a uid is rendered: feed cards, comments,
@@ -1706,7 +1740,7 @@ class _NewPostScreenState extends State<_NewPostScreen> {
     try {
       final me = FirebaseAuth.instance.currentUser!;
       String? imageUrl;
-      if (_image != null) imageUrl = await _uploadToCloudinary(_image!);
+      if (_image != null) imageUrl = await _uploadToR2(_image!, kind: 'post', uid: me.uid);
       await FirebaseFirestore.instance.collection('posts').add({
         'authorUid': me.uid, 'authorName': widget.myName, 'authorAvatar': widget.myAvatar,
         'text': text, 'imageUrl': imageUrl, 'linkUrl': link.isEmpty ? null : link,
@@ -1820,7 +1854,7 @@ class _StoryComposerScreenState extends State<_StoryComposerScreen> {
         'type': _type, 'createdAt': FieldValue.serverTimestamp(),
       };
       if (_type == 'image') {
-        final url = await _uploadToCloudinary(_image!);
+        final url = await _uploadToR2(_image!, kind: 'story', uid: me.uid);
         if (url == null) throw Exception('upload failed');
         payload['imageUrl'] = url;
       } else if (_type == 'text') {
