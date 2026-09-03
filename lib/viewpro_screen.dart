@@ -897,10 +897,10 @@ Widget _storeLink(String slug, String label, String hex, String url) {
                 _closeSidebar();
                 Navigator.pushNamedAndRemoveUntil(context, '/home', (r) => false);
               }),
-              _sidebarItem(Icons.person_rounded, 'Settings', () {
-                _closeSidebar();
-                Navigator.pushReplacementNamed(context, '/viewpro', arguments: _me?.uid);
-              }),
+             _sidebarItem(Icons.person_rounded, 'Settings', () {
+               _closeSidebar();
+               Navigator.pushReplacementNamed(context, '/profile');
+             }),
               _sidebarItem(Icons.speed_rounded, 'Dashboard', () => _navigate('/dashboard')),
               _sidebarItem(Icons.cloud_upload_rounded, 'Upload Release', () => _navigate('/upload')),
               _sidebarItem(Icons.bar_chart_rounded, 'Analytics', () => _navigate('/analytics')),
