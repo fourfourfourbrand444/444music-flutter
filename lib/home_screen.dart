@@ -191,7 +191,27 @@ List<InlineSpan> hashtagSpans(String text, {required TextStyle base}) {
   if (last < text.length) spans.add(TextSpan(text: text.substring(last), style: base));
   return spans;
 }
-
+// Instagram-style count abbreviation: under 10K shows exact with commas;
+// 10K–999K shows one decimal (dropped if .0); 1M+ same for millions.
+String formatCount(int count) {
+  if (count < 10000) {
+    final s = count.toString();
+    final buf = StringBuffer();
+    for (int i = 0; i < s.length; i++) {
+      if (i > 0 && (s.length - i) % 3 == 0) buf.write(',');
+      buf.write(s[i]);
+    }
+    return buf.toString();
+  }
+  if (count < 1000000) {
+    final k = count / 1000;
+    final s = k.toStringAsFixed(1);
+    return '${s.endsWith('.0') ? s.substring(0, s.length - 2) : s}K';
+  }
+  final m = count / 1000000;
+  final s = m.toStringAsFixed(1);
+  return '${s.endsWith('.0') ? s.substring(0, s.length - 2) : s}M';
+}
 String timeAgo(DateTime? date) {
   if (date == null) return 'just now';
   final secs = DateTime.now().difference(date).inSeconds;
@@ -412,10 +432,16 @@ class _FeedHomeState extends State<_FeedHome> {
   bool _adDismissed = false;
   bool _refreshing = false;
 
-  // Guards against the People tab firing multiple overlapping fetches
-  // (e.g. a rebuild happening while a previous _loadPeople() is still
-  // in flight).
-  bool _peopleLoading = false;
+    // Guards against the People tab firing multiple overlapping fetches
+    // (e.g. a rebuild happening while a previous _loadPeople() is still
+    // in flight).
+    bool _peopleLoading = false;
+    // Pagination cursor for the People tab — loads 20 users at a time
+    // instead of pulling all 200 up front. _peopleHasMore goes false once
+    // a page comes back shorter than the page size (no more users left).
+    DocumentSnapshot? _peopleLastDoc;
+    bool _peopleHasMore = true;
+    static const int _peoplePageSize = 20;
 
   // ── Weighted-shuffle feed state ──
   // A per-session RNG (lives only on this device, so shuffles are
@@ -472,11 +498,11 @@ class _FeedHomeState extends State<_FeedHome> {
     // Instagram-style re-tap-home: fresh shuffle roll, not just a visual
     // refresh — every post gets a new position drawn from its weight.
     _resetShuffle();
-    Future.wait([
-      _loadFollowing(),
-      if (_tab == _FeedTab.people) _loadPeople(),
-      _applyRandomizedOrder(_allPosts).then((_) { if (mounted) _applySearch(); }),
-    ]).then((_) {
+        Future.wait([
+          _loadFollowing(),
+          if (_tab == _FeedTab.people) _loadPeople(reset: true),
+          _applyRandomizedOrder(_allPosts).then((_) { if (mounted) _applySearch(); }),
+        ]).then((_) {
       if (mounted) setState(() => _refreshing = false);
     });
   }
@@ -630,29 +656,45 @@ class _FeedHomeState extends State<_FeedHome> {
   // shared UserInfoCache with every doc it reads so each row's
   // FutureBuilder resolves instantly instead of re-fetching the same
   // document a moment later.
-  Future<void> _loadPeople() async {
-    if (_user == null || _peopleLoading) return;
-    _peopleLoading = true;
-    try {
-      final snap = await FirebaseFirestore.instance.collection('users').limit(200).get();
-      _people = snap.docs.where((d) => d.id != _user!.uid).map((d) {
-        final u = d.data();
-        final info = {
-          'name': (u['name'] as String?)?.trim().isNotEmpty == true ? u['name'] : 'Artist',
-          'avatar': u['profilePic'] ?? '',
-          'verified': u['verified'] == true,
-          'followersCount': (u['followersCount'] as num?)?.toInt() ?? 0,
-        };
-        UserInfoCache.instance.prime(d.id, info);
-        return {'uid': d.id, ...info};
-      }).toList();
-      _applySearch();
-    } catch (_) {
-    } finally {
-      _peopleLoading = false;
-    }
-  }
+    // Loads one page (20 users) starting after the last-seen doc. Called
+    // once on tab-open (reset=true, fresh from the start) and again each
+    // time the list is scrolled near the bottom (reset=false, continues
+    // from _peopleLastDoc) — so opening the tab costs 20 reads, not 200.
+    Future<void> _loadPeople({bool reset = true}) async {
+      if (_user == null || _peopleLoading) return;
+      if (!reset && !_peopleHasMore) return;
+      _peopleLoading = true;
+      try {
+        Query query = FirebaseFirestore.instance.collection('users').orderBy(FieldPath.documentId).limit(_peoplePageSize);
+        if (!reset && _peopleLastDoc != null) {
+          query = query.startAfterDocument(_peopleLastDoc!);
+        }
+        final snap = await query.get();
+        final newPeople = snap.docs.where((d) => d.id != _user!.uid).map((d) {
+          final u = d.data() as Map<String, dynamic>;
+          final info = {
+            'name': (u['name'] as String?)?.trim().isNotEmpty == true ? u['name'] : 'Artist',
+            'avatar': u['profilePic'] ?? '',
+            'verified': u['verified'] == true,
+            'followersCount': (u['followersCount'] as num?)?.toInt() ?? 0,
+          };
+          UserInfoCache.instance.prime(d.id, info);
+          return {'uid': d.id, ...info};
+        }).toList();
 
+        if (reset) {
+          _people = newPeople;
+        } else {
+          _people = [..._people, ...newPeople];
+        }
+        _peopleHasMore = snap.docs.length == _peoplePageSize;
+        if (snap.docs.isNotEmpty) _peopleLastDoc = snap.docs.last;
+        _applySearch();
+      } catch (_) {
+      } finally {
+        _peopleLoading = false;
+      }
+    }
   void _applySearch() {
     final term = _searchCtrl.text.trim().toLowerCase();
     if (_tab == _FeedTab.people) {
@@ -666,16 +708,20 @@ class _FeedHomeState extends State<_FeedHome> {
     }
     if (mounted) setState(() {});
   }
-
   void _onTabChange(_FeedTab t) {
     setState(() => _tab = t);
     _searchCtrl.clear();
     _resetShuffle();
-    if (t == _FeedTab.people) {
-      _loadPeople();
-    } else {
-      _listenPosts();
-    }
+    // _followingSet only changes when THIS user follows/unfollows someone
+    // (already updated locally in _toggleFollow) — no need to refetch it
+    // from Firestore just because the tab changed.
+       if (t == _FeedTab.people) {
+         _peopleLastDoc = null;
+         _peopleHasMore = true;
+         _loadPeople(reset: true);
+       } else {
+         _listenPosts();
+       }
   }
 
   Future<void> _toggleFollow(String targetUid) async {
@@ -685,19 +731,21 @@ class _FeedHomeState extends State<_FeedHome> {
       final me = _user!.uid;
       final targetUserRef = FirebaseFirestore.instance.collection('users').doc(targetUid);
       if (wasFollowing) {
-        await FirebaseFirestore.instance.collection('users').doc(me).collection('following').doc(targetUid).delete();
-        await FirebaseFirestore.instance.collection('users').doc(targetUid).collection('followers').doc(me).delete();
-        // Keep users/{uid}.followersCount in sync so the feed's follower
-        // weighting has a cheap number to read instead of counting the
-        // followers subcollection on every shuffle.
-        await targetUserRef.update({'followersCount': FieldValue.increment(-1)});
+             await FirebaseFirestore.instance.collection('users').doc(me).collection('following').doc(targetUid).delete();
+             await FirebaseFirestore.instance.collection('users').doc(targetUid).collection('followers').doc(me).delete();
+             // Keep users/{uid}.followersCount in sync so the feed's follower
+             // weighting has a cheap number to read instead of counting the
+             // followers subcollection on every shuffle.
+             await targetUserRef.update({'followersCount': FieldValue.increment(-1)});
+             await FirebaseFirestore.instance.collection('users').doc(me).update({'followingCount': FieldValue.increment(-1)});
       } else {
-        await FirebaseFirestore.instance.collection('users').doc(me).collection('following').doc(targetUid)
-            .set({'since': FieldValue.serverTimestamp()});
-        await FirebaseFirestore.instance.collection('users').doc(targetUid).collection('followers').doc(me)
-            .set({'since': FieldValue.serverTimestamp()});
-        await targetUserRef.update({'followersCount': FieldValue.increment(1)});
-        sendNotification(targetUid, 'follow');
+                await FirebaseFirestore.instance.collection('users').doc(me).collection('following').doc(targetUid)
+                    .set({'since': FieldValue.serverTimestamp()});
+                await FirebaseFirestore.instance.collection('users').doc(targetUid).collection('followers').doc(me)
+                    .set({'since': FieldValue.serverTimestamp()});
+                await targetUserRef.update({'followersCount': FieldValue.increment(1)});
+                await FirebaseFirestore.instance.collection('users').doc(me).update({'followingCount': FieldValue.increment(1)});
+                sendNotification(targetUid, 'follow');
       }
       // Their cached follower count is now stale — drop it so the next
       // read (e.g. next time their posts get weighed) picks up the change.
@@ -983,55 +1031,72 @@ class _FeedHomeState extends State<_FeedHome> {
     );
   }
 
-  Widget _buildPeopleList() {
-    if (_people.isEmpty) {
-      // _loadPeople() is already triggered once from _onTabChange /
-      // scrollToTopAndRefresh — calling it again here on every rebuild
-      // (as a FutureBuilder's `future:` would) was firing duplicate,
-      // overlapping fetches of the entire users collection, which was
-      // the main reason the People tab felt slow to load.
-      if (_people.isEmpty && !_peopleLoading) {
-        // Safety net: if for some reason nothing triggered a load yet
-        // (e.g. tab restored to People on a fresh instance), kick one off
-        // without re-entering on every rebuild.
-        _loadPeople();
+    Widget _buildPeopleList() {
+      if (_people.isEmpty) {
+        // _loadPeople() is already triggered once from _onTabChange /
+        // scrollToTopAndRefresh — calling it again here on every rebuild
+        // (as a FutureBuilder's `future:` would) was firing duplicate,
+        // overlapping fetches of the entire users collection, which was
+        // the main reason the People tab felt slow to load.
+        if (_people.isEmpty && !_peopleLoading) {
+          // Safety net: if for some reason nothing triggered a load yet
+          // (e.g. tab restored to People on a fresh instance), kick one off
+          // without re-entering on every rebuild.
+          _loadPeople(reset: true);
+        }
+        return const Center(child: CircularProgressIndicator(color: _white));
       }
-      return const Center(child: CircularProgressIndicator(color: _white));
-    }
-    return ListView.builder(
-      padding: const EdgeInsets.fromLTRB(14, 10, 14, 100),
-      itemCount: _people.length,
-      itemBuilder: (context, i) {
-        final p = _people[i];
-        final isFollowing = _followingSet.contains(p['uid']);
-        return FutureBuilder<Map<String, dynamic>>(
-          future: UserInfoCache.instance.get(p['uid']),
-          builder: (context, snap) {
-            final verified = snap.data?['verified'] == true;
-            return Container(
-              margin: const EdgeInsets.only(bottom: 10),
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(color: _black2, borderRadius: BorderRadius.circular(18), border: Border.all(color: _white10)),
-              child: Row(children: [
-                GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () => Navigator.pushNamed(context, '/viewpro', arguments: p['uid']),
+      return NotificationListener<ScrollNotification>(
+        onNotification: (notif) {
+          // Fire the next page shortly before the user hits the bottom, so
+          // scrolling feels continuous instead of pausing at the edge.
+          if (_peopleHasMore && !_peopleLoading &&
+              notif.metrics.pixels >= notif.metrics.maxScrollExtent - 400) {
+            _loadPeople(reset: false);
+          }
+          return false;
+        },
+        child: ListView.builder(
+          padding: const EdgeInsets.fromLTRB(14, 10, 14, 100),
+          itemCount: _people.length + (_peopleHasMore ? 1 : 0),
+          itemBuilder: (context, i) {
+            if (i >= _people.length) {
+              return const Padding(
+                padding: EdgeInsets.symmetric(vertical: 20),
+                child: Center(child: CircularProgressIndicator(color: _white, strokeWidth: 2)),
+              );
+            }
+            final p = _people[i];
+            final isFollowing = _followingSet.contains(p['uid']);
+            return FutureBuilder<Map<String, dynamic>>(
+              future: UserInfoCache.instance.get(p['uid']),
+              builder: (context, snap) {
+                final verified = snap.data?['verified'] == true;
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 10),
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(color: _black2, borderRadius: BorderRadius.circular(18), border: Border.all(color: _white10)),
                   child: Row(children: [
-                    _Avatar(url: p['avatar'], name: p['name'], size: 46),
-                    const SizedBox(width: 12),
-                    Flexible(child: Text(p['name'], style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w800, fontSize: 14.5), overflow: TextOverflow.ellipsis)),
-                    if (verified) Padding(padding: const EdgeInsets.only(left: 4), child: verifiedTick()),
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => Navigator.pushNamed(context, '/viewpro', arguments: p['uid']),
+                      child: Row(children: [
+                        _Avatar(url: p['avatar'], name: p['name'], size: 46),
+                        const SizedBox(width: 12),
+                        Flexible(child: Text(p['name'], style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w800, fontSize: 14.5), overflow: TextOverflow.ellipsis)),
+                        if (verified) Padding(padding: const EdgeInsets.only(left: 4), child: verifiedTick()),
+                      ]),
+                    ),
+                    const Spacer(),
+                    _FollowBtn(following: isFollowing, onTap: () => _toggleFollow(p['uid'])),
                   ]),
-                ),
-                const Spacer(),
-                _FollowBtn(following: isFollowing, onTap: () => _toggleFollow(p['uid'])),
-              ]),
+                );
+              },
             );
           },
-        );
-      },
-    );
-  }
+        ),
+      );
+    }
 }
 
 // ─── Small shared widgets ──────────────────────────────────────────────

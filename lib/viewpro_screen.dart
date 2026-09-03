@@ -33,7 +33,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
-import 'home_screen.dart' show UserInfoCache, sendNotification, timeAgo, verifiedTick;
+import 'home_screen.dart' show UserInfoCache, sendNotification, timeAgo, verifiedTick, formatCount;
 
 // ─── PALETTE (matches home_screen.dart's values) ────────────────────
 const _black    = Color(0xFF000000);
@@ -180,23 +180,18 @@ class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateM
       if (snap.exists) data = snap.data()!;
     } catch (_) {}
 
-    int followersCount = 0, followingCount = 0;
+    // Read the cheap counter fields on the user doc instead of counting
+    // the followers/following subcollections — a popular account's
+    // profile used to cost one read PER FOLLOWER on every single view.
+    int followersCount = (data['followersCount'] as num?)?.toInt() ?? 0;
+    int followingCount = (data['followingCount'] as num?)?.toInt() ?? 0;
     List<Map<String, dynamic>> posts = [];
 
     try {
-      final s = await FirebaseFirestore.instance.collection('users').doc(_targetUid).collection('followers').get();
-      followersCount = s.docs.length;
-    } catch (_) {}
-
-    try {
-      final s = await FirebaseFirestore.instance.collection('users').doc(_targetUid).collection('following').get();
-      followingCount = s.docs.length;
-    } catch (_) {}
-
-    try {
-      final s = await FirebaseFirestore.instance.collection('posts').where('authorUid', isEqualTo: _targetUid).get();
-      posts = s.docs.map((d) => {'id': d.id, ...d.data()}).toList();
-      posts.sort((a, b) {
+      final s = await FirebaseFirestore.instance
+          .collection('posts').where('authorUid', isEqualTo: _targetUid)
+          .orderBy('createdAt', descending: true).limit(60).get();
+      posts = s.docs.map((d) => {'id': d.id, ...d.data()}).toList();      posts.sort((a, b) {
         final ta = (a['createdAt'] is Timestamp) ? (a['createdAt'] as Timestamp).millisecondsSinceEpoch : 0;
         final tb = (b['createdAt'] is Timestamp) ? (b['createdAt'] as Timestamp).millisecondsSinceEpoch : 0;
         return tb.compareTo(ta);
@@ -239,16 +234,20 @@ class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateM
     final wasFollowing = _followingSet.contains(uid);
     setState(() => wasFollowing ? _followingSet.remove(uid) : _followingSet.add(uid));
     try {
-      if (wasFollowing) {
-        await FirebaseFirestore.instance.collection('users').doc(_me!.uid).collection('following').doc(uid).delete();
-        await FirebaseFirestore.instance.collection('users').doc(uid).collection('followers').doc(_me!.uid).delete();
-      } else {
-        await FirebaseFirestore.instance.collection('users').doc(_me!.uid).collection('following').doc(uid)
-            .set({'since': FieldValue.serverTimestamp()});
-        await FirebaseFirestore.instance.collection('users').doc(uid).collection('followers').doc(_me!.uid)
-            .set({'since': FieldValue.serverTimestamp()});
-        sendNotification(uid, 'follow');
-      }
+            if (wasFollowing) {
+              await FirebaseFirestore.instance.collection('users').doc(_me!.uid).collection('following').doc(uid).delete();
+              await FirebaseFirestore.instance.collection('users').doc(uid).collection('followers').doc(_me!.uid).delete();
+              await FirebaseFirestore.instance.collection('users').doc(uid).update({'followersCount': FieldValue.increment(-1)});
+              await FirebaseFirestore.instance.collection('users').doc(_me!.uid).update({'followingCount': FieldValue.increment(-1)});
+            } else {
+              await FirebaseFirestore.instance.collection('users').doc(_me!.uid).collection('following').doc(uid)
+                  .set({'since': FieldValue.serverTimestamp()});
+              await FirebaseFirestore.instance.collection('users').doc(uid).collection('followers').doc(_me!.uid)
+                  .set({'since': FieldValue.serverTimestamp()});
+              await FirebaseFirestore.instance.collection('users').doc(uid).update({'followersCount': FieldValue.increment(1)});
+              await FirebaseFirestore.instance.collection('users').doc(_me!.uid).update({'followingCount': FieldValue.increment(1)});
+              sendNotification(uid, 'follow');
+            }
       if (uid == _targetUid) _loadProfile(); // refresh counts on screen, matches web behavior
     } catch (_) {
       setState(() => wasFollowing ? _followingSet.add(uid) : _followingSet.remove(uid));
@@ -483,9 +482,9 @@ class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateM
           const SizedBox(width: 20),
           Expanded(
             child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
-              _statItem('${_posts.length}', 'Posts', _scrollToPosts),
-              _statItem('$_followersCount', 'Followers', () => _openPeopleModal('followers')),
-              _statItem('$_followingCount', 'Following', () => _openPeopleModal('following')),
+                            _statItem(formatCount(_posts.length), 'Posts', _scrollToPosts),
+                            _statItem(formatCount(_followersCount), 'Followers', () => _openPeopleModal('followers')),
+                            _statItem(formatCount(_followingCount), 'Following', () => _openPeopleModal('following')),
             ]),
           ),
         ]),
