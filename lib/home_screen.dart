@@ -81,7 +81,7 @@ Future<String?> _uploadToCloudinary(XFile file) async {
     return null;
   }
 }
-const _backendBaseUrl = 'https://four44music-backend.onrender.com';
+const _backendBaseUrl = 'https://four44music-broadcast-backend.onrender.com';
 
 String _guessImageContentType(String filename) {
   final lower = filename.toLowerCase();
@@ -426,6 +426,11 @@ class _FeedHomeState extends State<_FeedHome> {
   // reshuffle point (see _resetShuffle) so the feed doesn't reorder
   // itself under a user's thumb just because a like/comment came in.
   final Map<String, double> _shuffleKeys = {};
+  // Pins the current user's just-published post to the very top of the
+  // feed, Instagram-style, so it's immediately visible as proof the post
+  // went live. Cleared at the same three refresh points as _shuffleKeys
+  // (see _resetShuffle) — after that it re-enters normal weighted order.
+  String? _justPostedId;
 
   User? get _user => widget.currentUser;
 
@@ -572,14 +577,26 @@ class _FeedHomeState extends State<_FeedHome> {
       final followerBoost = _followerWeightFromCount(followers);
       _shuffleKeys[id] = _rollWeightedKey(recency * followerBoost);
     }
-    posts.sort((a, b) => (_shuffleKeys[b['id']] ?? 0).compareTo(_shuffleKeys[a['id']] ?? 0));
+       posts.sort((a, b) {
+         // The user's own just-published post always wins, regardless of
+         // its rolled weight — same idea as Instagram showing your new post
+         // first until you refresh.
+         if (_justPostedId != null) {
+           if (a['id'] == _justPostedId) return -1;
+           if (b['id'] == _justPostedId) return 1;
+         }
+         return (_shuffleKeys[b['id']] ?? 0).compareTo(_shuffleKeys[a['id']] ?? 0);
+       });
   }
 
   // Clears rolled keys so the next _applyRandomizedOrder pass re-rolls
   // everything fresh. Called only at the three defined refresh points:
   // app open (_bootstrap), re-tapping Home (scrollToTopAndRefresh), and
   // switching feed tabs (_onTabChange) — not on every background update.
-  void _resetShuffle() => _shuffleKeys.clear();
+    void _resetShuffle() {
+      _shuffleKeys.clear();
+      _justPostedId = null;
+    }
 
   void _listenStories() {
     _storiesSub?.cancel();
@@ -775,9 +792,15 @@ class _FeedHomeState extends State<_FeedHome> {
     }
   }
 
-  void _openNewPostComposer() {
-    Navigator.push(context, MaterialPageRoute(builder: (_) => _NewPostScreen(myName: _myName, myAvatar: _myAvatar)));
-  }
+   void _openNewPostComposer() async {
+     final newPostId = await Navigator.push<String>(
+       context,
+       MaterialPageRoute(builder: (_) => _NewPostScreen(myName: _myName, myAvatar: _myAvatar)),
+     );
+     if (newPostId != null && mounted) {
+       setState(() => _justPostedId = newPostId);
+     }
+   }
 
   void _openNotifications() {
     showModalBottomSheet(
@@ -1741,13 +1764,13 @@ class _NewPostScreenState extends State<_NewPostScreen> {
       final me = FirebaseAuth.instance.currentUser!;
       String? imageUrl;
       if (_image != null) imageUrl = await _uploadToR2(_image!, kind: 'post', uid: me.uid);
-      await FirebaseFirestore.instance.collection('posts').add({
-        'authorUid': me.uid, 'authorName': widget.myName, 'authorAvatar': widget.myAvatar,
-        'text': text, 'imageUrl': imageUrl, 'linkUrl': link.isEmpty ? null : link,
-        'likesCount': 0, 'commentsCount': 0, 'viewsCount': 0,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-      if (mounted) Navigator.pop(context);
+            final docRef = await FirebaseFirestore.instance.collection('posts').add({
+              'authorUid': me.uid, 'authorName': widget.myName, 'authorAvatar': widget.myAvatar,
+              'text': text, 'imageUrl': imageUrl, 'linkUrl': link.isEmpty ? null : link,
+              'likesCount': 0, 'commentsCount': 0, 'viewsCount': 0,
+              'createdAt': FieldValue.serverTimestamp(),
+            });
+            if (mounted) Navigator.pop(context, docRef.id);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Couldn't publish. Please try again.")));

@@ -208,7 +208,7 @@ class _ProfileScreenState extends State<ProfileScreen> with TickerProviderStateM
 // the full explanation. This is the bytes-based twin of that helper,
 // since avatar upload here already works with raw bytes rather than
 // an XFile.
-const _r2BackendBaseUrl = 'https://four44music-backend.onrender.com';
+const _r2BackendBaseUrl = 'https://four44music-broadcast-backend.onrender.com';
 
 Future<String?> _uploadToR2(Uint8List bytes, String filename, {required String uid}) async {
   try {
