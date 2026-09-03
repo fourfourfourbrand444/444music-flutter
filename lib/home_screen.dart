@@ -624,12 +624,15 @@ class _FeedHomeState extends State<_FeedHome> {
       _justPostedId = null;
     }
 
-  void _listenStories() {
-    _storiesSub?.cancel();
-    final cutoff = Timestamp.fromDate(DateTime.now().subtract(const Duration(hours: 24)));
-    _storiesSub = FirebaseFirestore.instance
-        .collection('stories').where('createdAt', isGreaterThan: cutoff)
-        .orderBy('createdAt').snapshots().listen((snap) {
+    void _listenStories() {
+      _storiesSub?.cancel();
+      final cutoff = Timestamp.fromDate(DateTime.now().subtract(const Duration(hours: 24)));
+      // Capped so this listener's cost stays flat as story volume grows —
+      // without a limit it re-reads every story posted app-wide in the
+      // last 24h, for every user, every session.
+      _storiesSub = FirebaseFirestore.instance
+          .collection('stories').where('createdAt', isGreaterThan: cutoff)
+          .orderBy('createdAt', descending: true).limit(200).snapshots().listen((snap) {
       final map = <String, List<Map<String, dynamic>>>{};
       for (final d in snap.docs) {
         final s = {'id': d.id, ...d.data()};
