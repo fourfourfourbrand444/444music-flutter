@@ -187,17 +187,26 @@ class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateM
     int followingCount = (data['followingCount'] as num?)?.toInt() ?? 0;
     List<Map<String, dynamic>> posts = [];
 
-    try {
-      final s = await FirebaseFirestore.instance
-          .collection('posts').where('authorUid', isEqualTo: _targetUid)
-          .orderBy('createdAt', descending: true).limit(60).get();
-      posts = s.docs.map((d) => {'id': d.id, ...d.data()}).toList();      posts.sort((a, b) {
-        final ta = (a['createdAt'] is Timestamp) ? (a['createdAt'] as Timestamp).millisecondsSinceEpoch : 0;
-        final tb = (b['createdAt'] is Timestamp) ? (b['createdAt'] as Timestamp).millisecondsSinceEpoch : 0;
-        return tb.compareTo(ta);
-      });
-    } catch (_) {}
-
+        try {
+          final s = await FirebaseFirestore.instance
+              .collection('posts').where('authorUid', isEqualTo: _targetUid)
+              .orderBy('createdAt', descending: true).limit(60).get();
+          posts = s.docs.map((d) => {'id': d.id, ...d.data()}).toList();
+        } catch (e) {
+          debugPrint('posts query failed, falling back to unsorted fetch: $e');
+          try {
+            final s2 = await FirebaseFirestore.instance
+                .collection('posts').where('authorUid', isEqualTo: _targetUid).limit(60).get();
+            posts = s2.docs.map((d) => {'id': d.id, ...d.data()}).toList();
+          } catch (e2) {
+            debugPrint('fallback posts query also failed: $e2');
+          }
+        }
+        posts.sort((a, b) {
+          final ta = (a['createdAt'] is Timestamp) ? (a['createdAt'] as Timestamp).millisecondsSinceEpoch : 0;
+          final tb = (b['createdAt'] is Timestamp) ? (b['createdAt'] as Timestamp).millisecondsSinceEpoch : 0;
+          return tb.compareTo(ta);
+        });
     // Force a fresh read for this uid so the header/avatar never lags
     // behind a just-saved edit — same reasoning web's getUserInfo cache has.
     UserInfoCache.instance.invalidate(_targetUid);

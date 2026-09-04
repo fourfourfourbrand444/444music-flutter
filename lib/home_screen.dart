@@ -247,7 +247,8 @@ Future<void> sendNotification(String targetUid, String type, {
       'postImage': postImage,
       'commentText': commentText != null && commentText.length > 140 ? commentText.substring(0, 140) : commentText,
       'read': false,
-      'createdAt': FieldValue.serverTimestamp(),
+            'createdAt': FieldValue.serverTimestamp(),
+            'expiresAt': Timestamp.fromDate(DateTime.now().add(const Duration(hours: 48))),
     });
   } catch (_) {}
 }
@@ -642,17 +643,22 @@ class _FeedHomeState extends State<_FeedHome> {
     });
   }
 
-  void _listenNotifs() {
-    if (_user == null) return;
-    _notifSub?.cancel();
-    _notifSub = FirebaseFirestore.instance
-        .collection('notifications').doc(_user!.uid).collection('items')
-        .orderBy('createdAt', descending: true).limit(50)
-        .snapshots().listen((snap) {
-      _notifs = snap.docs.map((d) => {'id': d.id, ...d.data()}).toList();
-      if (mounted) setState(() => _unreadCount = _notifs.where((n) => n['read'] != true).length);
-    });
-  }
+    void _listenNotifs() {
+      if (_user == null) return;
+      _notifSub?.cancel();
+      _notifSub = FirebaseFirestore.instance
+          .collection('notifications').doc(_user!.uid).collection('items')
+          .orderBy('createdAt', descending: true).limit(50)
+          .snapshots().listen((snap) {
+        final now = Timestamp.now();
+        final all = snap.docs.map((d) => {'id': d.id, ...d.data()}).toList();
+        _notifs = all.where((n) {
+          final expiresAt = n['expiresAt'];
+          return expiresAt is! Timestamp || expiresAt.compareTo(now) > 0;
+        }).toList();
+        if (mounted) setState(() => _unreadCount = _notifs.where((n) => n['read'] != true).length);
+      });
+    }
 
   // People tab: fetches once (guarded by _peopleLoading so a rebuild
   // mid-fetch can't fire a second overlapping query), and primes the
@@ -832,6 +838,7 @@ class _FeedHomeState extends State<_FeedHome> {
       'authorUid': _user!.uid, 'authorName': _myName, 'authorAvatar': _myAvatar,
       'type': post['imageUrl'] != null ? 'image' : 'text',
       'createdAt': FieldValue.serverTimestamp(),
+      'expiresAt': Timestamp.fromDate(DateTime.now().add(const Duration(hours: 24))),
       'sharedPostId': post['id'], 'sharedFromUid': post['authorUid'],
       'sharedFromName': authorInfo['name'], 'sharedFromAvatar': authorInfo['avatar'],
       if (post['imageUrl'] != null) 'imageUrl': post['imageUrl'],
@@ -1943,6 +1950,7 @@ class _StoryComposerScreenState extends State<_StoryComposerScreen> {
       final payload = <String, dynamic>{
         'authorUid': me.uid, 'authorName': widget.myName, 'authorAvatar': widget.myAvatar,
         'type': _type, 'createdAt': FieldValue.serverTimestamp(),
+        'expiresAt': Timestamp.fromDate(DateTime.now().add(const Duration(hours: 24))),
       };
       if (_type == 'image') {
         final url = await _uploadToR2(_image!, kind: 'story', uid: me.uid);
