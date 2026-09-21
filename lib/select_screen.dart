@@ -25,8 +25,6 @@ class PlatformItem {
   final Color  gradient1;
   final Color  gradient2;
   final String fallback;
-  // simpleIconSlug: slug used on cdn.simpleicons.org
-  // Empty string = not available on CDN, use fallback initials
   final String simpleIconSlug;
 
   const PlatformItem({
@@ -152,28 +150,95 @@ const _radio = <PlatformItem>[
   PlatformItem(name: 'Joox',
       gradient1: Color(0xFF43a047), gradient2: Color(0xFF1a4d1c),
       fallback: 'JX', simpleIconSlug: 'joox'),
+  PlatformItem(name: 'Claro Música',
+      gradient1: Color(0xFFe53935), gradient2: Color(0xFF6a0000),
+      fallback: 'CM', simpleIconSlug: ''),
+  PlatformItem(name: 'Fizy',
+      gradient1: Color(0xFFff8f00), gradient2: Color(0xFF8c4a00),
+      fallback: 'FZ', simpleIconSlug: ''),
+  PlatformItem(name: 'Yandex Music',
+      gradient1: Color(0xFFffcc00), gradient2: Color(0xFF997a00),
+      fallback: 'YX', simpleIconSlug: 'yandex'),
   PlatformItem(name: 'Gaana',
       gradient1: Color(0xFFe53935), gradient2: Color(0xFF7a0000),
-      fallback: 'GA', simpleIconSlug: 'gaana'),
+      fallback: 'GA', simpleIconSlug: ''),
   PlatformItem(name: 'JioSaavn',
       gradient1: Color(0xFF29b6f6), gradient2: Color(0xFF0060aa),
       fallback: 'JS', simpleIconSlug: 'jiosaavn'),
   PlatformItem(name: 'Hungama',
       gradient1: Color(0xFFff6f00), gradient2: Color(0xFF8c3300),
-      fallback: 'HU', simpleIconSlug: 'hungama'),
-  PlatformItem(name: 'Yandex Music',
-      gradient1: Color(0xFFffcc00), gradient2: Color(0xFF997a00),
-      fallback: 'YX', simpleIconSlug: 'yandexmusic'),
-  PlatformItem(name: 'Claro Música',
-      gradient1: Color(0xFFe53935), gradient2: Color(0xFF6a0000),
-      fallback: 'CM', simpleIconSlug: ''),
+      fallback: 'HU', simpleIconSlug: ''),
+  PlatformItem(name: 'Nuuday',
+      gradient1: Color(0xFF546e7a), gradient2: Color(0xFF1e3038),
+      fallback: 'NU', simpleIconSlug: ''),
   PlatformItem(name: 'MediaNet',
       gradient1: Color(0xFF546e7a), gradient2: Color(0xFF1e3038),
       fallback: 'MN', simpleIconSlug: ''),
 ];
 
+// New group — matches web's "More Global & Regional Platforms" section
+const _moreGlobal = <PlatformItem>[
+  PlatformItem(name: 'AMI Entertainment',
+      gradient1: Color(0xFF6d4c41), gradient2: Color(0xFF2e1a15),
+      fallback: 'AE', simpleIconSlug: ''),
+  PlatformItem(name: 'AWA',
+      gradient1: Color(0xFF8e24aa), gradient2: Color(0xFF3e0a4a),
+      fallback: 'AW', simpleIconSlug: ''),
+  PlatformItem(name: 'Gracenote',
+      gradient1: Color(0xFF00838f), gradient2: Color(0xFF003339),
+      fallback: 'GN', simpleIconSlug: ''),
+  PlatformItem(name: 'InProdicon',
+      gradient1: Color(0xFF3949ab), gradient2: Color(0xFF141a5c),
+      fallback: 'IP', simpleIconSlug: ''),
+  PlatformItem(name: 'LINE',
+      gradient1: Color(0xFF06C755), gradient2: Color(0xFF035c28),
+      fallback: 'LN', simpleIconSlug: 'line'),
+  PlatformItem(name: 'MixCloud',
+      gradient1: Color(0xFF5000FF), gradient2: Color(0xFF250080),
+      fallback: 'MX', simpleIconSlug: 'mixcloud'),
+  PlatformItem(name: 'Music Aroma',
+      gradient1: Color(0xFFef6c00), gradient2: Color(0xFF6b3200),
+      fallback: 'MA', simpleIconSlug: ''),
+  PlatformItem(name: 'Muud',
+      gradient1: Color(0xFFffb300), gradient2: Color(0xFF8c6000),
+      fallback: 'MU', simpleIconSlug: ''),
+  PlatformItem(name: 'Peloton',
+      gradient1: Color(0xFF181818), gradient2: Color(0xFF3a3a3a),
+      fallback: 'PL', simpleIconSlug: 'peloton'),
+  PlatformItem(name: 'Saavn',
+      gradient1: Color(0xFF29b6f6), gradient2: Color(0xFF0060aa),
+      fallback: 'SV', simpleIconSlug: 'jiosaavn'),
+  PlatformItem(name: 'Sirius XM',
+      gradient1: Color(0xFF002F6C), gradient2: Color(0xFF001531),
+      fallback: 'SX', simpleIconSlug: 'siriusxm'),
+  PlatformItem(name: 'SoundMouse',
+      gradient1: Color(0xFF37474f), gradient2: Color(0xFF12181c),
+      fallback: 'SM', simpleIconSlug: ''),
+  PlatformItem(name: 'Tencent',
+      gradient1: Color(0xFF12B7F5), gradient2: Color(0xFF075c7c),
+      fallback: 'TC', simpleIconSlug: 'tencentqq'),
+  PlatformItem(name: 'iMusica',
+      gradient1: Color(0xFFd32f2f), gradient2: Color(0xFF6a0000),
+      fallback: 'iM', simpleIconSlug: ''),
+  PlatformItem(name: 'KION',
+      gradient1: Color(0xFF8c1aff), gradient2: Color(0xFF3e007a),
+      fallback: 'KN', simpleIconSlug: ''),
+  PlatformItem(name: 'Zvuk',
+      gradient1: Color(0xFF9c27b0), gradient2: Color(0xFF430b4d),
+      fallback: 'ZV', simpleIconSlug: ''),
+  PlatformItem(name: 'VK Музыка',
+      gradient1: Color(0xFF0077FF), gradient2: Color(0xFF003580),
+      fallback: 'VK', simpleIconSlug: 'vk'),
+  PlatformItem(name: 'ОК Музыка',
+      gradient1: Color(0xFFEE8208), gradient2: Color(0xFF6b3900),
+      fallback: 'OK', simpleIconSlug: 'odnoklassniki'),
+];
+
 // ════════════════════════════════════════════════════════════════════
-//  MAIN SCREEN
+//  MAIN SCREEN — every platform is pre-selected and locked, matching
+//  web's select-platforms.html: nothing here can be toggled off, the
+//  search only filters what's VISIBLE, and Continue always carries the
+//  full platform list forward, same as the web page's continueNext().
 // ════════════════════════════════════════════════════════════════════
 class SelectScreen extends StatefulWidget {
   const SelectScreen({super.key});
@@ -184,15 +249,15 @@ class SelectScreen extends StatefulWidget {
 class _SelectScreenState extends State<SelectScreen>
     with TickerProviderStateMixin {
 
-  final Set<String> _selected = {};
+  // Every platform name across every group — always fully selected.
+  late final List<String> _allPlatformNames;
+
   final _searchCtrl = TextEditingController();
   String _query = '';
 
   late AnimationController _headerCtrl;
   late Animation<double>   _headerFade;
   late Animation<Offset>   _headerSlide;
-  late AnimationController _barCtrl;
-  late Animation<double>   _barSlide;
 
   @override
   void initState() {
@@ -201,6 +266,10 @@ class _SelectScreenState extends State<SelectScreen>
       statusBarColor: Colors.transparent,
       systemNavigationBarColor: _black,
     ));
+
+    _allPlatformNames = [
+      ..._major, ..._social, ..._africa, ..._radio, ..._moreGlobal,
+    ].map((p) => p.name).toList();
 
     _headerCtrl = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 700));
@@ -211,10 +280,6 @@ class _SelectScreenState extends State<SelectScreen>
         parent: _headerCtrl, curve: Curves.easeOutCubic));
     _headerCtrl.forward();
 
-    _barCtrl  = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 450));
-    _barSlide = CurvedAnimation(parent: _barCtrl, curve: Curves.easeOutCubic);
-
     _searchCtrl.addListener(
             () => setState(() => _query = _searchCtrl.text.toLowerCase().trim()));
   }
@@ -222,35 +287,18 @@ class _SelectScreenState extends State<SelectScreen>
   @override
   void dispose() {
     _headerCtrl.dispose();
-    _barCtrl.dispose();
     _searchCtrl.dispose();
     super.dispose();
-  }
-
-  void _toggle(String name) {
-    HapticFeedback.selectionClick();
-    setState(() => _selected.contains(name)
-        ? _selected.remove(name)
-        : _selected.add(name));
-    _selected.isEmpty ? _barCtrl.reverse() : _barCtrl.forward();
-  }
-
-  void _selectAll() {
-    setState(() => _selected.addAll(
-        [..._major, ..._social, ..._africa, ..._radio].map((p) => p.name)));
-    _barCtrl.forward();
-    HapticFeedback.mediumImpact();
-  }
-
-  void _clearAll() {
-    setState(() => _selected.clear());
-    _barCtrl.reverse();
-    HapticFeedback.lightImpact();
   }
 
   List<PlatformItem> _filter(List<PlatformItem> src) => _query.isEmpty
       ? src
       : src.where((p) => p.name.toLowerCase().contains(_query)).toList();
+
+  void _continue() {
+    HapticFeedback.mediumImpact();
+    Navigator.pushNamed(context, '/confirm', arguments: _allPlatformNames);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -261,7 +309,8 @@ class _SelectScreenState extends State<SelectScreen>
     final sF = _filter(_social);
     final aF = _filter(_africa);
     final rF = _filter(_radio);
-    final total = mF.length + sF.length + aF.length + rF.length;
+    final gF = _filter(_moreGlobal);
+    final visibleTotal = mF.length + sF.length + aF.length + rF.length + gF.length;
 
     return Scaffold(
       backgroundColor: _black,
@@ -285,13 +334,14 @@ class _SelectScreenState extends State<SelectScreen>
                   child: FadeTransition(opacity: _headerFade, child: _search())),
               SliverToBoxAdapter(child: _banner()),
 
-              if (total == 0 && _query.isNotEmpty)
+              if (visibleTotal == 0 && _query.isNotEmpty)
                 SliverFillRemaining(child: _empty())
               else ...[
                 if (mF.isNotEmpty) ...[_sLabel('🔥  Major Streaming'), _grid(mF)],
                 if (sF.isNotEmpty) ...[_sdiv('Social & Video'),         _grid(sF)],
                 if (aF.isNotEmpty) ...[_sdiv('🌍  African Platforms'),  _grid(aF)],
                 if (rF.isNotEmpty) ...[_sdiv('📻  Radio, Sync & More'), _grid(rF)],
+                if (gF.isNotEmpty) ...[_sdiv('🌐  More Global & Regional'), _grid(gF)],
               ],
               SliverToBoxAdapter(child: SizedBox(height: bottom + 130)),
             ],
@@ -301,16 +351,9 @@ class _SelectScreenState extends State<SelectScreen>
           Positioned(top: 0, left: 0, right: 0,
               child: RepaintBoundary(child: _topBar(top))),
 
-          // ── BOTTOM BAR ──────────────────────────────────────────
-          Positioned(
-            bottom: 0, left: 0, right: 0,
-            child: SlideTransition(
-              position: Tween<Offset>(
-                  begin: const Offset(0, 1.2), end: Offset.zero)
-                  .animate(_barSlide),
-              child: _bottomBar(bottom),
-            ),
-          ),
+          // ── BOTTOM BAR — always visible, never slides away, since
+          //    selection can never become empty ──────────────────
+          Positioned(bottom: 0, left: 0, right: 0, child: _bottomBar(bottom)),
         ],
       ),
     );
@@ -364,20 +407,25 @@ class _SelectScreenState extends State<SelectScreen>
                 ],
               ),
             ),
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 300),
-              curve: Curves.easeOutCubic,
+            // Count badge — matches web's .count-badge, always shows the
+            // full, fixed total since nothing here is togglable.
+            Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               decoration: BoxDecoration(
-                color: _selected.isNotEmpty ? _white : _white06,
+                color: _white,
                 borderRadius: BorderRadius.circular(99),
-                border: Border.all(
-                    color: _selected.isNotEmpty ? _white : _white10),
+                border: Border.all(color: _white),
               ),
-              child: Text('${_selected.length} selected',
-                  style: GoogleFonts.outfit(
-                      color: _selected.isNotEmpty ? _black : _grey,
-                      fontSize: 12, fontWeight: FontWeight.w700)),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.check_circle_rounded, color: _black, size: 13),
+                  const SizedBox(width: 5),
+                  Text('${_allPlatformNames.length} selected',
+                      style: GoogleFonts.outfit(
+                          color: _black, fontSize: 12, fontWeight: FontWeight.w700)),
+                ],
+              ),
             ),
           ],
         ),
@@ -396,7 +444,7 @@ class _SelectScreenState extends State<SelectScreen>
                 color: _white, fontSize: 32, fontWeight: FontWeight.w800,
                 height: 1.1, letterSpacing: -0.5)),
         const SizedBox(height: 10),
-        Text('Select the platforms you want to prioritise.\nYour music goes live across all chosen stores.',
+        Text('Your music is distributed everywhere we work with —\nall platforms below, plus 150+ more automatically.',
             style: GoogleFonts.dmSans(
                 color: _grey, fontSize: 13, height: 1.55)),
         const SizedBox(height: 28),
@@ -404,80 +452,50 @@ class _SelectScreenState extends State<SelectScreen>
     ),
   );
 
-  // ── SEARCH + ALL ─────────────────────────────────────────────────
+  // ── SEARCH (view/filter only — no "Select All" button, since
+  //    everything is already, and always, selected) ─────────────────
   Widget _search() => Padding(
     padding: const EdgeInsets.fromLTRB(22, 0, 22, 14),
-    child: Row(
-      children: [
-        Expanded(
-          child: Container(
-            height: 46,
-            decoration: BoxDecoration(
-              color: _black2,
-              borderRadius: BorderRadius.circular(13),
-              border: Border.all(color: _white10),
+    child: Container(
+      height: 46,
+      decoration: BoxDecoration(
+        color: _black2,
+        borderRadius: BorderRadius.circular(13),
+        border: Border.all(color: _white10),
+      ),
+      child: Row(
+        children: [
+          const SizedBox(width: 14),
+          const Icon(Icons.search_rounded, color: _greyDark, size: 18),
+          const SizedBox(width: 10),
+          Expanded(
+            child: TextField(
+              controller: _searchCtrl,
+              style: GoogleFonts.dmSans(color: _white, fontSize: 14),
+              cursorColor: _white,
+              decoration: InputDecoration(
+                hintText: 'Search platforms…',
+                hintStyle: GoogleFonts.dmSans(color: _greyDark, fontSize: 14),
+                border: InputBorder.none,
+                isDense: true,
+              ),
             ),
-            child: Row(
-              children: [
-                const SizedBox(width: 14),
-                const Icon(Icons.search_rounded, color: _greyDark, size: 18),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: TextField(
-                    controller: _searchCtrl,
-                    style: GoogleFonts.dmSans(color: _white, fontSize: 14),
-                    cursorColor: _white,
-                    decoration: InputDecoration(
-                      hintText: 'Search platforms…',
-                      hintStyle: GoogleFonts.dmSans(color: _greyDark, fontSize: 14),
-                      border: InputBorder.none,
-                      isDense: true,
-                    ),
-                  ),
+          ),
+          if (_query.isNotEmpty)
+            GestureDetector(
+              onTap: () { _searchCtrl.clear(); FocusScope.of(context).unfocus(); },
+              child: Padding(
+                padding: const EdgeInsets.only(right: 12),
+                child: Container(
+                  width: 18, height: 18,
+                  decoration: const BoxDecoration(
+                      color: _greyDark, shape: BoxShape.circle),
+                  child: const Icon(Icons.close_rounded, color: _black, size: 11),
                 ),
-                if (_query.isNotEmpty)
-                  GestureDetector(
-                    onTap: () { _searchCtrl.clear(); FocusScope.of(context).unfocus(); },
-                    child: Padding(
-                      padding: const EdgeInsets.only(right: 12),
-                      child: Container(
-                        width: 18, height: 18,
-                        decoration: const BoxDecoration(
-                            color: _greyDark, shape: BoxShape.circle),
-                        child: const Icon(Icons.close_rounded, color: _black, size: 11),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(width: 10),
-        Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: _selectAll,
-            borderRadius: BorderRadius.circular(13),
-            child: Container(
-              height: 46,
-              padding: const EdgeInsets.symmetric(horizontal: 14),
-              decoration: BoxDecoration(
-                color: _black2,
-                borderRadius: BorderRadius.circular(13),
-                border: Border.all(color: _white10),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.done_all_rounded, color: _grey, size: 15),
-                  const SizedBox(width: 6),
-                  Text('All', style: GoogleFonts.outfit(
-                      color: _grey, fontSize: 12, fontWeight: FontWeight.w600)),
-                ],
               ),
             ),
-          ),
-        ),
-      ],
+        ],
+      ),
     ),
   );
 
@@ -498,7 +516,7 @@ class _SelectScreenState extends State<SelectScreen>
           const SizedBox(width: 10),
           Expanded(
             child: Text(
-              'We distribute to 150+ stores worldwide. Platforms shown here are the most popular — your music also goes live on many more stores automatically.',
+              'We distribute to 150+ stores worldwide. Every platform below is included automatically — this list just shows you where your music will appear.',
               style: GoogleFonts.dmSans(color: _green, fontSize: 11.5, height: 1.5),
             ),
           ),
@@ -546,9 +564,7 @@ class _SelectScreenState extends State<SelectScreen>
       delegate: SliverChildBuilderDelegate(
             (ctx, i) => _PlatformCard(
           item: items[i],
-          selected: _selected.contains(items[i].name),
           animDelay: Duration(milliseconds: 30 * i),
-          onTap: () => _toggle(items[i].name),
         ),
         childCount: items.length,
       ),
@@ -571,7 +587,9 @@ class _SelectScreenState extends State<SelectScreen>
     ),
   );
 
-  // ── BOTTOM BAR ──────────────────────────────────────────────────
+  // ── BOTTOM BAR — matches web's sticky .actions-bar: count on the
+  //    left, single Continue button on the right. No Clear button,
+  //    since there's nothing a user could clear. ────────────────────
   Widget _bottomBar(double bottom) => Container(
     padding: EdgeInsets.only(left: 16, right: 16, top: 14, bottom: bottom + 14),
     decoration: BoxDecoration(
@@ -581,53 +599,16 @@ class _SelectScreenState extends State<SelectScreen>
     child: Row(
       children: [
         Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text('${_selected.length} platform${_selected.length == 1 ? '' : 's'}',
-                  style: GoogleFonts.outfit(
-                      color: _white, fontSize: 15, fontWeight: FontWeight.w700)),
-              Text('+ 150 more auto-included',
-                  style: GoogleFonts.dmSans(color: _green, fontSize: 11)),
-            ],
+          child: Text(
+            'All ${_allPlatformNames.length} platforms selected',
+            style: GoogleFonts.outfit(
+                color: _white, fontSize: 14, fontWeight: FontWeight.w700),
           ),
         ),
         Material(
           color: Colors.transparent,
           child: InkWell(
-            onTap: _clearAll,
-            borderRadius: BorderRadius.circular(13),
-            child: Container(
-              height: 48,
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              margin: const EdgeInsets.only(right: 10),
-              decoration: BoxDecoration(
-                color: _white06,
-                borderRadius: BorderRadius.circular(13),
-                border: Border.all(color: _white10),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.close_rounded, color: _grey, size: 15),
-                  const SizedBox(width: 6),
-                  Text('Clear', style: GoogleFonts.outfit(
-                      color: _grey, fontSize: 13, fontWeight: FontWeight.w600)),
-                ],
-              ),
-            ),
-          ),
-        ),
-        Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: () {
-              if (_selected.isEmpty) return;
-              HapticFeedback.mediumImpact();
-              Navigator.pushNamed(context, '/confirm',
-                  arguments: _selected.toList());
-            },
+            onTap: _continue,
             borderRadius: BorderRadius.circular(13),
             child: Container(
               height: 48,
@@ -654,19 +635,17 @@ class _SelectScreenState extends State<SelectScreen>
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  PLATFORM CARD
+//  PLATFORM CARD — always rendered in the "selected" visual state,
+//  matches web's .platform.selected with cursor:default (no tap
+//  toggling, no hover-lift, purely informational).
 // ════════════════════════════════════════════════════════════════════
 class _PlatformCard extends StatefulWidget {
   final PlatformItem item;
-  final bool         selected;
   final Duration     animDelay;
-  final VoidCallback onTap;
 
   const _PlatformCard({
     required this.item,
-    required this.selected,
     required this.animDelay,
-    required this.onTap,
   });
 
   @override
@@ -696,124 +675,81 @@ class _PlatformCardState extends State<_PlatformCard>
 
   @override
   Widget build(BuildContext context) {
-    final sel  = widget.selected;
     final item = widget.item;
 
     return FadeTransition(
       opacity: _fade,
       child: SlideTransition(
         position: _slide,
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: widget.onTap,
+        // No Material/InkWell — locked cards aren't tappable, matching
+        // the web version's cursor: default / no click-to-toggle.
+        child: Container(
+          decoration: BoxDecoration(
+            color: _white.withOpacity(0.08),
             borderRadius: BorderRadius.circular(16),
-            splashColor: Colors.white.withOpacity(0.06),
-            highlightColor: Colors.white.withOpacity(0.04),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 220),
-              curve: Curves.easeOutCubic,
-              decoration: BoxDecoration(
-                color: sel ? _white.withOpacity(0.08) : _black2,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(
-                    color: sel ? _white50 : _white10,
-                    width: sel ? 1.5 : 1.0),
-                boxShadow: sel
-                    ? [BoxShadow(
-                    color: _white.withOpacity(0.06),
-                    blurRadius: 18, offset: const Offset(0, 4))]
-                    : [],
+            border: Border.all(color: _white50, width: 1.5),
+            boxShadow: [BoxShadow(
+                color: _white.withOpacity(0.06),
+                blurRadius: 18, offset: const Offset(0, 4))],
+          ),
+          child: Stack(
+            children: [
+
+              // Tag badge
+              if (item.tag.isNotEmpty)
+                Positioned(top: 8, left: 8, child: _TagBadge(item.tag)),
+
+              // Check mark — always shown, always solid (locked/selected)
+              Positioned(
+                top: 8, right: 8,
+                child: Container(
+                  width: 20, height: 20,
+                  decoration: const BoxDecoration(color: _white, shape: BoxShape.circle),
+                  child: const Icon(Icons.check_rounded, color: _black, size: 13),
+                ),
               ),
-              child: Stack(
-                children: [
 
-                  // Tag badge
-                  if (item.tag.isNotEmpty)
-                    Positioned(top: 8, left: 8,
-                        child: _TagBadge(item.tag)),
-
-                  // Check mark
-                  Positioned(
-                    top: 8, right: 8,
-                    child: AnimatedOpacity(
-                      duration: const Duration(milliseconds: 200),
-                      opacity: sel ? 1.0 : 0.0,
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 260),
-                        curve: Curves.easeOutBack,
-                        width: 20, height: 20,
+              // Logo + name
+              Center(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 20, 8, 12),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Container(
+                        width: 52, height: 52,
                         decoration: BoxDecoration(
-                            color: sel ? _white : Colors.transparent,
-                            shape: BoxShape.circle),
-                        child: const Icon(Icons.check_rounded,
-                            color: _black, size: 13),
-                      ),
-                    ),
-                  ),
-
-                  // Logo + name
-                  Center(
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(8, 20, 8, 12),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-
-                          // Icon box with gradient background
-                          AnimatedContainer(
-                            duration: const Duration(milliseconds: 220),
-                            curve: Curves.easeOutCubic,
-                            width: sel ? 52 : 48,
-                            height: sel ? 52 : 48,
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(14),
-                              gradient: LinearGradient(
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                                colors: [item.gradient1, item.gradient2],
-                              ),
-                            ),
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(14),
-                              child: Padding(
-                                padding: const EdgeInsets.all(10),
-                                // ── THE ICON WIDGET ──
-                                child: item.hasIcon
-                                    ? _SvgNetworkIcon(
-                                  url: item.iconUrl,
-                                  fallback: item.fallback,
-                                )
-                                    : _FallbackIcon(item.fallback),
-                              ),
-                            ),
+                          borderRadius: BorderRadius.circular(14),
+                          gradient: LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [item.gradient1, item.gradient2],
                           ),
-
-                          const SizedBox(height: 10),
-
-                          // Platform name
-                          AnimatedDefaultTextStyle(
-                            duration: const Duration(milliseconds: 200),
-                            style: GoogleFonts.outfit(
-                                color: sel ? _white : _grey,
-                                fontSize: 11.5,
-                                fontWeight: sel
-                                    ? FontWeight.w700
-                                    : FontWeight.w500,
-                                height: 1.2),
-                            child: Text(item.name,
-                                textAlign: TextAlign.center,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis),
+                        ),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(14),
+                          child: Padding(
+                            padding: const EdgeInsets.all(10),
+                            child: item.hasIcon
+                                ? _SvgNetworkIcon(url: item.iconUrl, fallback: item.fallback)
+                                : _FallbackIcon(item.fallback),
                           ),
-                        ],
+                        ),
                       ),
-                    ),
+                      const SizedBox(height: 10),
+                      Text(item.name,
+                          textAlign: TextAlign.center,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: GoogleFonts.outfit(
+                              color: _white, fontSize: 11.5,
+                              fontWeight: FontWeight.w700, height: 1.2)),
+                    ],
                   ),
-
-                ],
+                ),
               ),
-            ),
+
+            ],
           ),
         ),
       ),
@@ -843,44 +779,9 @@ class _SvgNetworkIconState extends State<_SvgNetworkIcon> {
     return SvgPicture.network(
       widget.url,
       fit: BoxFit.contain,
-      // Force white colour — Simple Icons CDN returns brand-coloured SVGs,
-      // we want white so they look clean on the gradient backgrounds
       colorFilter: const ColorFilter.mode(Colors.white, BlendMode.srcIn),
       placeholderBuilder: (_) => const SizedBox.shrink(),
       headers: const {'Accept': 'image/svg+xml'},
-      // If CDN fails (network error, slug not found, etc.) → show initials
-      // flutter_svg throws to the ErrorWidget system; we intercept below
-    );
-  }
-
-// flutter_svg v2 doesn't expose onError on SvgPicture.network directly.
-// We use ErrorWidget.builder at app startup OR rely on the fact that
-// all slugs in our data are pre-verified against simpleicons.org.
-// For extra safety, wrap in an ErrorBoundary widget:
-}
-
-// ── Error boundary that catches flutter_svg network failures ─────────
-class _SafeSvg extends StatelessWidget {
-  final String url;
-  final String fallback;
-  const _SafeSvg({required this.url, required this.fallback});
-
-  @override
-  Widget build(BuildContext context) {
-    return Builder(
-      builder: (ctx) {
-        try {
-          return SvgPicture.network(
-            url,
-            fit: BoxFit.contain,
-            colorFilter: const ColorFilter.mode(Colors.white, BlendMode.srcIn),
-            placeholderBuilder: (_) => const SizedBox.shrink(),
-            headers: const {'Accept': 'image/svg+xml'},
-          );
-        } catch (_) {
-          return _FallbackIcon(fallback);
-        }
-      },
     );
   }
 }
