@@ -55,14 +55,16 @@ const _green      = Color(0xFF22C55E);
 const _amber      = Color(0xFFF59E0B);
 const _rose       = Color(0xFFEF4444);
 const _cyan       = Color(0xFF06B6D4);
+const _slate      = Color(0xFF94A3B8); // Taken Down — same grey web uses
 
 // ─── STATUS HELPERS (unchanged logic) ───────────────────────────────
 Color _statusColor(String s) {
   switch (s.toLowerCase()) {
-    case 'approved': return _green;
-    case 'review':   return _cyan;
-    case 'rejected': return _rose;
-    default:         return _amber;
+    case 'approved':    return _green;
+    case 'review':      return _cyan;
+    case 'rejected':    return _rose;
+    case 'taken down':  return _slate;
+    default:            return _amber;
   }
 }
 
@@ -208,13 +210,14 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
 
   // Same underlying status keys as before — only the visible labels
   // changed, to match the web dashboard's chip wording.
-  final _filters      = ['all', 'pending', 'review', 'approved', 'rejected'];
+  final _filters      = ['all', 'pending', 'review', 'approved', 'rejected', 'taken down'];
   final _filterLabels = {
-    'all':      'All',
-    'pending':  'Draft',
-    'review':   'In Review',
-    'approved': 'Approved',
-    'rejected': 'Rejection',
+    'all':         'All',
+    'pending':     'Draft',
+    'review':      'In Review',
+    'approved':    'Approved',
+    'rejected':    'Rejection',
+    'taken down':  'Taken Down',
   };
 
   @override
@@ -1214,6 +1217,7 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
   bool   get _isApproved  => _status.toLowerCase() == 'approved';
   bool   get _isRejected  => _status.toLowerCase() == 'rejected';
   bool   get _isPending   => _status.toLowerCase() == 'pending';
+  bool   get _isTakenDown => _status.toLowerCase() == 'taken down';
 
   late Map<String, dynamic> _data;
 
@@ -1360,6 +1364,23 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
                       ]),
                     ),
                   ],
+                                    if (_isTakenDown && (_data['takedownReason'] ?? '').toString().trim().isNotEmpty) ...[
+                    const SizedBox(height: 10),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(13),
+                      decoration: BoxDecoration(
+                        color: _slate.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: _slate.withValues(alpha: 0.25)),
+                      ),
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Text('REASON FOR TAKEDOWN', style: GoogleFonts.nunito(color: _slate, fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 1)),
+                        const SizedBox(height: 5),
+                        Text(_data['takedownReason'] ?? '', style: GoogleFonts.nunito(color: _white70, fontSize: 13, height: 1.5)),
+                      ]),
+                    ),
+                  ],
                   const SizedBox(height: 22),
 
                   _MetaSectionLabel(label: 'Artist & Release', icon: Icons.person_rounded),
@@ -1469,6 +1490,20 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
         ),
       );
     }
+      if (_isTakenDown) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 14),
+        color: _slate.withValues(alpha: 0.14),
+        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          const Icon(Icons.info_outline_rounded, color: _slate, size: 16),
+          const SizedBox(width: 8),
+          Text('This Release Was Taken Down',
+              style: GoogleFonts.nunito(color: _slate, fontSize: 13, fontWeight: FontWeight.w800)),
+        ]),
+      );
+    }
+    
     if (_isRejected) {
       return GestureDetector(
         onTap: () { Navigator.pop(context); widget.onOpenRejection(_data); },
@@ -1527,7 +1562,7 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
             ),
           ),
           // ── Cover edit control — mirrors the web's meta-cover-edit-btn ──
-          Positioned(
+          if (!_isTakenDown) Positioned(
             bottom: 12, right: 14,
             child: GestureDetector(
               onTap: _coverUploading ? null : _editCoverArt,
