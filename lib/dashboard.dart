@@ -143,7 +143,7 @@ String _buildSmartLinkURL(String artistName, String releaseTitle) {
   final tSlug = tRaw.length > 30 ? tRaw.substring(0, 30) : tRaw;
   return 'https://ffm.to/$aSlug-$tSlug';
 }
-
+const _smartLinkBase = 'https://444musicdistro.com/smartlink.html?slug=';
 Future<void> _launch(String url) async {
   final uri = Uri.parse(url);
   if (await canLaunchUrl(uri)) await launchUrl(uri, mode: LaunchMode.externalApplication);
@@ -1266,7 +1266,76 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
     setState(() => _copiedMsg = 'Copied!');
     Future.delayed(const Duration(seconds: 2), () { if (mounted) setState(() => _copiedMsg = null); });
   }
+  // ── SMART LINK ROW — mirrors the web's .meta-smartlink-row.
+  // Reads the same `smartLinkSlug` field the web reads.
+  String? get _smartLinkSlug {
+    final s = (_data['smartLinkSlug'] ?? '').toString().trim();
+    return s.isEmpty ? null : s;
+  }
 
+  String get _smartLinkUrl => '$_smartLinkBase${_smartLinkSlug ?? ''}';
+
+  bool _smartLinkCopied = false;
+
+  void _copySmartLinkUrl() {
+    Clipboard.setData(ClipboardData(text: _smartLinkUrl));
+    HapticFeedback.lightImpact();
+    setState(() => _smartLinkCopied = true);
+    Future.delayed(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _smartLinkCopied = false);
+    });
+  }
+
+  Widget _buildSmartLinkRow() {
+    final url = _smartLinkUrl;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: _black3,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _white10),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: GestureDetector(
+              onTap: () => _launch(url),
+              behavior: HitTestBehavior.opaque,
+              child: Text(
+                url,
+                style: GoogleFonts.nunito(
+                  color: _white,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w800,
+                  decoration: TextDecoration.underline,
+                  decorationColor: _white40,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          GestureDetector(
+            onTap: _copySmartLinkUrl,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: _smartLinkCopied ? _green : _white,
+              ),
+              child: Icon(
+                _smartLinkCopied ? Icons.check_rounded : Icons.copy_rounded,
+                color: _smartLinkCopied ? _white : _black,
+                size: 15,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
   void _share() {
     final url    = _data['smartLinkURL']?.toString() ?? '';
     final title  = _data['releaseTitle']?.toString() ?? '';
@@ -1347,6 +1416,10 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
                   _MetaSectionLabel(label: 'Status', icon: Icons.info_outline_rounded),
                   const SizedBox(height: 10),
                   _buildStatusRow(),
+                                    if (_isApproved && _smartLinkSlug != null) ...[
+                    const SizedBox(height: 10),
+                    _buildSmartLinkRow(),
+                  ],
                   if (_isRejected && (_data['rejectionReason'] ?? '').toString().trim().isNotEmpty) ...[
                     const SizedBox(height: 10),
                     Container(
