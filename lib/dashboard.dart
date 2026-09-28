@@ -1,27 +1,15 @@
 //  444MUSIC — My Releases Dashboard  (rebuilt to mirror web layout)
 //  Theme: Black & White Luxury  |  Font: Nunito
 //
-//  LAYOUT CHANGE ONLY — mirrors the web dashboard (pricing/my-releases.html):
-//    - search bar (title/artist)
-//    - filter chips: All / Draft / In Review / Approved / Rejection
-//    - list rows (index, thumb, title/artist/meta, days-left countdown,
-//      chevron) instead of the old grid of big cards
-//    - status/paid badges and the Pay Now / Promote / Check Reasons & Fix
-//      actions now live inside the opened detail modal's top action bar,
-//      exactly like the web version, instead of inline on each card.
-//
-//  BEHAVIOR — UNCHANGED from the previous Flutter screen:
-//    - Pay Now still calls PaymentWaitingScreen with the real submission
-//      id and isExistingSubmission: true
-//    - paid/status still read from the real Firestore fields ('paid' as
-//      text "Paid"/"Unpaid", 'status' as text) — no paymentVerified bool
-//    - rejection flow still hands the full submission map to
-//      onOpenRejection exactly as before
-//    - cover art edit still base64-encodes and writes coverURL directly
-//    - Smart Link / UPC generation logic is untouched
-//
-//  SIDEBAR — the only change here: "Pay Now" nav item is replaced with
-//  "Watch Tutorials", linking to the YouTube channel.
+//  FEATURING FIX:
+//    - Singles: "Featuring" shows under Main Artist (names or "None"),
+//      and the list row shows "Artist ft. Name".
+//    - EP / Album: release level shows the Main Artist only. Featured
+//      artists are listed PER TRACK in a new "Tracklist" section, the
+//      same way DistroKid / TuneCore / Spotify do it. The list row
+//      subtitle shows the main artist only.
+//    - Data is read from audioFiles[].artists[] (type == 'featured'),
+//      with featuredArtists[] and the old `featuring` string as fallbacks.
 // ═══════════════════════════════════════════════════════════════════
 import 'package:url_launcher/url_launcher.dart';
 import 'dart:convert';
@@ -85,6 +73,67 @@ double _priceForReleaseType(dynamic releaseType) {
   final t = (releaseType ?? '').toString().toLowerCase();
   if (t == 'single') return 39.99;
   return 69.99; // EP or Album (or unset — default to the higher tier)
+}
+
+// ─── FEATURING HELPERS ───────────────────────────────────────────────
+// Featured names from one track's `artists` list (type == 'featured').
+List<String> _featuredFromArtists(dynamic artists) {
+  final out = <String>[];
+  if (artists is! List) return out;
+  for (final a in artists) {
+    if (a is Map && (a['type'] ?? '').toString() == 'featured') {
+      final n = (a['name'] ?? '').toString().trim();
+      if (n.isNotEmpty && !out.any((x) => x.toLowerCase() == n.toLowerCase())) {
+        out.add(n);
+      }
+    }
+  }
+  return out;
+}
+
+// Per-track list: [{title, featuring: [names]}]. Uses audioFiles first,
+// falls back to featuredArtists (which stores {track, artists}).
+List<Map<String, dynamic>> _trackList(Map<String, dynamic> data) {
+  for (final key in ['audioFiles', 'featuredArtists']) {
+    final list = data[key];
+    if (list is! List || list.isEmpty) continue;
+    final out = <Map<String, dynamic>>[];
+    for (final t in list) {
+      if (t is! Map) continue;
+      out.add({
+        'title': (t['title'] ?? t['track'] ?? '').toString().trim(),
+        'featuring': _featuredFromArtists(t['artists']),
+      });
+    }
+    if (out.isNotEmpty) return out;
+  }
+  return <Map<String, dynamic>>[];
+}
+
+// True for EP / Album (more than one track).
+bool _isMultiTrack(Map<String, dynamic> data) => _trackList(data).length > 1;
+
+// Release-level featuring text, used for SINGLES. 'None' if nobody.
+// Also reads the old `featuring` field so older releases still show.
+String _featuringDisplay(Map<String, dynamic> data) {
+  final names = <String>[];
+  void add(dynamic n) {
+    final s = (n ?? '').toString().trim();
+    if (s.isNotEmpty && !names.any((x) => x.toLowerCase() == s.toLowerCase())) {
+      names.add(s);
+    }
+  }
+
+  final direct = data['featuring'];
+  if (direct is List) {
+    for (final x in direct) add(x is Map ? x['name'] : x);
+  } else {
+    add(direct);
+  }
+  for (final t in _trackList(data)) {
+    for (final n in (t['featuring'] as List<String>)) add(n);
+  }
+  return names.isEmpty ? 'None' : names.join(', ');
 }
 
 // Days-left countdown — mirrors the web dashboard's
@@ -208,8 +257,6 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
   late Animation<double>   _sidebarFade;
   late Animation<Offset>   _sidebarSlide;
 
-  // Same underlying status keys as before — only the visible labels
-  // changed, to match the web dashboard's chip wording.
   final _filters      = ['all', 'pending', 'review', 'approved', 'rejected', 'taken down'];
   final _filterLabels = {
     'all':         'All',
@@ -411,7 +458,6 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
     );
   }
 
-  // ── SEARCH BAR — mirrors the web's search-bar-wrap ───────────────
   Widget _buildSearchBar() {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -507,7 +553,6 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
     );
   }
 
-  // ── LIST ROWS — mirrors the web's release-row layout exactly ────
   Widget _buildRows() {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -586,7 +631,6 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
     );
   }
 
-  // ── SIDEBAR — unchanged except Pay Now -> Watch Tutorials ────────
   Widget _buildSidebar(double top, double bottom) {
     final w = MediaQuery.of(context).size.width * 0.78;
     return Container(
@@ -664,7 +708,6 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
                   _SidebarItem(icon: Icons.cloud_upload_rounded,  label: 'New Release',        onTap: () { _closeSidebar(); Future.delayed(const Duration(milliseconds: 300), () => Navigator.pushNamed(context, '/upload')); }),
                   _SidebarSection(label: 'Finance'),
                   _SidebarItem(icon: Icons.attach_money_rounded,  label: 'Royalties',          onTap: () { _closeSidebar(); Future.delayed(const Duration(milliseconds: 300), () => Navigator.pushNamed(context, '/earnings')); }),
-                  // ── CHANGED: was "Pay Now" -> pay.html; now "Watch Tutorials" -> YouTube channel.
                   _SidebarItem(icon: Icons.ondemand_video_rounded, label: 'Watch Tutorials', onTap: () { _closeSidebar(); _launch('https://www.youtube.com/@444musicdistribution'); }),
                   _SidebarItem(icon: Icons.call_split_rounded,    label: 'Royalty Split',      onTap: () { _closeSidebar(); Future.delayed(const Duration(milliseconds: 300), () async {
                     final Uri url = Uri.parse('https://444music-distribution.vercel.app/splits');
@@ -713,8 +756,7 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  RELEASE ROW — replaces the old big card; mirrors the web's
-//  release-row grid: index | thumb | title/artist/meta | countdown+chevron
+//  RELEASE ROW — index | thumb | title/artist/meta | countdown+chevron
 // ════════════════════════════════════════════════════════════════════
 class _ReleaseRow extends StatefulWidget {
   final int index;
@@ -739,11 +781,6 @@ class _ReleaseRowState extends State<_ReleaseRow> {
   String get _status    => (widget.data['status'] ?? 'Pending').toString().trim();
   bool   get _isPending => _status.toLowerCase() == 'pending';
 
-  // ── Row tap now opens the Apple-style white showcase screen FIRST,
-  // mirroring the web dashboard's openAppleTemplate() -> click-through
-  // -> openMetaModal() chain. Tapping anywhere on the showcase (except
-  // its own close button) proceeds into the existing detail modal;
-  // the close button just dismisses back to the list, same as web.
   void _openModal() async {
     final proceed = await Navigator.of(context).push<bool>(
       PageRouteBuilder(
@@ -806,9 +843,13 @@ class _ReleaseRowState extends State<_ReleaseRow> {
   @override
   Widget build(BuildContext context) {
     final releaseDate = widget.data['releaseDate'] != null ? _formatDate(widget.data['releaseDate']) : 'TBA';
-    final countdown    = _releaseCountdownLabel(widget.data['releaseDate']);
-    final releaseType  = (widget.data['releaseType'] ?? 'Single').toString().toUpperCase();
-    final featuring    = (widget.data['featuring'] ?? '').toString().trim();
+    final countdown   = _releaseCountdownLabel(widget.data['releaseDate']);
+    final releaseType = (widget.data['releaseType'] ?? 'Single').toString().toUpperCase();
+
+    // Singles: "Artist ft. Name". EP/Album: main artist only — featuring
+    // lives per track inside the detail modal.
+    final featText  = _featuringDisplay(widget.data);
+    final featuring = (_isMultiTrack(widget.data) || featText == 'None') ? '' : featText;
 
     return GestureDetector(
       onTapDown:   (_) => setState(() => _pressed = true),
@@ -879,13 +920,13 @@ class _ReleaseRowState extends State<_ReleaseRow> {
               children: [
                 if (countdown != null)
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                     decoration: BoxDecoration(
-                      color: _amber.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: _amber.withValues(alpha: 0.3)),
+                      color: _white,
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: _white),
                     ),
-                    child: Text(countdown, style: GoogleFonts.nunito(color: _amber, fontSize: 11, fontWeight: FontWeight.w800)),
+                    child: Text(countdown, style: GoogleFonts.nunito(color: _black, fontSize: 11, fontWeight: FontWeight.w800)),
                   ),
                 const SizedBox(height: 6),
                 const Icon(Icons.chevron_right_rounded, color: _greyDark, size: 18),
@@ -899,24 +940,8 @@ class _ReleaseRowState extends State<_ReleaseRow> {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  APPLE-STYLE APPROVED-RELEASE SHOWCASE — mirrors the web dashboard's
-//  .apple-tpl-overlay exactly: soft white/grey gradient, left-aligned
-//  "Title - Type" over a "Distributed by 444Music" lockup, then the
-//  artwork below. Opens first for EVERY status when a row is tapped
-//  (with a small black status pill on anything that isn't Approved,
-//  hidden on Approved — same as web), then tapping anywhere hands off
-//  into the existing metadata sheet underneath. The close button just
-//  dismisses back to the list.
-//
-//  Every element reveals in its own slow, staggered beat — never all
-//  at once — using the same cubic-bezier(0.22, 1, 0.36, 1) easing and
-//  timing as the web version's keyframes:
-//    status   -> fades up over 0.70s, starting at 0.20s
-//    title    -> fades up over 0.90s, starting at 0.55s
-//    subtitle -> fades up over 0.90s, starting at 1.00s
-//    distrib  -> fades up over 0.90s, starting at 1.45s
-//    artwork  -> fades/scales in over 1.10s, starting at 1.90s
-//    hint     -> fades up over 0.70s, starting at 2.90s
+//  APPLE-STYLE SHOWCASE — white/grey gradient screen shown first when a
+//  row is tapped; tapping anywhere continues to the detail modal.
 // ════════════════════════════════════════════════════════════════════
 class _AppleShowcaseScreen extends StatefulWidget {
   final Map<String, dynamic> data;
@@ -1187,10 +1212,7 @@ class _SkeletonRowState extends State<_SkeletonRow> with SingleTickerProviderSta
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  RELEASE DETAIL MODAL — same metadata/credits/smart-link content as
-//  before, PLUS a top action bar (Pay Now / Promote / Check Reasons &
-//  Fix) mirroring the web dashboard's modal-top-action, since those
-//  actions no longer live inline on the row.
+//  RELEASE DETAIL MODAL
 // ════════════════════════════════════════════════════════════════════
 class _ReleaseDetailModal extends StatefulWidget {
   final Map<String, dynamic> data;
@@ -1223,6 +1245,7 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
 
   bool get _isPaid       => _isPaidValue(_data['paid']);
   bool get _needsPayment => _isPending && !_isPaid;
+  bool get _isMulti      => _isMultiTrack(_data);
 
   @override
   void initState() {
@@ -1266,8 +1289,7 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
     setState(() => _copiedMsg = 'Copied!');
     Future.delayed(const Duration(seconds: 2), () { if (mounted) setState(() => _copiedMsg = null); });
   }
-  // ── SMART LINK ROW — mirrors the web's .meta-smartlink-row.
-  // Reads the same `smartLinkSlug` field the web reads.
+
   String? get _smartLinkSlug {
     final s = (_data['smartLinkSlug'] ?? '').toString().trim();
     return s.isEmpty ? null : s;
@@ -1336,6 +1358,7 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
       ),
     );
   }
+
   void _share() {
     final url    = _data['smartLinkURL']?.toString() ?? '';
     final title  = _data['releaseTitle']?.toString() ?? '';
@@ -1344,9 +1367,6 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
     Share.share('Listen to "$title" by $artist on all streaming platforms\n$url');
   }
 
-  // ── Pay Now — unchanged from the previous card's _payNow: real
-  // submission id, isExistingSubmission: true, price auto-picked from
-  // releaseType. ──
   Future<void> _payNow() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null || _id.isEmpty) return;
@@ -1368,8 +1388,6 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
     widget.onRefresh();
   }
 
-  // ── Cover art edit — unchanged base64 logic, now reachable via the
-  // pencil control on the modal's cover strip. ──
   Future<void> _editCoverArt() async {
     final picker = ImagePicker();
     final file   = await picker.pickImage(source: ImageSource.gallery, maxWidth: 1200, imageQuality: 85);
@@ -1416,7 +1434,7 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
                   _MetaSectionLabel(label: 'Status', icon: Icons.info_outline_rounded),
                   const SizedBox(height: 10),
                   _buildStatusRow(),
-                                    if (_isApproved && _smartLinkSlug != null) ...[
+                  if (_isApproved && _smartLinkSlug != null) ...[
                     const SizedBox(height: 10),
                     _buildSmartLinkRow(),
                   ],
@@ -1437,7 +1455,7 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
                       ]),
                     ),
                   ],
-                                    if (_isTakenDown && (_data['takedownReason'] ?? '').toString().trim().isNotEmpty) ...[
+                  if (_isTakenDown && (_data['takedownReason'] ?? '').toString().trim().isNotEmpty) ...[
                     const SizedBox(height: 10),
                     Container(
                       width: double.infinity,
@@ -1459,9 +1477,11 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
                   _MetaSectionLabel(label: 'Artist & Release', icon: Icons.person_rounded),
                   const SizedBox(height: 10),
                   _buildMetaGrid([
-                    _MetaField(label: 'Main Artist',   value: _data['artistName']),
-                    if ((_data['featuring'] ?? '').toString().trim().isNotEmpty)
-                      _MetaField(label: 'Featuring',   value: _data['featuring'], full: true),
+                    _MetaField(label: 'Main Artist', value: _data['artistName'], full: true),
+                    // Singles: Featuring right under Main Artist.
+                    // EP/Album: featuring is per track (see Tracklist below).
+                    if (!_isMulti)
+                      _MetaField(label: 'Featuring', value: _featuringDisplay(_data), full: true),
                     _MetaField(label: 'Release Title', value: _data['releaseTitle'], full: true),
                     _MetaField(label: 'Type',          value: _data['releaseType']),
                     _MetaField(label: 'Genre',         value: _data['genre']),
@@ -1469,6 +1489,13 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
                     _MetaField(label: 'Release Date',  value: _data['releaseDate'] != null ? _formatDate(_data['releaseDate']) : null),
                     _MetaField(label: 'Explicit',      value: _data['explicit']?.toString() ?? 'No'),
                   ]),
+
+                  if (_isMulti) ...[
+                    const SizedBox(height: 22),
+                    _MetaSectionLabel(label: 'Tracklist', icon: Icons.queue_music_rounded),
+                    const SizedBox(height: 10),
+                    _buildTracklistSection(),
+                  ],
                   const SizedBox(height: 22),
 
                   _MetaSectionLabel(label: 'Label & Rights', icon: Icons.verified_rounded),
@@ -1526,9 +1553,53 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
     );
   }
 
-  // ── TOP ACTION BAR — mirrors renderModalTopAction() on the web:
-  // Pay Now for pending+unpaid, Promote for approved, Check Reasons &
-  // Fix for rejected. Same underlying callbacks as before. ──
+  // ── TRACKLIST — one row per track with ITS OWN featured artists ────
+  Widget _buildTracklistSection() {
+    final tracks = _trackList(_data);
+    return Column(
+      children: List.generate(tracks.length, (i) {
+        final rawTitle = tracks[i]['title'] as String;
+        final title    = rawTitle.isEmpty ? 'Track ${i + 1}' : rawTitle;
+        final feats    = tracks[i]['featuring'] as List<String>;
+        return Container(
+          width: double.infinity,
+          margin: const EdgeInsets.only(bottom: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: _black3,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: _white10),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                width: 26,
+                child: Text('${i + 1}',
+                    style: GoogleFonts.outfit(color: _greyDark, fontSize: 13, fontWeight: FontWeight.w800)),
+              ),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title,
+                        style: GoogleFonts.nunito(color: _white, fontSize: 13, fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 3),
+                    Text(
+                      feats.isEmpty ? 'Featuring: None' : 'Featuring: ${feats.join(', ')}',
+                      style: GoogleFonts.nunito(
+                          color: feats.isEmpty ? _greyDark : _white70, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      }),
+    );
+  }
+
   Widget _buildTopAction() {
     if (_needsPayment) {
       final price = _priceForReleaseType(_data['releaseType']);
@@ -1563,7 +1634,7 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
         ),
       );
     }
-      if (_isTakenDown) {
+    if (_isTakenDown) {
       return Container(
         width: double.infinity,
         padding: const EdgeInsets.symmetric(vertical: 14),
@@ -1576,7 +1647,6 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
         ]),
       );
     }
-    
     if (_isRejected) {
       return GestureDetector(
         onTap: () { Navigator.pop(context); widget.onOpenRejection(_data); },
@@ -1634,7 +1704,7 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
               ),
             ),
           ),
-                   // Cover art can no longer be changed once a release is submitted.
+          // Cover art can no longer be changed once a release is submitted.
         ],
       ),
     );
@@ -1801,10 +1871,10 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
       spacing: 8, runSpacing: 8,
       children: [
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-          decoration: BoxDecoration(color: c.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(7), border: Border.all(color: c.withValues(alpha: 0.5))),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: BoxDecoration(color: c.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(999), border: Border.all(color: c.withValues(alpha: 0.5))),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Container(width: 5, height: 5, decoration: BoxDecoration(color: c, borderRadius: BorderRadius.circular(3))),
+            Container(width: 5, height: 5, decoration: BoxDecoration(color: c, shape: BoxShape.circle)),
             const SizedBox(width: 5),
             Text(displayLabel, style: GoogleFonts.nunito(color: c, fontSize: 11, fontWeight: FontWeight.w700)),
           ]),
@@ -1919,10 +1989,10 @@ class _PaidBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = paid ? _green : _amber;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-      decoration: BoxDecoration(color: c.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(7), border: Border.all(color: c.withValues(alpha: 0.5))),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(color: c.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(999), border: Border.all(color: c.withValues(alpha: 0.5))),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Container(width: 5, height: 5, decoration: BoxDecoration(color: c, borderRadius: BorderRadius.circular(3))),
+        Container(width: 5, height: 5, decoration: BoxDecoration(color: c, shape: BoxShape.circle)),
         const SizedBox(width: 5),
         Text(paid ? 'Paid' : 'Unpaid', style: GoogleFonts.nunito(color: c, fontSize: 11, fontWeight: FontWeight.w700)),
       ]),
