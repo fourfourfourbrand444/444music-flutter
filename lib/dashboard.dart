@@ -1634,29 +1634,7 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
               ),
             ),
           ),
-          // ── Cover edit control — mirrors the web's meta-cover-edit-btn ──
-          if (!_isTakenDown) Positioned(
-            bottom: 12, right: 14,
-            child: GestureDetector(
-              onTap: _coverUploading ? null : _editCoverArt,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.55),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: _white20),
-                ),
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  _coverUploading
-                      ? const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2, color: _white))
-                      : const Icon(Icons.edit_rounded, color: _white, size: 12),
-                  const SizedBox(width: 6),
-                  Text(_coverUploading ? 'Uploading…' : 'Change Cover',
-                      style: GoogleFonts.nunito(color: _white, fontSize: 11, fontWeight: FontWeight.w800)),
-                ]),
-              ),
-            ),
-          ),
+                   // Cover art can no longer be changed once a release is submitted.
         ],
       ),
     );
