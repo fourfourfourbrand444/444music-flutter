@@ -317,7 +317,9 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
         data['_id'] = doc.id;
         final status = (data['status'] ?? 'Pending').toString().toLowerCase();
         if (status == 'approved' && (data['upc'] == null || data['smartLinkURL'] == null)) {
-          final upc = _generateUPC();
+                   final upc = (data['upc'] ?? '').toString().trim().isNotEmpty
+              ? data['upc'].toString()
+              : _generateUPC();
           final url = _buildSmartLinkURL(data['artistName'] ?? '', data['releaseTitle'] ?? '');
           await doc.reference.update({'upc': upc, 'smartLinkURL': url, 'smartLinkGeneratedAt': FieldValue.serverTimestamp()});
           data['upc'] = upc;
@@ -1270,7 +1272,9 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
         });
         return;
       }
-      final upc = _generateUPC();
+           final upc = (existing['upc'] ?? '').toString().trim().isNotEmpty
+          ? existing['upc'].toString()
+          : _generateUPC();
       final url = _buildSmartLinkURL(_data['artistName'] ?? '', _data['releaseTitle'] ?? '');
       await widget.db.collection('submissions').doc(_id).update({
         'upc': upc, 'smartLinkURL': url, 'smartLinkGeneratedAt': FieldValue.serverTimestamp(),
@@ -1862,9 +1866,12 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
   }
 
   Widget _buildStatusRow() {
-    final submittedAt = _data['createdAt'] is Timestamp
-        ? _formatDate((_data['createdAt'] as Timestamp).toDate())
-        : '';
+      final rawCreated = _data['createdAt'];
+    final submittedAt = rawCreated is Timestamp
+        ? _formatDate(rawCreated.toDate())
+        : (rawCreated is int
+            ? _formatDate(DateTime.fromMillisecondsSinceEpoch(rawCreated))
+            : '');
     final displayLabel = _statusDisplayLabel(_status);
     final c = _statusColor(_status);
     return Wrap(
