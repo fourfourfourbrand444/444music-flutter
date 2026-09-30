@@ -192,7 +192,7 @@ String _buildSmartLinkURL(String artistName, String releaseTitle) {
   final tSlug = tRaw.length > 30 ? tRaw.substring(0, 30) : tRaw;
   return 'https://ffm.to/$aSlug-$tSlug';
 }
-const _smartLinkBase = 'https://444musicdistro.com/smartlink.html?slug=';
+const _smartLinkBase = 'https://444musicdistro.com/';
 Future<void> _launch(String url) async {
   final uri = Uri.parse(url);
   if (await canLaunchUrl(uri)) await launchUrl(uri, mode: LaunchMode.externalApplication);
