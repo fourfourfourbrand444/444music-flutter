@@ -126,6 +126,11 @@ class _Local {
     if (p == null) return;
     await p.setString(k, v);
   }
+  static Future<void> remove(String k) async {
+    final p = _p;
+    if (p == null) return;
+    await p.remove(k);
+  }
 }
 
 // ─── Shared user-info cache (memory + 12 hours on the phone) ────────
@@ -189,6 +194,15 @@ class UserInfoCache {
       };
 
   void prime(String uid, Map<String, dynamic> info) => _cache[uid] = info;
+
+  /// Forget a person's saved name/avatar/tick (memory and phone), so the next
+  /// lookup reads fresh data. Call after a profile is edited or verified.
+  void invalidate(String? uid) {
+    if (uid == null) return;
+    _cache.remove(uid);
+    _inflight.remove(uid);
+    _Local.remove('uic_$uid');
+  }
 
   /// [persist] is used for your own doc, which was just read fresh.
   void primeFromDoc(String uid, Map<String, dynamic> d, {bool persist = false}) {
