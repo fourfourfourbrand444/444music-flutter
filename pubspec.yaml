@@ -24,6 +24,7 @@ dependencies:
   http: ^1.2.0
   flutter_svg: ^2.0.10+1
   url_launcher: ^6.2.0
+  package_info_plus: ^8.0.0
   google_sign_in: ^6.2.1
   cupertino_icons: ^1.0.8
   file_selector: ^1.0.3
