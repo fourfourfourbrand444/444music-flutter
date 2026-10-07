@@ -6,26 +6,44 @@
 //
 //  Handles BOTH roles the web file does, gated by _isOwn:
 //   - Someone else's profile → Follow button, no edit fields
-//   - Your own profile → "Complete Profile" expandable panel (bio,
-//     phone, public email, country, Spotify/Apple/YouTube links)
+//   - Your own profile → "Complete Profile" expandable panel
 //
 //  Reuses UserInfoCache, sendNotification, timeAgo, verifiedTick from
 //  home_screen.dart — single source of truth, not duplicated logic.
 //
-//  v2 — parity fixes vs web:
-//   • store links (Spotify/Apple/YouTube) now actually open via
-//     url_launcher, matching web's <a target="_blank">
-//   • hashtags in post body + comments are linkified/colored blue,
-//     matching web's linkifyHashtags()
-//   • grid tiles show a small always-visible like/comment count
-//     badge (web shows this on hover; mobile has no hover, so it's
-//     always-on here — same info, better fit for touch)
-//   • tapping the "Posts" stat scrolls smoothly to the grid, matching
-//     web's postsStatBtn → scrollIntoView behavior
+//  v3 — COST + CORRECTNESS PASS
+//   READS
+//   • Followers/Following lists: capped at 50 people (TikTok style),
+//     loaded 15 at a time as you scroll, newest first. Never the
+//     whole subcollection.
+//   • Each follow doc now stores a snapshot of the person's
+//     name/avatar/verified, so a list row costs 1 read, not 2.
+//     (Old docs without the snapshot fall back to UserInfoCache.)
+//   • Opened lists are cached for 2 minutes — reopening is free.
+//   • No more downloading your whole "following" collection on
+//     every profile open. Follow state is checked only for the
+//     people actually on screen (≤30 per query, matches only).
+//   • Following a person no longer re-reads the profile + 60 posts.
+//   • Posts grid: 24 at a time with a Load more button. Posts stat
+//     uses a count() query (1 read per 1000) when there's more.
+//   • Pull-to-refresh throttled to once per 20 seconds.
+//   • Comments stream limit 200 → 50, and the stream is created
+//     ONCE (before, every like/comment tap re-read all comments).
+//   WRITES / ABUSE
+//   • Follow/unfollow is one atomic batch (4 writes succeed or fail
+//     together) — this fixes the drifting Following count.
+//   • Client-side guard against mass follow/unfollow: 1.5s between
+//     actions, 20 actions per 10 min, 30s cooldown per person.
+//   • Likes and comments also use atomic batches now.
+//   FOLLOWING COUNT BUG
+//   • Counters drifted because old follows never touched the counter
+//     and the 4 writes weren't atomic. On YOUR OWN profile the real
+//     counts are checked once per app session with count() queries
+//     (≈1 read per 1000) and the stored counters are corrected.
 // ═══════════════════════════════════════════════════════════════════
 import 'dart:ui';
+import 'dart:math' show min;
 import 'package:flutter/material.dart';
-import 'package:flutter/gestures.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -51,11 +69,94 @@ const _white06  = Color(0x0FFFFFFF);
 const _grey     = Color(0xFF888888);
 const _greyDark = Color(0xFF444444);
 const _rose     = Color(0xFFF87171);
-const _blue     = Color(0xFF4DA3FF); // matches web's --blue, used for hashtags + verified tick
+const _blue     = Color(0xFF4DA3FF);
 const _green    = Color(0xFF22C55E);
 
-// Matches web's linkifyHashtags(): splits on (^|\s)(#word) and colors
-// the tag blue. Returns an inline span list usable in RichText/Text.rich.
+// ─── COST CONTROLS ──────────────────────────────────────────────────
+const _kPeopleMax = 50;   // most people ever shown in a followers/following list
+const _kPeoplePage = 15;  // how many load per scroll step
+const _kPostsPage = 24;   // posts per page in the grid
+
+int _nonNeg(int v) => v < 0 ? 0 : v;
+
+// ─── FOLLOW GUARD (anti mass follow / unfollow) ─────────────────────
+// Client-side only: it stops accidental spam and casual abuse. For
+// real enforcement also add Firestore rules / a Cloud Function.
+class _FollowGuard {
+  static const _minGap = Duration(milliseconds: 1500);
+  static const _window = Duration(minutes: 10);
+  static const _maxPerWindow = 20;
+  static const _perUserCooldown = Duration(seconds: 30);
+  static const _notifyQuiet = Duration(minutes: 10);
+
+  static final List<DateTime> _recent = [];
+  static final Map<String, DateTime> _perUser = {};
+  static DateTime? _last;
+
+  /// Returns a message if the action must be blocked, else null.
+  static String? check(String uid) {
+    final now = DateTime.now();
+    if (_last != null && now.difference(_last!) < _minGap) {
+      return 'Slow down a little.';
+    }
+    final u = _perUser[uid];
+    if (u != null && now.difference(u) < _perUserCooldown) {
+      return 'Please wait a bit before changing this again.';
+    }
+    _recent.removeWhere((t) => now.difference(t) > _window);
+    if (_recent.length >= _maxPerWindow) {
+      return 'Too many follow actions. Try again in a few minutes.';
+    }
+    return null;
+  }
+
+  /// True if this person was toggled recently (used to skip repeat notifications).
+  static bool toggledRecently(String uid) {
+    final u = _perUser[uid];
+    return u != null && DateTime.now().difference(u) < _notifyQuiet;
+  }
+
+  static void record(String uid) {
+    final now = DateTime.now();
+    _last = now;
+    _recent.add(now);
+    _perUser[uid] = now;
+  }
+}
+
+// ─── PEOPLE LIST CACHE (2 min) ──────────────────────────────────────
+class _PeopleCacheEntry {
+  final List<Map<String, dynamic>> people;
+  final DocumentSnapshot<Map<String, dynamic>>? lastDoc;
+  final bool exhausted;
+  final bool ordered;
+  final DateTime at;
+  _PeopleCacheEntry(this.people, this.lastDoc, this.exhausted, this.ordered) : at = DateTime.now();
+}
+
+class _PeopleCache {
+  static const _ttl = Duration(minutes: 2);
+  static final Map<String, _PeopleCacheEntry> _m = {};
+
+  static _PeopleCacheEntry? get(String key) {
+    final e = _m[key];
+    if (e == null) return null;
+    if (DateTime.now().difference(e.at) > _ttl) {
+      _m.remove(key);
+      return null;
+    }
+    return e;
+  }
+
+  static void put(String key, _PeopleCacheEntry e) => _m[key] = e;
+
+  static void invalidateUser(String uid) {
+    _m.remove('$uid/followers');
+    _m.remove('$uid/following');
+  }
+}
+
+// Matches web's linkifyHashtags()
 List<InlineSpan> _hashtagSpans(String text, {required TextStyle base, TextStyle? tagStyle}) {
   if (text.isEmpty) return [TextSpan(text: text, style: base)];
   final regex = RegExp(r'(^|\s)(#[a-zA-Z0-9_]+)');
@@ -63,7 +164,7 @@ List<InlineSpan> _hashtagSpans(String text, {required TextStyle base, TextStyle?
   int last = 0;
   for (final m in regex.allMatches(text)) {
     if (m.start > last) spans.add(TextSpan(text: text.substring(last, m.start), style: base));
-    spans.add(TextSpan(text: m.group(1), style: base)); // leading whitespace / start
+    spans.add(TextSpan(text: m.group(1), style: base));
     spans.add(TextSpan(text: m.group(2), style: tagStyle ?? base.copyWith(color: _blue, fontWeight: FontWeight.w700)));
     last = m.end;
   }
@@ -71,8 +172,6 @@ List<InlineSpan> _hashtagSpans(String text, {required TextStyle base, TextStyle?
   return spans;
 }
 
-// Matches web's _launchUrl: opens store/profile links in an external
-// browser/app, same as target="_blank" on <a>.
 Future<void> _launchUrl(String url) async {
   if (url.isEmpty) return;
   var normalized = url.trim();
@@ -83,9 +182,7 @@ Future<void> _launchUrl(String url) async {
   if (uri == null) return;
   try {
     await launchUrl(uri, mode: LaunchMode.externalApplication);
-  } catch (_) {
-    // Swallow — matches web's silent no-op on bad/blocked links.
-  }
+  } catch (_) {}
 }
 
 class ViewProScreen extends StatefulWidget {
@@ -100,24 +197,33 @@ class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateM
   late String _targetUid;
   bool get _isOwn => _targetUid == _me?.uid;
 
+  // Counter self-heal runs once per app session per account.
+  static final Set<String> _healedUids = {};
+
   bool _loading = true;
+  DateTime? _lastLoad;
   Map<String, dynamic> _userData = {};
   int _followersCount = 0;
   int _followingCount = 0;
+  int _postsCount = 0;
   List<Map<String, dynamic>> _posts = [];
-  Set<String> _followingSet = {}; // who the CURRENT user follows
+  DocumentSnapshot<Map<String, dynamic>>? _postsCursor;
+  bool _hasMorePosts = false;
+  bool _loadingMorePosts = false;
 
-  // Scroll + posts-section anchor (for the Posts stat tap → scroll-to-grid)
+  // Follow state is filled lazily, only for people on screen.
+  final Set<String> _followingSet = {};   // known: I follow them
+  final Set<String> _notFollowing = {};   // known: I do NOT follow them
+  final Set<String> _busy = {};           // follow actions in flight
+
   final ScrollController _scrollCtrl = ScrollController();
   final GlobalKey _postsSectionKey = GlobalKey();
 
-  // Sidebar
   bool _sidebarOpen = false;
   late AnimationController _sidebarCtrl;
   late Animation<double> _sidebarFade;
   late Animation<Offset> _sidebarSlide;
 
-  // Complete-profile form
   bool _completeOpen = false;
   late TextEditingController _bioCtrl, _phoneCtrl, _emailCtrl, _countryCtrl, _spotifyCtrl, _appleCtrl, _youtubeCtrl;
   bool _saving = false;
@@ -158,20 +264,41 @@ class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateM
 
   Future<void> _bootstrap() async {
     if (_me == null) return;
-    await _loadFollowingSet();
-    await _loadProfile();
+    await Future.wait([
+      _loadProfile(force: true),
+      if (!_isOwn) _resolveFollowStates([_targetUid]),
+    ]);
+    if (mounted) setState(() {});
   }
 
-  Future<void> _loadFollowingSet() async {
-    try {
-      final snap = await FirebaseFirestore.instance
-          .collection('users').doc(_me!.uid).collection('following').get();
-      _followingSet = snap.docs.map((d) => d.id).toSet();
-    } catch (_) {}
+  // Checks follow state ONLY for the given people. Unknown ones are looked
+  // up in chunks of 30 against my "following" collection — you pay one read
+  // per match (min 1 per query), never the whole collection.
+  Future<void> _resolveFollowStates(List<String> uids) async {
+    if (_me == null) return;
+    final unknown = uids
+        .where((u) => u != _me!.uid && !_followingSet.contains(u) && !_notFollowing.contains(u))
+        .toSet()
+        .toList();
+    for (int i = 0; i < unknown.length; i += 30) {
+      final chunk = unknown.sublist(i, min(i + 30, unknown.length));
+      try {
+        final snap = await FirebaseFirestore.instance
+            .collection('users').doc(_me!.uid).collection('following')
+            .where(FieldPath.documentId, whereIn: chunk).get();
+        final found = snap.docs.map((d) => d.id).toSet();
+        _followingSet.addAll(found);
+        _notFollowing.addAll(chunk.where((u) => !found.contains(u)));
+      } catch (_) {}
+    }
   }
 
-  Future<void> _loadProfile() async {
+  Future<void> _loadProfile({bool force = false}) async {
     if (!mounted) return;
+    if (!force && _lastLoad != null && DateTime.now().difference(_lastLoad!) < const Duration(seconds: 20)) {
+      return; // refresh throttle — saves reads on repeated pulls
+    }
+    _lastLoad = DateTime.now();
     setState(() => _loading = true);
 
     Map<String, dynamic> data = {};
@@ -180,37 +307,47 @@ class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateM
       if (snap.exists) data = snap.data()!;
     } catch (_) {}
 
-    // Read the cheap counter fields on the user doc instead of counting
-    // the followers/following subcollections — a popular account's
-    // profile used to cost one read PER FOLLOWER on every single view.
-    int followersCount = (data['followersCount'] as num?)?.toInt() ?? 0;
-    int followingCount = (data['followingCount'] as num?)?.toInt() ?? 0;
-    List<Map<String, dynamic>> posts = [];
+    int followersCount = _nonNeg((data['followersCount'] as num?)?.toInt() ?? 0);
+    int followingCount = _nonNeg((data['followingCount'] as num?)?.toInt() ?? 0);
 
-        try {
-          final s = await FirebaseFirestore.instance
-              .collection('posts').where('authorUid', isEqualTo: _targetUid)
-              .orderBy('createdAt', descending: true).limit(60).get();
-          posts = s.docs.map((d) => {'id': d.id, ...d.data()}).toList();
-        } catch (e) {
-          debugPrint('posts query failed, falling back to unsorted fetch: $e');
-          try {
-            final s2 = await FirebaseFirestore.instance
-                .collection('posts').where('authorUid', isEqualTo: _targetUid).limit(60).get();
-            posts = s2.docs.map((d) => {'id': d.id, ...d.data()}).toList();
-          } catch (e2) {
-            debugPrint('fallback posts query also failed: $e2');
-          }
-        }
+    List<Map<String, dynamic>> posts = [];
+    DocumentSnapshot<Map<String, dynamic>>? cursor;
+    bool hasMore = false;
+    try {
+      final s = await FirebaseFirestore.instance
+          .collection('posts').where('authorUid', isEqualTo: _targetUid)
+          .orderBy('createdAt', descending: true).limit(_kPostsPage).get();
+      posts = s.docs.map((d) => {'id': d.id, ...d.data()}).toList();
+      cursor = s.docs.isNotEmpty ? s.docs.last : null;
+      hasMore = s.docs.length == _kPostsPage;
+    } catch (e) {
+      debugPrint('posts query failed, falling back to unsorted fetch: $e');
+      try {
+        final s2 = await FirebaseFirestore.instance
+            .collection('posts').where('authorUid', isEqualTo: _targetUid).limit(_kPostsPage).get();
+        posts = s2.docs.map((d) => {'id': d.id, ...d.data()}).toList();
+        hasMore = false;
         posts.sort((a, b) {
           final ta = (a['createdAt'] is Timestamp) ? (a['createdAt'] as Timestamp).millisecondsSinceEpoch : 0;
           final tb = (b['createdAt'] is Timestamp) ? (b['createdAt'] as Timestamp).millisecondsSinceEpoch : 0;
           return tb.compareTo(ta);
         });
-    // Force a fresh read for this uid so the header/avatar never lags
-    // behind a just-saved edit — same reasoning web's getUserInfo cache has.
+      } catch (e2) {
+        debugPrint('fallback posts query also failed: $e2');
+      }
+    }
+
+    // Exact posts total only when there are more than one page.
+    int postsCount = posts.length;
+    if (hasMore) {
+      try {
+        final c = await FirebaseFirestore.instance
+            .collection('posts').where('authorUid', isEqualTo: _targetUid).count().get();
+        postsCount = c.count ?? posts.length;
+      } catch (_) {}
+    }
+
     UserInfoCache.instance.invalidate(_targetUid);
-    await UserInfoCache.instance.get(_targetUid);
 
     if (!mounted) return;
     setState(() {
@@ -218,6 +355,9 @@ class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateM
       _followersCount = followersCount;
       _followingCount = followingCount;
       _posts = posts;
+      _postsCursor = cursor;
+      _hasMorePosts = hasMore;
+      _postsCount = postsCount;
       _bioCtrl.text = data['bio'] ?? '';
       _phoneCtrl.text = data['phone'] ?? '';
       _emailCtrl.text = data['publicEmail'] ?? '';
@@ -228,6 +368,55 @@ class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateM
       if (_isOwn) _completeOpen = !_hasPublicInfo(data);
       _loading = false;
     });
+
+    _healOwnCounts(followersCount, followingCount);
+  }
+
+  // Fixes drifted counters on YOUR profile. count() costs ~1 read per
+  // 1000 docs, and this runs once per app session.
+  Future<void> _healOwnCounts(int storedFollowers, int storedFollowing) async {
+    if (!_isOwn || _me == null || _healedUids.contains(_me!.uid)) return;
+    _healedUids.add(_me!.uid);
+    try {
+      final ref = FirebaseFirestore.instance.collection('users').doc(_me!.uid);
+      final f = await ref.collection('following').count().get();
+      final r = await ref.collection('followers').count().get();
+      final realFollowing = f.count ?? storedFollowing;
+      final realFollowers = r.count ?? storedFollowers;
+      final fix = <String, dynamic>{};
+      if (realFollowing != storedFollowing) fix['followingCount'] = realFollowing;
+      if (realFollowers != storedFollowers) fix['followersCount'] = realFollowers;
+      if (fix.isEmpty) return;
+      await ref.update(fix);
+      if (!mounted) return;
+      setState(() {
+        _followingCount = realFollowing;
+        _followersCount = realFollowers;
+      });
+    } catch (e) {
+      debugPrint('count heal failed: $e');
+      _healedUids.remove(_me!.uid); // allow retry next time
+    }
+  }
+
+  Future<void> _loadMorePosts() async {
+    if (_loadingMorePosts || !_hasMorePosts || _postsCursor == null) return;
+    setState(() => _loadingMorePosts = true);
+    try {
+      final s = await FirebaseFirestore.instance
+          .collection('posts').where('authorUid', isEqualTo: _targetUid)
+          .orderBy('createdAt', descending: true)
+          .startAfterDocument(_postsCursor!).limit(_kPostsPage).get();
+      if (!mounted) return;
+      setState(() {
+        _posts = [..._posts, ...s.docs.map((d) => {'id': d.id, ...d.data()})];
+        if (s.docs.isNotEmpty) _postsCursor = s.docs.last;
+        _hasMorePosts = s.docs.length == _kPostsPage;
+        _loadingMorePosts = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loadingMorePosts = false);
+    }
   }
 
   bool _hasPublicInfo(Map<String, dynamic> d) =>
@@ -238,28 +427,96 @@ class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateM
       (d['appleMusicUrl'] ?? '').toString().isNotEmpty ||
       (d['youtubeUrl'] ?? '').toString().isNotEmpty;
 
-  Future<void> _toggleFollow(String uid) async {
-    if (_me == null) return;
-    final wasFollowing = _followingSet.contains(uid);
-    setState(() => wasFollowing ? _followingSet.remove(uid) : _followingSet.add(uid));
+  void _setFollowing(String uid, bool following) {
+    if (following) {
+      _followingSet.add(uid);
+      _notFollowing.remove(uid);
+    } else {
+      _followingSet.remove(uid);
+      _notFollowing.add(uid);
+    }
+  }
+
+  void _toast(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg, style: GoogleFonts.nunito(color: _white, fontWeight: FontWeight.w700)),
+      backgroundColor: _black3,
+      behavior: SnackBarBehavior.floating,
+      duration: const Duration(seconds: 2),
+    ));
+  }
+
+  /// Returns a message if the action was blocked or failed, otherwise null.
+  /// [info] = the other person's {name, avatar, verified}, saved on the
+  /// follow doc so lists never need to re-read their user doc.
+  Future<String?> _toggleFollow(String uid, Map<String, dynamic> info) async {
+    if (_me == null || uid == _me!.uid) return null;
+    if (_busy.contains(uid)) return null;
+    _busy.add(uid);
     try {
-            if (wasFollowing) {
-              await FirebaseFirestore.instance.collection('users').doc(_me!.uid).collection('following').doc(uid).delete();
-              await FirebaseFirestore.instance.collection('users').doc(uid).collection('followers').doc(_me!.uid).delete();
-              await FirebaseFirestore.instance.collection('users').doc(uid).update({'followersCount': FieldValue.increment(-1)});
-              await FirebaseFirestore.instance.collection('users').doc(_me!.uid).update({'followingCount': FieldValue.increment(-1)});
-            } else {
-              await FirebaseFirestore.instance.collection('users').doc(_me!.uid).collection('following').doc(uid)
-                  .set({'since': FieldValue.serverTimestamp()});
-              await FirebaseFirestore.instance.collection('users').doc(uid).collection('followers').doc(_me!.uid)
-                  .set({'since': FieldValue.serverTimestamp()});
-              await FirebaseFirestore.instance.collection('users').doc(uid).update({'followersCount': FieldValue.increment(1)});
-              await FirebaseFirestore.instance.collection('users').doc(_me!.uid).update({'followingCount': FieldValue.increment(1)});
-              sendNotification(uid, 'follow');
-            }
-      if (uid == _targetUid) _loadProfile(); // refresh counts on screen, matches web behavior
-    } catch (_) {
-      setState(() => wasFollowing ? _followingSet.add(uid) : _followingSet.remove(uid));
+      // Never guess the state — a wrong guess would double-count the counters.
+      await _resolveFollowStates([uid]);
+
+      final blocked = _FollowGuard.check(uid);
+      if (blocked != null) return blocked;
+      final quiet = _FollowGuard.toggledRecently(uid);
+      _FollowGuard.record(uid);
+
+      final wasFollowing = _followingSet.contains(uid);
+      if (mounted) setState(() => _setFollowing(uid, !wasFollowing));
+
+      try {
+        final db = FirebaseFirestore.instance;
+        final myRef = db.collection('users').doc(_me!.uid);
+        final theirRef = db.collection('users').doc(uid);
+        final myFollowingDoc = myRef.collection('following').doc(uid);
+        final theirFollowerDoc = theirRef.collection('followers').doc(_me!.uid);
+        final batch = db.batch();
+
+        if (wasFollowing) {
+          batch.delete(myFollowingDoc);
+          batch.delete(theirFollowerDoc);
+          batch.update(theirRef, {'followersCount': FieldValue.increment(-1)});
+          batch.update(myRef, {'followingCount': FieldValue.increment(-1)});
+        } else {
+          final myInfo = await UserInfoCache.instance.get(_me!.uid);
+          batch.set(myFollowingDoc, {
+            'since': FieldValue.serverTimestamp(),
+            'name': (info['name'] ?? 'Artist').toString(),
+            'avatar': (info['avatar'] ?? '').toString(),
+            'verified': info['verified'] == true,
+          });
+          batch.set(theirFollowerDoc, {
+            'since': FieldValue.serverTimestamp(),
+            'name': (myInfo['name'] ?? 'Artist').toString(),
+            'avatar': (myInfo['avatar'] ?? '').toString(),
+            'verified': myInfo['verified'] == true,
+          });
+          batch.update(theirRef, {'followersCount': FieldValue.increment(1)});
+          batch.update(myRef, {'followingCount': FieldValue.increment(1)});
+        }
+        await batch.commit();
+
+        if (!wasFollowing && !quiet) sendNotification(uid, 'follow');
+
+        _PeopleCache.invalidateUser(uid);
+        _PeopleCache.invalidateUser(_me!.uid);
+
+        if (mounted) {
+          setState(() {
+            final d = wasFollowing ? -1 : 1;
+            if (uid == _targetUid) _followersCount = _nonNeg(_followersCount + d);
+            if (_me!.uid == _targetUid) _followingCount = _nonNeg(_followingCount + d);
+          });
+        }
+        return null;
+      } catch (_) {
+        if (mounted) setState(() => _setFollowing(uid, wasFollowing));
+        return "Couldn't update. Please try again.";
+      }
+    } finally {
+      _busy.remove(uid);
     }
   }
 
@@ -328,7 +585,7 @@ class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateM
       context: context, isScrollControlled: true, backgroundColor: Colors.transparent,
       builder: (_) => _PeopleModal(
         targetUid: _targetUid, kind: kind, myFollowing: _followingSet,
-        myUid: _me?.uid, onToggleFollow: _toggleFollow,
+        myUid: _me?.uid, onToggleFollow: _toggleFollow, resolveStates: _resolveFollowStates,
       ),
     );
   }
@@ -341,7 +598,6 @@ class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateM
     );
   }
 
-  // Matches web's postsStatBtn → scrollIntoView({behavior:'smooth', block:'start'})
   void _scrollToPosts() {
     final ctx = _postsSectionKey.currentContext;
     if (ctx == null) return;
@@ -349,7 +605,7 @@ class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateM
       ctx,
       duration: const Duration(milliseconds: 400),
       curve: Curves.easeOutCubic,
-      alignment: 0, // 'start' alignment, matches web
+      alignment: 0,
     );
   }
 
@@ -386,7 +642,7 @@ class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateM
                   ? const Center(child: CircularProgressIndicator(color: _white))
                   : RefreshIndicator(
                       color: _white, backgroundColor: _black2,
-                      onRefresh: _loadProfile,
+                      onRefresh: () => _loadProfile(),
                       child: SingleChildScrollView(
                         controller: _scrollCtrl,
                         physics: const AlwaysScrollableScrollPhysics(),
@@ -491,9 +747,9 @@ class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateM
           const SizedBox(width: 20),
           Expanded(
             child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
-                            _statItem(formatCount(_posts.length), 'Posts', _scrollToPosts),
-                            _statItem(formatCount(_followersCount), 'Followers', () => _openPeopleModal('followers')),
-                            _statItem(formatCount(_followingCount), 'Following', () => _openPeopleModal('following')),
+              _statItem(formatCount(_postsCount), 'Posts', _scrollToPosts),
+              _statItem(formatCount(_followersCount), 'Followers', () => _openPeopleModal('followers')),
+              _statItem(formatCount(_followingCount), 'Following', () => _openPeopleModal('following')),
             ]),
           ),
         ]),
@@ -539,7 +795,10 @@ class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateM
               : SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
-                    onPressed: () => _toggleFollow(_targetUid),
+                    onPressed: () async {
+                      final msg = await _toggleFollow(_targetUid, {'name': name, 'avatar': avatar, 'verified': verified});
+                      if (msg != null) _toast(msg);
+                    },
                     style: ElevatedButton.styleFrom(
                       backgroundColor: isFollowing ? Colors.transparent : _white,
                       foregroundColor: isFollowing ? _white70 : _black,
@@ -590,9 +849,9 @@ class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateM
               padding: const EdgeInsets.only(top: 12),
               decoration: const BoxDecoration(border: Border(top: BorderSide(color: _white10))),
               child: Wrap(spacing: 10, runSpacing: 10, children: [
-               if (spotify.isNotEmpty) _storeLink('spotify', 'Spotify', '1DB954', spotify),
-               if (apple.isNotEmpty) _storeLink('applemusic', 'Apple Music', 'FC3C44', apple),
-               if (youtube.isNotEmpty) _storeLink('youtubemusic', 'YouTube', 'FF0000', youtube),
+                if (spotify.isNotEmpty) _storeLink('spotify', 'Spotify', '1DB954', spotify),
+                if (apple.isNotEmpty) _storeLink('applemusic', 'Apple Music', 'FC3C44', apple),
+                if (youtube.isNotEmpty) _storeLink('youtubemusic', 'YouTube', 'FF0000', youtube),
               ]),
             ),
           ),
@@ -600,7 +859,6 @@ class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateM
     );
   }
 
-  // tel:/mailto: links bypass the https-normalizing _launchUrl helper.
   Future<void> _launchUrlAction(String rawUri) async {
     final uri = Uri.tryParse(rawUri);
     if (uri == null) return;
@@ -623,23 +881,24 @@ class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateM
       ),
     );
   }
-Widget _storeLink(String slug, String label, String hex, String url) {
-  return GestureDetector(
-    onTap: () => _launchUrl(url),
-    child: Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
-      decoration: BoxDecoration(color: _white06, borderRadius: BorderRadius.circular(100), border: Border.all(color: _white10)),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        SvgPicture.network(
-          'https://cdn.simpleicons.org/$slug/$hex',
-          width: 15, height: 15,
-        ),
-        const SizedBox(width: 8),
-        Text(label, style: GoogleFonts.nunito(color: _white90, fontSize: 12.5, fontWeight: FontWeight.w700)),
-      ]),
-    ),
-  );
-}
+
+  Widget _storeLink(String slug, String label, String hex, String url) {
+    return GestureDetector(
+      onTap: () => _launchUrl(url),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+        decoration: BoxDecoration(color: _white06, borderRadius: BorderRadius.circular(100), border: Border.all(color: _white10)),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          SvgPicture.network(
+            'https://cdn.simpleicons.org/$slug/$hex',
+            width: 15, height: 15,
+          ),
+          const SizedBox(width: 8),
+          Text(label, style: GoogleFonts.nunito(color: _white90, fontSize: 12.5, fontWeight: FontWeight.w700)),
+        ]),
+      ),
+    );
+  }
 
   Widget _buildCompleteCard() {
     return Container(
@@ -738,84 +997,101 @@ Widget _storeLink(String slug, String label, String hex, String url) {
       key: _postsSectionKey,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-      Padding(
-        padding: const EdgeInsets.only(bottom: 12, left: 2),
-        child: Row(children: [
-          const Icon(Icons.grid_view_rounded, color: _grey, size: 13),
-          const SizedBox(width: 8),
-          Text('POSTS', style: GoogleFonts.nunito(color: _grey, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1.5)),
-        ]),
-      ),
-      if (_posts.isEmpty)
         Padding(
-          padding: const EdgeInsets.symmetric(vertical: 40),
-          child: Center(
-            child: Column(children: [
-              const Icon(Icons.image_outlined, color: _white40, size: 26),
-              const SizedBox(height: 10),
-              Text(
-                _isOwn ? 'No posts yet — share your first one.' : 'No posts yet.',
-                style: GoogleFonts.nunito(color: _grey, fontWeight: FontWeight.w600, fontSize: 13),
-              ),
-            ]),
-          ),
-        )
-      else
-        GridView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, crossAxisSpacing: 3, mainAxisSpacing: 3),
-          itemCount: _posts.length,
-          itemBuilder: (context, i) {
-            final p = _posts[i];
-            final hasImage = (p['imageUrl'] ?? '').toString().isNotEmpty;
-            final likes = p['likesCount'] ?? 0;
-            final comments = p['commentsCount'] ?? 0;
-            return GestureDetector(
-              onTap: () => _openPostModal(p['id']),
-              child: Stack(fit: StackFit.expand, children: [
-                Container(
-                  color: _black3,
-                  child: hasImage
-                      ? CachedNetworkImage(imageUrl: p['imageUrl'], fit: BoxFit.cover)
-                      : Container(
-                          padding: const EdgeInsets.all(10),
-                          alignment: Alignment.center,
-                          decoration: const BoxDecoration(
-                            gradient: LinearGradient(colors: [_black4, _black2], begin: Alignment.topLeft, end: Alignment.bottomRight),
-                          ),
-                          child: Text(
-                            (p['text'] ?? '').toString(),
-                            textAlign: TextAlign.center, maxLines: 5, overflow: TextOverflow.ellipsis,
-                            style: GoogleFonts.nunito(color: _white70, fontSize: 11, fontWeight: FontWeight.w600),
-                          ),
-                        ),
-                ),
-                // Always-visible like/comment badge — web shows this on
-                // hover, which doesn't exist on touch, so it's pinned
-                // to the corner here instead of being lost entirely.
-                if (likes > 0 || comments > 0)
-                  Positioned(
-                    left: 5, bottom: 5,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                      decoration: BoxDecoration(color: Colors.black.withOpacity(0.55), borderRadius: BorderRadius.circular(8)),
-                      child: Row(mainAxisSize: MainAxisSize.min, children: [
-                        const Icon(Icons.favorite_rounded, color: _white, size: 10),
-                        const SizedBox(width: 3),
-                        Text('$likes', style: GoogleFonts.nunito(color: _white, fontSize: 10, fontWeight: FontWeight.w700)),
-                        const SizedBox(width: 8),
-                        const Icon(Icons.mode_comment_rounded, color: _white, size: 10),
-                        const SizedBox(width: 3),
-                        Text('$comments', style: GoogleFonts.nunito(color: _white, fontSize: 10, fontWeight: FontWeight.w700)),
-                      ]),
-                    ),
-                  ),
-              ]),
-            );
-          },
+          padding: const EdgeInsets.only(bottom: 12, left: 2),
+          child: Row(children: [
+            const Icon(Icons.grid_view_rounded, color: _grey, size: 13),
+            const SizedBox(width: 8),
+            Text('POSTS', style: GoogleFonts.nunito(color: _grey, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1.5)),
+          ]),
         ),
-    ]);
+        if (_posts.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 40),
+            child: Center(
+              child: Column(children: [
+                const Icon(Icons.image_outlined, color: _white40, size: 26),
+                const SizedBox(height: 10),
+                Text(
+                  _isOwn ? 'No posts yet — share your first one.' : 'No posts yet.',
+                  style: GoogleFonts.nunito(color: _grey, fontWeight: FontWeight.w600, fontSize: 13),
+                ),
+              ]),
+            ),
+          )
+        else ...[
+          GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, crossAxisSpacing: 3, mainAxisSpacing: 3),
+            itemCount: _posts.length,
+            itemBuilder: (context, i) {
+              final p = _posts[i];
+              final hasImage = (p['imageUrl'] ?? '').toString().isNotEmpty;
+              final likes = p['likesCount'] ?? 0;
+              final comments = p['commentsCount'] ?? 0;
+              return GestureDetector(
+                onTap: () => _openPostModal(p['id']),
+                child: Stack(fit: StackFit.expand, children: [
+                  Container(
+                    color: _black3,
+                    child: hasImage
+                        ? CachedNetworkImage(imageUrl: p['imageUrl'], fit: BoxFit.cover)
+                        : Container(
+                            padding: const EdgeInsets.all(10),
+                            alignment: Alignment.center,
+                            decoration: const BoxDecoration(
+                              gradient: LinearGradient(colors: [_black4, _black2], begin: Alignment.topLeft, end: Alignment.bottomRight),
+                            ),
+                            child: Text(
+                              (p['text'] ?? '').toString(),
+                              textAlign: TextAlign.center, maxLines: 5, overflow: TextOverflow.ellipsis,
+                              style: GoogleFonts.nunito(color: _white70, fontSize: 11, fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                  ),
+                  if (likes > 0 || comments > 0)
+                    Positioned(
+                      left: 5, bottom: 5,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                        decoration: BoxDecoration(color: Colors.black.withOpacity(0.55), borderRadius: BorderRadius.circular(8)),
+                        child: Row(mainAxisSize: MainAxisSize.min, children: [
+                          const Icon(Icons.favorite_rounded, color: _white, size: 10),
+                          const SizedBox(width: 3),
+                          Text('$likes', style: GoogleFonts.nunito(color: _white, fontSize: 10, fontWeight: FontWeight.w700)),
+                          const SizedBox(width: 8),
+                          const Icon(Icons.mode_comment_rounded, color: _white, size: 10),
+                          const SizedBox(width: 3),
+                          Text('$comments', style: GoogleFonts.nunito(color: _white, fontSize: 10, fontWeight: FontWeight.w700)),
+                        ]),
+                      ),
+                    ),
+                ]),
+              );
+            },
+          ),
+          if (_hasMorePosts)
+            Padding(
+              padding: const EdgeInsets.only(top: 14),
+              child: Center(
+                child: OutlinedButton(
+                  onPressed: _loadingMorePosts ? null : _loadMorePosts,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: _white70,
+                    side: const BorderSide(color: _white20),
+                    padding: const EdgeInsets.symmetric(horizontal: 26, vertical: 11),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(100)),
+                  ),
+                  child: _loadingMorePosts
+                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: _white))
+                      : Text('Load more', style: GoogleFonts.nunito(fontWeight: FontWeight.w800, fontSize: 12.5)),
+                ),
+              ),
+            ),
+        ],
+      ],
+    );
   }
 
   Widget _buildBottomNav() {
@@ -838,7 +1114,7 @@ Widget _storeLink(String slug, String label, String hex, String url) {
           child: Row(children: items.map((item) {
             final (icon, label, onTap) = item;
             final isUpload = label == 'Upload';
-            final isActive = label == 'Profile'; // this screen IS the profile tab
+            final isActive = label == 'Profile';
             if (isUpload) {
               return Expanded(
                 child: GestureDetector(
@@ -905,10 +1181,10 @@ Widget _storeLink(String slug, String label, String hex, String url) {
                 _closeSidebar();
                 Navigator.pushNamedAndRemoveUntil(context, '/home', (r) => false);
               }),
-             _sidebarItem(Icons.person_rounded, 'Settings', () {
-               _closeSidebar();
-               Navigator.pushReplacementNamed(context, '/profile');
-             }),
+              _sidebarItem(Icons.person_rounded, 'Settings', () {
+                _closeSidebar();
+                Navigator.pushReplacementNamed(context, '/profile');
+              }),
               _sidebarItem(Icons.speed_rounded, 'Dashboard', () => _navigate('/dashboard')),
               _sidebarItem(Icons.cloud_upload_rounded, 'Upload Release', () => _navigate('/upload')),
               _sidebarItem(Icons.bar_chart_rounded, 'Analytics', () => _navigate('/analytics')),
@@ -981,38 +1257,132 @@ class _SidebarDividerLocal extends StatelessWidget {
 
 // ═══════════════════════════════════════════════════════════════════
 //  FOLLOWERS / FOLLOWING MODAL
+//  • newest first, max 50 people, 15 per scroll step
+//  • rows come from the follow doc itself (1 read per person)
+//  • cached for 2 minutes
 // ═══════════════════════════════════════════════════════════════════
 class _PeopleModal extends StatefulWidget {
   final String targetUid, kind;
   final Set<String> myFollowing;
   final String? myUid;
-  final Future<void> Function(String uid) onToggleFollow;
+  final Future<String?> Function(String uid, Map<String, dynamic> info) onToggleFollow;
+  final Future<void> Function(List<String> uids) resolveStates;
   const _PeopleModal({
     required this.targetUid, required this.kind, required this.myFollowing,
-    required this.myUid, required this.onToggleFollow,
+    required this.myUid, required this.onToggleFollow, required this.resolveStates,
   });
   @override
   State<_PeopleModal> createState() => _PeopleModalState();
 }
 
 class _PeopleModalState extends State<_PeopleModal> {
-  List<Map<String, dynamic>>? _people;
+  final List<Map<String, dynamic>> _people = [];
+  DocumentSnapshot<Map<String, dynamic>>? _lastDoc;
+  bool _exhausted = false;
+  bool _ordered = true;
+  bool _loading = false;
+  bool _ready = false;
+  String? _notice;
+
+  String get _cacheKey => '${widget.targetUid}/${widget.kind}';
 
   @override
   void initState() {
     super.initState();
-    _load();
+    final cached = _PeopleCache.get(_cacheKey);
+    if (cached != null) {
+      _people.addAll(cached.people.map((e) => Map<String, dynamic>.from(e)));
+      _lastDoc = cached.lastDoc;
+      _exhausted = cached.exhausted;
+      _ordered = cached.ordered;
+      _ready = true;
+      _syncFollowStates(_people.map((p) => p['uid'] as String).toList());
+    } else {
+      _loadMore();
+    }
   }
 
-  Future<void> _load() async {
-    try {
-      final snap = await FirebaseFirestore.instance.collection('users').doc(widget.targetUid).collection(widget.kind).get();
-      final uids = snap.docs.map((d) => d.id).toList();
-      final infos = await Future.wait(uids.map((uid) => UserInfoCache.instance.get(uid).then((info) => {'uid': uid, ...info})));
-      if (mounted) setState(() => _people = infos);
-    } catch (_) {
-      if (mounted) setState(() => _people = []);
+  Future<void> _syncFollowStates(List<String> uids) async {
+    if (widget.targetUid == widget.myUid && widget.kind == 'following') {
+      widget.myFollowing.addAll(uids); // everyone in my own following list is followed — no reads
+    } else {
+      await widget.resolveStates(uids);
     }
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _loadMore() async {
+    if (_loading || _exhausted) return;
+    final room = _kPeopleMax - _people.length;
+    if (room <= 0) {
+      if (mounted) setState(() => _exhausted = true);
+      return;
+    }
+    if (mounted) setState(() => _loading = true);
+    final take = room < _kPeoplePage ? room : _kPeoplePage;
+
+    try {
+      final col = FirebaseFirestore.instance.collection('users').doc(widget.targetUid).collection(widget.kind);
+      Query<Map<String, dynamic>> q = _ordered ? col.orderBy('since', descending: true) : col;
+      if (_lastDoc != null) q = q.startAfterDocument(_lastDoc!);
+      var snap = await q.limit(take).get();
+
+      // Old follow docs without a "since" field are skipped by orderBy —
+      // fall back to plain document order if the ordered query is empty.
+      if (snap.docs.isEmpty && _people.isEmpty && _ordered) {
+        _ordered = false;
+        snap = await col.limit(take).get();
+      }
+
+      final fresh = <Map<String, dynamic>>[];
+      final needInfo = <Map<String, dynamic>>[];
+      for (final d in snap.docs) {
+        final data = d.data();
+        final row = <String, dynamic>{
+          'uid': d.id,
+          'name': data['name'],
+          'avatar': data['avatar'],
+          'verified': data['verified'] == true,
+        };
+        fresh.add(row);
+        if (data['name'] == null) needInfo.add(row); // old doc: no snapshot saved
+      }
+      if (needInfo.isNotEmpty) {
+        await Future.wait(needInfo.map((row) async {
+          try {
+            final info = await UserInfoCache.instance.get(row['uid'] as String);
+            row['name'] = info['name'];
+            row['avatar'] = info['avatar'];
+            row['verified'] = info['verified'] == true;
+          } catch (_) {}
+        }));
+      }
+
+      if (snap.docs.isNotEmpty) _lastDoc = snap.docs.last;
+      _people.addAll(fresh);
+      _exhausted = snap.docs.length < take || _people.length >= _kPeopleMax;
+
+      await _syncFollowStates(fresh.map((p) => p['uid'] as String).toList());
+
+      _PeopleCache.put(_cacheKey, _PeopleCacheEntry(
+        _people.map((e) => Map<String, dynamic>.from(e)).toList(), _lastDoc, _exhausted, _ordered,
+      ));
+    } catch (_) {
+      _exhausted = true;
+    }
+    if (mounted) {
+      setState(() {
+        _loading = false;
+        _ready = true;
+      });
+    }
+  }
+
+  void _showNotice(String msg) {
+    setState(() => _notice = msg);
+    Future.delayed(const Duration(seconds: 3), () {
+      if (mounted && _notice == msg) setState(() => _notice = null);
+    });
   }
 
   @override
@@ -1028,65 +1398,101 @@ class _PeopleModalState extends State<_PeopleModal> {
                 style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w800, fontSize: 16)),
           ),
           const Divider(color: _white10, height: 1),
+          if (_notice != null)
+            Container(
+              width: double.infinity,
+              color: _black3,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+              child: Text(_notice!, style: GoogleFonts.nunito(color: _white70, fontSize: 12.5, fontWeight: FontWeight.w700)),
+            ),
           Expanded(
-            child: _people == null
+            child: !_ready
                 ? const Center(child: CircularProgressIndicator(color: _white))
-                : _people!.isEmpty
+                : _people.isEmpty
                     ? Center(child: Text('No ${widget.kind} yet.', style: GoogleFonts.nunito(color: _grey)))
-                    : ListView.builder(
-                        controller: scrollCtrl,
-                        padding: const EdgeInsets.symmetric(horizontal: 10),
-                        itemCount: _people!.length,
-                        itemBuilder: (context, i) {
-                          final p = _people![i];
-                          final uid = p['uid'] as String;
-                          final isSelf = uid == widget.myUid;
-                          final isFollowing = widget.myFollowing.contains(uid);
-                          final name = (p['name'] ?? 'Artist').toString();
-                          return ListTile(
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-                            leading: Container(
-                              width: 44, height: 44,
-                              decoration: BoxDecoration(shape: BoxShape.circle, color: _black3, border: Border.all(color: _white10)),
-                              clipBehavior: Clip.antiAlias,
-                              child: (p['avatar'] ?? '').toString().isNotEmpty
-                                  ? CachedNetworkImage(imageUrl: p['avatar'], fit: BoxFit.cover)
-                                  : Center(
-                                      child: Text(
-                                        name.trim().isNotEmpty ? name.trim()[0].toUpperCase() : 'A',
-                                        style: GoogleFonts.outfit(color: _white70, fontWeight: FontWeight.w800),
-                                      ),
-                                    ),
-                            ),
-                            title: Row(children: [
-                              Flexible(child: Text(name, style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w800, fontSize: 14), overflow: TextOverflow.ellipsis)),
-                              if (p['verified'] == true) Padding(padding: const EdgeInsets.only(left: 5), child: verifiedTick(size: 13)),
-                            ]),
-                            trailing: isSelf
-                                ? null
-                                : SizedBox(
-                                    height: 32,
-                                    child: OutlinedButton(
-                                      onPressed: () async {
-                                        await widget.onToggleFollow(uid);
-                                        setState(() {});
-                                      },
-                                      style: OutlinedButton.styleFrom(
-                                        backgroundColor: isFollowing ? Colors.transparent : _white,
-                                        foregroundColor: isFollowing ? _white70 : _black,
-                                        side: isFollowing ? const BorderSide(color: _white40) : BorderSide.none,
-                                        padding: const EdgeInsets.symmetric(horizontal: 14),
-                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(100)),
-                                      ),
-                                      child: Text(isFollowing ? 'Following' : 'Follow', style: GoogleFonts.nunito(fontWeight: FontWeight.w800, fontSize: 11.5)),
-                                    ),
-                                  ),
-                            onTap: () {
-                              Navigator.pop(context);
-                              Navigator.pushNamed(context, '/viewpro', arguments: uid);
-                            },
-                          );
+                    : NotificationListener<ScrollNotification>(
+                        onNotification: (n) {
+                          if (n.metrics.extentAfter < 250) _loadMore();
+                          return false;
                         },
+                        child: ListView.builder(
+                          controller: scrollCtrl,
+                          padding: const EdgeInsets.symmetric(horizontal: 10),
+                          itemCount: _people.length + 1,
+                          itemBuilder: (context, i) {
+                            if (i == _people.length) {
+                              if (_loading) {
+                                return const Padding(
+                                  padding: EdgeInsets.symmetric(vertical: 18),
+                                  child: Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: _white))),
+                                );
+                              }
+                              if (_people.length >= _kPeopleMax) {
+                                return Padding(
+                                  padding: const EdgeInsets.symmetric(vertical: 18),
+                                  child: Center(child: Text('Showing the latest $_kPeopleMax', style: GoogleFonts.nunito(color: _grey, fontSize: 12))),
+                                );
+                              }
+                              return const SizedBox(height: 24);
+                            }
+                            final p = _people[i];
+                            final uid = p['uid'] as String;
+                            final isSelf = uid == widget.myUid;
+                            final isFollowing = widget.myFollowing.contains(uid);
+                            final name = (p['name'] ?? 'Artist').toString();
+                            final avatar = (p['avatar'] ?? '').toString();
+                            return ListTile(
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+                              leading: Container(
+                                width: 44, height: 44,
+                                decoration: BoxDecoration(shape: BoxShape.circle, color: _black3, border: Border.all(color: _white10)),
+                                clipBehavior: Clip.antiAlias,
+                                child: avatar.isNotEmpty
+                                    ? CachedNetworkImage(imageUrl: avatar, fit: BoxFit.cover)
+                                    : Center(
+                                        child: Text(
+                                          name.trim().isNotEmpty ? name.trim()[0].toUpperCase() : 'A',
+                                          style: GoogleFonts.outfit(color: _white70, fontWeight: FontWeight.w800),
+                                        ),
+                                      ),
+                              ),
+                              title: Row(children: [
+                                Flexible(child: Text(name, style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w800, fontSize: 14), overflow: TextOverflow.ellipsis)),
+                                if (p['verified'] == true) Padding(padding: const EdgeInsets.only(left: 5), child: verifiedTick(size: 13)),
+                              ]),
+                              trailing: isSelf
+                                  ? null
+                                  : SizedBox(
+                                      height: 32,
+                                      child: OutlinedButton(
+                                        onPressed: () async {
+                                          final msg = await widget.onToggleFollow(uid, {
+                                            'name': name, 'avatar': avatar, 'verified': p['verified'] == true,
+                                          });
+                                          if (!mounted) return;
+                                          if (msg != null) {
+                                            _showNotice(msg);
+                                          } else {
+                                            setState(() {});
+                                          }
+                                        },
+                                        style: OutlinedButton.styleFrom(
+                                          backgroundColor: isFollowing ? Colors.transparent : _white,
+                                          foregroundColor: isFollowing ? _white70 : _black,
+                                          side: isFollowing ? const BorderSide(color: _white40) : BorderSide.none,
+                                          padding: const EdgeInsets.symmetric(horizontal: 14),
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(100)),
+                                        ),
+                                        child: Text(isFollowing ? 'Following' : 'Follow', style: GoogleFonts.nunito(fontWeight: FontWeight.w800, fontSize: 11.5)),
+                                      ),
+                                    ),
+                              onTap: () {
+                                Navigator.pop(context);
+                                Navigator.pushNamed(context, '/viewpro', arguments: uid);
+                              },
+                            );
+                          },
+                        ),
                       ),
           ),
         ]),
@@ -1098,6 +1504,8 @@ class _PeopleModalState extends State<_PeopleModal> {
 // ═══════════════════════════════════════════════════════════════════
 //  POST DETAIL MODAL — flat comments (no reply-threading), matching
 //  web's pm-* section in profile.html exactly.
+//  Cost fixes: comments stream + author future are created ONCE (not
+//  on every rebuild), comments capped at 50, like/comment are atomic.
 // ═══════════════════════════════════════════════════════════════════
 class _PostDetailModal extends StatefulWidget {
   final String postId, myUid;
@@ -1111,10 +1519,17 @@ class _PostDetailModalState extends State<_PostDetailModal> {
   bool _liked = false;
   final _commentCtrl = TextEditingController();
   bool _sending = false;
+  bool _liking = false;
+
+  late final Stream<QuerySnapshot<Map<String, dynamic>>> _commentsStream;
+  Future<Map<String, dynamic>>? _authorFuture;
 
   @override
   void initState() {
     super.initState();
+    _commentsStream = FirebaseFirestore.instance
+        .collection('posts').doc(widget.postId).collection('comments')
+        .orderBy('createdAt').limit(50).snapshots();
     _load();
   }
 
@@ -1132,10 +1547,12 @@ class _PostDetailModalState extends State<_PostDetailModal> {
         return;
       }
       final likeSnap = await FirebaseFirestore.instance.collection('posts').doc(widget.postId).collection('likes').doc(widget.myUid).get();
+      final post = {'id': snap.id, ...snap.data()!};
       if (mounted) {
         setState(() {
-          _post = {'id': snap.id, ...snap.data()!};
+          _post = post;
           _liked = likeSnap.exists;
+          _authorFuture = UserInfoCache.instance.get(post['authorUid']);
         });
       }
     } catch (_) {
@@ -1144,28 +1561,38 @@ class _PostDetailModalState extends State<_PostDetailModal> {
   }
 
   Future<void> _toggleLike() async {
-    if (_post == null || _post!.isEmpty) return;
+    if (_post == null || _post!.isEmpty || _liking) return;
+    _liking = true;
     final wasLiked = _liked;
     setState(() {
       _liked = !wasLiked;
-      _post!['likesCount'] = (_post!['likesCount'] ?? 0) + (wasLiked ? -1 : 1);
+      _post!['likesCount'] = _nonNeg((_post!['likesCount'] ?? 0) + (wasLiked ? -1 : 1));
     });
     try {
-      final likeRef = FirebaseFirestore.instance.collection('posts').doc(widget.postId).collection('likes').doc(widget.myUid);
-      final postRef = FirebaseFirestore.instance.collection('posts').doc(widget.postId);
+      final db = FirebaseFirestore.instance;
+      final likeRef = db.collection('posts').doc(widget.postId).collection('likes').doc(widget.myUid);
+      final postRef = db.collection('posts').doc(widget.postId);
+      final batch = db.batch();
       if (wasLiked) {
-        await likeRef.delete();
-        await postRef.update({'likesCount': FieldValue.increment(-1)});
+        batch.delete(likeRef);
+        batch.update(postRef, {'likesCount': FieldValue.increment(-1)});
       } else {
-        await likeRef.set({'uid': widget.myUid, 'likedAt': FieldValue.serverTimestamp()});
-        await postRef.update({'likesCount': FieldValue.increment(1)});
+        batch.set(likeRef, {'uid': widget.myUid, 'likedAt': FieldValue.serverTimestamp()});
+        batch.update(postRef, {'likesCount': FieldValue.increment(1)});
+      }
+      await batch.commit();
+      if (!wasLiked) {
         sendNotification(_post!['authorUid'], 'like', postId: widget.postId, postText: _post!['text'], postImage: _post!['imageUrl']);
       }
     } catch (_) {
-      setState(() {
-        _liked = wasLiked;
-        _post!['likesCount'] = (_post!['likesCount'] ?? 0) + (wasLiked ? 1 : -1);
-      });
+      if (mounted) {
+        setState(() {
+          _liked = wasLiked;
+          _post!['likesCount'] = _nonNeg((_post!['likesCount'] ?? 0) + (wasLiked ? 1 : -1));
+        });
+      }
+    } finally {
+      _liking = false;
     }
   }
 
@@ -1176,15 +1603,18 @@ class _PostDetailModalState extends State<_PostDetailModal> {
     _commentCtrl.clear();
     try {
       final myInfo = await UserInfoCache.instance.get(widget.myUid);
-      final postRef = FirebaseFirestore.instance.collection('posts').doc(widget.postId);
-      await postRef.collection('comments').add({
+      final db = FirebaseFirestore.instance;
+      final postRef = db.collection('posts').doc(widget.postId);
+      final batch = db.batch();
+      batch.set(postRef.collection('comments').doc(), {
         'authorUid': widget.myUid,
         'authorName': myInfo['name'],
         'authorAvatar': myInfo['avatar'],
         'text': text, 'parentId': null, 'createdAt': FieldValue.serverTimestamp(),
       });
-      await postRef.update({'commentsCount': FieldValue.increment(1)});
-      setState(() => _post!['commentsCount'] = (_post!['commentsCount'] ?? 0) + 1);
+      batch.update(postRef, {'commentsCount': FieldValue.increment(1)});
+      await batch.commit();
+      if (mounted) setState(() => _post!['commentsCount'] = (_post!['commentsCount'] ?? 0) + 1);
       sendNotification(_post!['authorUid'], 'comment', postId: widget.postId, postText: _post!['text'], postImage: _post!['imageUrl'], commentText: text);
     } finally {
       if (mounted) setState(() => _sending = false);
@@ -1217,7 +1647,7 @@ class _PostDetailModalState extends State<_PostDetailModal> {
                         padding: const EdgeInsets.all(16),
                         children: [
                           FutureBuilder<Map<String, dynamic>>(
-                            future: UserInfoCache.instance.get(_post!['authorUid']),
+                            future: _authorFuture,
                             builder: (context, snap) {
                               final info = snap.data ?? {'name': _post!['authorName'] ?? 'Artist', 'avatar': _post!['authorAvatar'] ?? '', 'verified': false};
                               final created = (_post!['createdAt'] is Timestamp) ? (_post!['createdAt'] as Timestamp).toDate() : null;
@@ -1276,8 +1706,7 @@ class _PostDetailModalState extends State<_PostDetailModal> {
                           ),
                           const Padding(padding: EdgeInsets.symmetric(vertical: 12), child: Divider(color: _white10, height: 1)),
                           StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                            stream: FirebaseFirestore.instance.collection('posts').doc(widget.postId).collection('comments')
-                                .orderBy('createdAt').limit(200).snapshots(),
+                            stream: _commentsStream,
                             builder: (context, snap) {
                               if (!snap.hasData) {
                                 return const Center(child: Padding(padding: EdgeInsets.symmetric(vertical: 20), child: CircularProgressIndicator(color: _white)));
