@@ -25,6 +25,7 @@ import 'viewpro_screen.dart';
 import 'rejection_fix_screen.dart';
 import 'verify_code_screen.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'update_required_screen.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
@@ -194,20 +195,24 @@ class _SplashScreenState extends State<SplashScreen>
 
     _ctrl.forward();
 
-    Future.delayed(const Duration(milliseconds: 1800), () {
-      if (!mounted) return;
-      Navigator.pushReplacement(
-        context,
-        PageRouteBuilder(
-          pageBuilder: (_, __, ___) => const WelcomeScreen(),
-          transitionsBuilder: (_, anim, __, child) =>
-              FadeTransition(opacity: anim, child: child),
-          transitionDuration: const Duration(milliseconds: 400),
-        ),
-      );
-    });
+       _goNext();
   }
-
+  Future<void> _goNext() async {
+    final check = isUpdateRequired();
+    await Future.delayed(const Duration(milliseconds: 1800));
+    final mustUpdate = await check;
+    if (!mounted) return;
+    Navigator.pushReplacement(
+      context,
+      PageRouteBuilder(
+        pageBuilder: (_, __, ___) =>
+            mustUpdate ? const UpdateRequiredScreen() : const WelcomeScreen(),
+        transitionsBuilder: (_, anim, __, child) =>
+            FadeTransition(opacity: anim, child: child),
+        transitionDuration: const Duration(milliseconds: 400),
+      ),
+    );
+  }
   @override
   void dispose() {
     _ctrl.dispose();
