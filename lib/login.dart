@@ -5,12 +5,20 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'package:flutter/gestures.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 // ─────────────────────────────────────────
 //  BACKEND CONFIG
 // ─────────────────────────────────────────
 const String _backendBaseUrl = 'https://four44music-broadcast-backend.onrender.com';
+const String _legalUrl = 'https://www.444musicdistro.com/legal#about';
 
+Future<void> _openLegal() async {
+  try {
+    await launchUrl(Uri.parse(_legalUrl), mode: LaunchMode.externalApplication);
+  } catch (_) {}
+}
 // ─────────────────────────────────────────
 //  COLOURS
 // ─────────────────────────────────────────
@@ -837,6 +845,8 @@ class _SignupPanelState extends State<_SignupPanel> {
   final _emailCtrl   = TextEditingController();
   final _passCtrl    = TextEditingController();
   final _confirmCtrl = TextEditingController();
+    late final TapGestureRecognizer _termsTap = TapGestureRecognizer()..onTap = _openLegal;
+  late final TapGestureRecognizer _privacyTap = TapGestureRecognizer()..onTap = _openLegal;
 
   bool   _loading    = false;
   bool   _agreed     = false;
@@ -970,6 +980,8 @@ class _SignupPanelState extends State<_SignupPanel> {
     _emailCtrl.dispose();
     _passCtrl.dispose();
     _confirmCtrl.dispose();
+        _termsTap.dispose();
+    _privacyTap.dispose();
     super.dispose();
   }
 
@@ -1096,19 +1108,35 @@ class _SignupPanelState extends State<_SignupPanel> {
               ),
             ),
             const SizedBox(width: 10),
-            const Expanded(
+                              Expanded(
               child: Text.rich(
                 TextSpan(
-                  style: TextStyle(color: Color(0xFF555566), fontSize: 12),
+                  style: const TextStyle(color: Color(0xFF555566), fontSize: 12),
                   children: [
-                    TextSpan(text: 'I agree to the '),
-                    TextSpan(text: 'Terms', style: TextStyle(color: Color(0xFF8888AA))),
-                    TextSpan(text: ' & '),
-                    TextSpan(text: 'Privacy Policy', style: TextStyle(color: Color(0xFF8888AA))),
+                    const TextSpan(text: 'I agree to the '),
+                    TextSpan(
+                      text: 'Terms',
+                      recognizer: _termsTap,
+                      style: const TextStyle(
+                        color: Color(0xFF8888AA),
+                        decoration: TextDecoration.underline,
+                        decorationColor: Color(0xFF8888AA),
+                      ),
+                    ),
+                    const TextSpan(text: ' & '),
+                    TextSpan(
+                      text: 'Privacy Policy',
+                      recognizer: _privacyTap,
+                      style: const TextStyle(
+                        color: Color(0xFF8888AA),
+                        decoration: TextDecoration.underline,
+                        decorationColor: Color(0xFF8888AA),
+                      ),
+                    ),
                   ],
                 ),
               ),
-            ),
+             ),
           ],
         ),
         const SizedBox(height: 22),
