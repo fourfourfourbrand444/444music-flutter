@@ -22,7 +22,7 @@ Future<http.Response?> _fetchVersionFile() async {
   try {
     return await http
         .get(Uri.parse(
-            '$_versionUrl?t=${DateTime.now().millisecondsStartsSinceEpoch}'))
+            '$_versionUrl?t=${DateTime.now().millisecondsSinceEpoch}'))
         .timeout(const Duration(seconds: 10));
   } catch (_) {
     return null;
