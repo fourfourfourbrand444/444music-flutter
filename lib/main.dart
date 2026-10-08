@@ -197,16 +197,14 @@ class _SplashScreenState extends State<SplashScreen>
 
        _goNext();
   }
-  Future<void> _goNext() async {
-    final check = isUpdateRequired();
+   Future<void> _goNext() async {
     await Future.delayed(const Duration(milliseconds: 1800));
-    final mustUpdate = await check;
     if (!mounted) return;
     Navigator.pushReplacement(
       context,
       PageRouteBuilder(
         pageBuilder: (_, __, ___) =>
-            mustUpdate ? const UpdateRequiredScreen() : const WelcomeScreen(),
+            const VersionGate(child: WelcomeScreen()),
         transitionsBuilder: (_, anim, __, child) =>
             FadeTransition(opacity: anim, child: child),
         transitionDuration: const Duration(milliseconds: 400),
