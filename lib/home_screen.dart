@@ -337,6 +337,83 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     Future.delayed(const Duration(milliseconds: 300), () { if (mounted) Navigator.pushNamed(context, route); });
   }
 
+  // ── Back button: close sidebar → go to Home tab → ask before quitting ──
+  Future<void> _handleBack() async {
+    if (_sidebarOpen) { _closeSidebar(); return; }
+    if (_navIndex != 0) { setState(() => _navIndex = 0); return; }
+    final quit = await _confirmExit();
+    if (quit && mounted) SystemNavigator.pop();
+  }
+
+  Future<bool> _confirmExit() async {
+    Widget btn(String label, bool primary, VoidCallback onTap) => Expanded(
+          child: GestureDetector(
+            onTap: onTap,
+            child: Container(
+              height: 44,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: primary ? _white : _white10,
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Text(label,
+                  style: GoogleFonts.nunito(
+                    color: primary ? _black : _white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                  )),
+            ),
+          ),
+        );
+
+    final r = await showGeneralDialog<bool>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'Quit',
+      barrierColor: Colors.black.withOpacity(0.6),
+      transitionDuration: const Duration(milliseconds: 220),
+      pageBuilder: (ctx, _, __) => Center(
+        child: Material(
+          color: Colors.transparent,
+          child: Container(
+            width: 290,
+            padding: const EdgeInsets.fromLTRB(20, 24, 20, 18),
+            decoration: BoxDecoration(
+              color: _black1,
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: _white10),
+            ),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Text('Quit 444Music?',
+                  style: GoogleFonts.outfit(
+                      color: _white, fontSize: 18, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 6),
+              Text('Do you want to quit the app?',
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.nunito(
+                      color: _grey, fontSize: 13.5, fontWeight: FontWeight.w500)),
+              const SizedBox(height: 22),
+              Row(children: [
+                btn('No', false, () => Navigator.pop(ctx, false)),
+                const SizedBox(width: 10),
+                btn('Yes', true, () => Navigator.pop(ctx, true)),
+              ]),
+            ]),
+          ),
+        ),
+      ),
+      transitionBuilder: (ctx, anim, _, child) {
+        final c = CurvedAnimation(parent: anim, curve: Curves.easeOutCubic);
+        return FadeTransition(
+          opacity: c,
+          child: ScaleTransition(
+              scale: Tween<double>(begin: 0.92, end: 1).animate(c), child: child),
+        );
+      },
+    );
+    return r == true;
+  }
+  
   void _onBottomNavTap(int i) {
     if (i == 0) {
       if (_navIndex == 0) { _feedKey.currentState?.scrollToTopAndRefresh(); } else { setState(() => _navIndex = 0); }
@@ -352,7 +429,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Widget build(BuildContext context) {
     // Your own name/avatar were read once by the feed; no extra lookup here.
     final me = _user == null ? null : UserInfoCache.instance.peek(_user!.uid);
-    return Scaffold(
+   return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _handleBack();
+      },
+      child: Scaffold(
       backgroundColor: _black,
       extendBody: true,
       body: Stack(children: [
@@ -383,6 +465,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             ),
           ),
       ]),
+      ),
     );
   }
 }
