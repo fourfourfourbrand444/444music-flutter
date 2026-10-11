@@ -519,7 +519,7 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
   // Display order (post ids). Only ever appended to between refreshes, so
   // loading more posts never moves anything you have already scrolled past.
   List<String> _order = [];
-  DocumentSnapshot? _lastPost;
+ int? _lastPostAt;
   bool _hasMore = true, _loading = false;
   int _autoPages = 0;
   final Map<String, double> _keys = {};
@@ -638,10 +638,19 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
     }
     _loading = true;
     try {
-      Query<Map<String, dynamic>> q = _db.collection('posts').orderBy('createdAt', descending: true).limit(_pageSize);
-      if (!reset && _lastPost != null) q = q.startAfterDocument(_lastPost!);
-      final snap = await q.get();
-      final fresh = snap.docs.map((d) => <String, dynamic>{'id': d.id, ...d.data()}).toList();
+           final path = (!reset && _lastPostAt != null)
+          ? '/posts?limit=$_pageSize&before=$_lastPostAt'
+          : '/posts?limit=$_pageSize';
+      final fresh = ((await _Api.get(path)) as List)
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+      for (final p in fresh) {
+        if (p['liked'] == true) {
+          _liked.add(p['id'] as String);
+        } else {
+          _liked.remove(p['id'] as String);
+        }
+      }
       if (reset) {
         _keys.clear(); _autoPages = 0;
         _pool = fresh;
@@ -652,8 +661,8 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
         _pool = [..._pool, ...added];
         _order = [..._order, ..._sortedIds(added)];
       }
-      if (snap.docs.isNotEmpty) _lastPost = snap.docs.last;
-      _hasMore = snap.docs.length == _pageSize;
+           if (fresh.isNotEmpty) _lastPostAt = (fresh.last['createdAt'] as num).toInt();
+      _hasMore = fresh.length == _pageSize;
     } catch (_) {
     } finally {
       _loading = false;
@@ -699,6 +708,27 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
   // ── Stories: newest 40, loaded once ──
   Future<void> _loadStories() async {
     try {
+      final list = ((await _Api.get('/stories')) as List)
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+      final map = <String, List<Map<String, dynamic>>>{};
+      for (final s in list) {
+        map.putIfAbsent(s['authorUid'] as String, () => []).add(s);
+        final id = s['id'] as String;
+        if (s['seen'] == true) _seenStories.add(id);
+        if (s['liked'] == true) {
+          _likedStories.add(id);
+        } else {
+          _likedStories.remove(id);
+        }
+      }
+      map.updateAll((k, v) => v.reversed.toList());
+      if (mounted) setState(() => _stories = map);
+    } catch (_) {}
+  }
+
+  Future<void> _loadStoriesOld() async {
+    try {
       final cutoff = Timestamp.fromDate(DateTime.now().subtract(const Duration(hours: 24)));
       final snap = await _db.collection('stories').where('createdAt', isGreaterThan: cutoff)
           .orderBy('createdAt', descending: true).limit(40).get();
@@ -715,7 +745,15 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
   bool _storySeen(String uid) => (_stories[uid] ?? []).every((s) => _seenStories.contains(s['id']));
 
   // ── Notifications: unread = newer than notifSeenAt ──
-  Future<void> _refreshBadge() async {
+ Future<void> _refreshBadge() async {
+    if (_user == null) return;
+    try {
+      final r = await _Api.get('/notifications/count');
+      if (mounted && r is Map) setState(() => _unread = (r['count'] as num?)?.toInt() ?? 0);
+    } catch (_) {}
+  }
+
+  Future<void> _refreshBadgeOld() async {
     if (_user == null || _seenAt == null) return;
     try {
       final agg = await _db.collection('notifications').doc(_user!.uid).collection('items')
@@ -727,7 +765,7 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
   void _openNotifications() {
     final before = _seenAt, now = Timestamp.now();
     setState(() { _unread = 0; _seenAt = now; });
-    _db.collection('users').doc(_user!.uid).set({'notifSeenAt': now}, SetOptions(merge: true)).catchError((_) {});
+   // the "seen" marker is kept on the API now
     showModalBottomSheet(
       context: context, isScrollControlled: true, backgroundColor: Colors.transparent,
       builder: (_) => _NotificationsSheet(uid: _user!.uid, seenBefore: before),
@@ -834,32 +872,19 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _toggleLike(Map<String, dynamic> post) async {
+    Future<void> _toggleLike(Map<String, dynamic> post) async {
     final me = _user!.uid, id = post['id'] as String, was = _liked.contains(id);
     int count() => ((post['likesCount'] ?? 0) as num).toInt();
     setState(() {
       was ? _liked.remove(id) : _liked.add(id);
       post['likesCount'] = max(0, count() + (was ? -1 : 1));
     });
-    _Local.putSet('liked_$me', _liked);
-    final postRef = _db.collection('posts').doc(id), likeRef = postRef.collection('likes').doc(me);
     try {
-      if (was) {
-        final b = _db.batch();
-        b.delete(likeRef);
-        b.update(postRef, {'likesCount': FieldValue.increment(-1)});
-        await b.commit();
-      } else {
-        // One read, only when liking: avoids double-counting a post that was
-        // already liked from another phone.
-        if ((await likeRef.get()).exists) {
-          if (mounted) setState(() => post['likesCount'] = max(0, count() - 1));
-          return;
-        }
-        final b = _db.batch();
-        b.set(likeRef, {'uid': me, 'likedAt': FieldValue.serverTimestamp()});
-        b.update(postRef, {'likesCount': FieldValue.increment(1)});
-        await b.commit();
+      final r = was ? await _Api.delete('/posts/$id/like') : await _Api.post('/posts/$id/like');
+      if (mounted && r is Map && r['likesCount'] is num) {
+        setState(() => post['likesCount'] = (r['likesCount'] as num).toInt());
+      }
+      if (!was) {
         sendNotification(post['authorUid'], 'like', postId: id, postText: post['text'],
             postImage: post['imageUrl'], docId: 'like_${id}_$me');
       }
@@ -869,19 +894,18 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
         was ? _liked.add(id) : _liked.remove(id);
         post['likesCount'] = max(0, count() + (was ? 1 : -1));
       });
-      _Local.putSet('liked_$me', _liked);
     }
   }
-
   Future<void> _deletePost(String id) async {
-    await _db.collection('posts').doc(id).delete();
+     try { await _Api.delete('/posts/$id'); } catch (_) { return; }
     _pool.removeWhere((p) => p['id'] == id);
     _order.remove(id);
     _recompute();
   }
 
-  Future<void> _editPost(String id, String text) =>
-      _db.collection('posts').doc(id).update({'text': text, 'edited': true});
+   Future<void> _editPost(String id, String text) async {
+    try { await _Api.patch('/posts/$id', {'text': text}); } catch (_) {}
+  }
 
   void _openComments(Map<String, dynamic> post) {
     showModalBottomSheet(
@@ -911,6 +935,28 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
   }
 
   Future<void> _addPostToStory(Map<String, dynamic> post) async {
+    final from = UserInfoCache.instance.peek(post['authorUid']) ??
+        {'name': post['authorName'] ?? 'Artist', 'avatar': post['authorAvatar'] ?? ''};
+    try {
+      await _Api.post('/stories', {
+        'sharedPostId': post['id'],
+        'sharedFromName': from['name'], 'sharedFromAvatar': from['avatar'],
+        'authorName': _myName, 'authorAvatar': _myAvatar,
+      });
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Couldn't add to your story.")));
+      }
+      return;
+    }
+    if (post['authorUid'] != _user!.uid) {
+      sendNotification(post['authorUid'], 'story_share', postId: post['id'],
+          postText: post['text'], postImage: post['imageUrl'], docId: 'sshare_${post['id']}_${_user!.uid}');
+    }
+    _loadStories();
+  }
+
+  Future<void> _addPostToStoryOld(Map<String, dynamic> post) async {
     final from = UserInfoCache.instance.peek(post['authorUid']) ??
         {'name': post['authorName'] ?? 'Artist', 'avatar': post['authorAvatar'] ?? ''};
     await _db.collection('stories').add({
@@ -1603,7 +1649,7 @@ class _CommentsSheetState extends State<_CommentsSheet> {
   List<Map<String, dynamic>> _all = [];
   bool _loading = true, _sending = false;
 
-  DocumentReference<Map<String, dynamic>> get _postRef => _db.collection('posts').doc(widget.post['id']);
+ 
 
   @override
   void initState() {
@@ -1619,23 +1665,27 @@ class _CommentsSheetState extends State<_CommentsSheet> {
 
   Future<void> _load() async {
     try {
-      final s = await _postRef.collection('comments').orderBy('createdAt').limit(60).get();
-      _all = s.docs.map((d) => <String, dynamic>{'id': d.id, ...d.data()}).toList();
+          final r = await _Api.get('/posts/${widget.post['id']}/comments') as List;
+      _all = r.map((e) => Map<String, dynamic>.from(e as Map)).toList();
     } catch (_) {}
     if (mounted) setState(() => _loading = false);
   }
 
-  Future<void> _add(String text, String? parentId, String notifyUid, String type) async {
-    final data = {
-      'authorUid': widget.myUid, 'authorName': widget.myName, 'authorAvatar': widget.myAvatar,
-      'text': text, 'parentId': parentId, 'createdAt': FieldValue.serverTimestamp(),
-    };
-    final ref = await _postRef.collection('comments').add(data);
-    if (mounted) setState(() => _all.add({'id': ref.id, ...data, 'createdAt': Timestamp.now()}));
-    widget.onDelta(1);
-    await _postRef.update({'commentsCount': FieldValue.increment(1)});
-    sendNotification(notifyUid, type, postId: widget.post['id'], postText: widget.post['text'],
-        postImage: widget.post['imageUrl'], commentText: text);
+   Future<void> _add(String text, String? parentId, String notifyUid, String type) async {
+    try {
+      final res = await _Api.post('/posts/${widget.post['id']}/comments', {
+        'text': text, 'parentId': parentId,
+        'authorName': widget.myName, 'authorAvatar': widget.myAvatar,
+      });
+      if (mounted) setState(() => _all.add(Map<String, dynamic>.from(res as Map)));
+      widget.onDelta(1);
+      sendNotification(notifyUid, type, postId: widget.post['id'], postText: widget.post['text'],
+          postImage: widget.post['imageUrl'], commentText: text);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Couldn't post your comment.")));
+      }
+    }
   }
 
   Future<void> _submit() async {
@@ -1650,13 +1700,19 @@ class _CommentsSheetState extends State<_CommentsSheet> {
     }
   }
 
-  Future<void> _delete(String id) async {
-    setState(() => _all.removeWhere((c) => c['id'] == id));
-    widget.onDelta(-1);
-    await _postRef.collection('comments').doc(id).delete();
-    await _postRef.update({'commentsCount': FieldValue.increment(-1)});
+    Future<void> _delete(String id) async {
+    final before = List<Map<String, dynamic>>.from(_all);
+    setState(() => _all.removeWhere((c) => c['id'] == id || c['parentId'] == id));
+    final removed = before.length - _all.length;
+    widget.onDelta(-removed);
+    try {
+      await _Api.delete('/comments/$id');
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _all = before);
+      widget.onDelta(removed);
+    }
   }
-
   @override
   Widget build(BuildContext context) {
     final top = _all.where((c) => c['parentId'] == null).toList();
@@ -1847,6 +1903,83 @@ class _NotificationsSheet extends StatefulWidget {
 class _NotificationsSheetState extends State<_NotificationsSheet> {
   List<Map<String, dynamic>> _items = [];
   bool _loading = true;
+  int? _seenBefore;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final seen = await _Api.post('/notifications/seen');
+      if (seen is Map) _seenBefore = (seen['seenBefore'] as num?)?.toInt();
+      final r = await _Api.get('/notifications') as List;
+      _items = r.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    } catch (_) {}
+    if (mounted) setState(() => _loading = false);
+  }
+
+  String _text(Map<String, dynamic> n) {
+    final who = n['fromName'] ?? 'Someone';
+    switch (n['type']) {
+      case 'follow': return '$who started following you';
+      case 'like': return '$who liked your post';
+      case 'story_like': return '$who liked your story';
+      case 'comment': return '$who commented on your post';
+      case 'reply': return '$who replied to your comment';
+      case 'story_share': return '$who added your post to their story';
+      case 'system': return '$who: ${n['commentText'] ?? ''}';
+      default: return '$who sent you a notification';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      initialChildSize: 0.7, minChildSize: 0.4, maxChildSize: 0.95,
+      builder: (context, scroll) => Container(
+        decoration: const BoxDecoration(color: _black1, borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
+        child: Column(children: [
+          const SizedBox(height: 10),
+          Container(width: 38, height: 4, decoration: BoxDecoration(color: _white20, borderRadius: BorderRadius.circular(4))),
+          Padding(padding: const EdgeInsets.all(14),
+              child: Text('Notifications', style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w700, fontSize: 15.5))),
+          const Divider(color: _white10, height: 1),
+          Expanded(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator(color: _white, strokeWidth: 2))
+                : _items.isEmpty
+                    ? Center(child: Text('Nothing here yet.', style: GoogleFonts.nunito(color: _grey)))
+                    : ListView.builder(
+                        controller: scroll, itemCount: _items.length,
+                        itemBuilder: (context, i) {
+                          final n = _items[i];
+                          final created = (n['createdAt'] as num?)?.toInt();
+                          final unread = _seenBefore != null && created != null && created > _seenBefore!;
+                          return ListTile(
+                            leading: _Avatar(url: n['fromAvatar'], name: n['fromName'], size: 42),
+                            title: Text(_text(n), style: GoogleFonts.nunito(color: _white90, fontSize: 13.5, fontWeight: unread ? FontWeight.w700 : FontWeight.w500)),
+                            subtitle: Text(timeAgo(_dt(created)), style: GoogleFonts.nunito(color: _grey, fontSize: 11.5)),
+                            trailing: unread ? const Icon(Icons.circle, color: _blue, size: 9) : null,
+                            onTap: () {
+                              Navigator.pop(context);
+                              if (n['fromUid'] != null) Navigator.pushNamed(context, '/viewpro', arguments: n['fromUid']);
+                            },
+                          );
+                        },
+                      ),
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
+class _NotificationsSheetStateOld extends State<_NotificationsSheet> {
+  List<Map<String, dynamic>> _items = [];
+  bool _loading = true;
 
   @override
   void initState() {
@@ -1960,14 +2093,11 @@ class _NewPostScreenState extends State<_NewPostScreen> {
         if (url == null) throw Exception('upload failed');
         aspect = await _aspectOf(_image!);
       }
-      final data = <String, dynamic>{
-        'authorUid': me.uid, 'authorName': widget.myName, 'authorAvatar': widget.myAvatar,
-        'text': text, 'imageUrl': url, 'linkUrl': link.isEmpty ? null : link,
-        if (aspect != null) 'imageAspect': aspect,
-        'likesCount': 0, 'commentsCount': 0, 'createdAt': FieldValue.serverTimestamp(),
-      };
-      final ref = await FirebaseFirestore.instance.collection('posts').add(data);
-      if (mounted) Navigator.pop(context, <String, dynamic>{'id': ref.id, ...data, 'createdAt': Timestamp.now()});
+           final res = await _Api.post('/posts', {
+        'text': text, 'mediaKey': url, 'linkUrl': link.isEmpty ? null : link,
+        'imageAspect': aspect, 'authorName': widget.myName, 'authorAvatar': widget.myAvatar,
+      });
+      if (mounted) Navigator.pop(context, Map<String, dynamic>.from(res as Map));
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Couldn't publish. Please try again.")));
@@ -2061,8 +2191,34 @@ class _StoryComposerScreenState extends State<_StoryComposerScreen> {
   }
 
   bool get _can => _type == 'image' ? _image != null : _type == 'text' ? _text.text.trim().isNotEmpty : _link.text.trim().isNotEmpty;
+Future<void> _share() async {
+    setState(() => _busy = true);
+    try {
+      final me = FirebaseAuth.instance.currentUser!;
+      final data = <String, dynamic>{
+        'type': _type,
+        'authorName': widget.myName, 'authorAvatar': widget.myAvatar,
+      };
+      if (_type == 'image') {
+        final key = await _uploadToR2(_image!, kind: 'story', uid: me.uid);
+        if (key == null) throw Exception('upload failed');
+        data['mediaKey'] = key;
+      } else if (_type == 'text') {
+        data['text'] = _text.text.trim();
+      } else {
+        data['linkUrl'] = _link.text.trim();
+      }
+      await _Api.post('/stories', data);
+      if (mounted) Navigator.pop(context, true);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Couldn't share your story.")));
+        setState(() => _busy = false);
+      }
+    }
+  }
 
-  Future<void> _share() async {
+  Future<void> _shareOld() async {
     setState(() => _busy = true);
     try {
       final me = FirebaseAuth.instance.currentUser!;
@@ -2198,7 +2354,26 @@ class _StoryViewerScreenState extends State<_StoryViewerScreen> with SingleTicke
     super.dispose();
   }
 
-  void _show(int i) {
+ void _show(int i) {
+    if (i < 0 || i >= _stories.length) { Navigator.pop(context); return; }
+    setState(() => _index = i);
+    _ctrl.reset();
+    _ctrl.forward();
+    final s = _stories[i], id = s['id'] as String;
+    if (s['authorUid'] == widget.myUid) {
+      if (!_viewerCounts.containsKey(id)) {
+        _Api.get('/stories/$id/viewers').then((r) {
+          if (mounted && r is Map) setState(() => _viewerCounts[id] = (r['count'] as num?)?.toInt() ?? 0);
+        }).catchError((_) {});
+      }
+    } else if (!widget.seen.contains(id)) {
+      widget.seen.add(id);
+      widget.onPersist();
+      _Api.post('/stories/$id/view').catchError((_) {});
+    }
+  }
+
+  void _showOld(int i) {
     if (i < 0 || i >= _stories.length) { Navigator.pop(context); return; }
     setState(() => _index = i);
     _ctrl.reset();
@@ -2220,6 +2395,23 @@ class _StoryViewerScreenState extends State<_StoryViewerScreen> with SingleTicke
   }
 
   Future<void> _toggleLike() async {
+    final s = _stories[_index], id = s['id'] as String, was = widget.liked.contains(id);
+    setState(() => was ? widget.liked.remove(id) : widget.liked.add(id));
+    widget.onPersist();
+    try {
+      if (was) {
+        await _Api.delete('/stories/$id/like');
+      } else {
+        await _Api.post('/stories/$id/like');
+        sendNotification(s['authorUid'], 'story_like', docId: 'slike_${id}_${widget.myUid}');
+      }
+    } catch (_) {
+      if (mounted) setState(() => was ? widget.liked.add(id) : widget.liked.remove(id));
+      widget.onPersist();
+    }
+  }
+
+  Future<void> _toggleLikeOld() async {
     final s = _stories[_index], id = s['id'] as String, was = widget.liked.contains(id);
     setState(() => was ? widget.liked.remove(id) : widget.liked.add(id));
     widget.onPersist();
@@ -2254,7 +2446,7 @@ class _StoryViewerScreenState extends State<_StoryViewerScreen> with SingleTicke
       ),
     );
     if (ok != true) { _ctrl.forward(); return; }
-    await FirebaseFirestore.instance.collection('stories').doc(s['id']).delete();
+   try { await _Api.delete('/stories/${s['id']}'); } catch (_) { if (mounted) _ctrl.forward(); return; }
     _stories.removeAt(_index);
     widget.onDeleted();
     if (_stories.isEmpty) { if (mounted) Navigator.pop(context); return; }
@@ -2422,6 +2614,55 @@ class _StoryViewersSheet extends StatefulWidget {
 }
 
 class _StoryViewersSheetState extends State<_StoryViewersSheet> {
+  late final Future<List<String>> _future = _load();
+
+  Future<List<String>> _load() async {
+    final r = await _Api.get('/stories/${widget.storyId}/viewers') as Map;
+    return (r['ids'] as List).map((e) => e.toString()).toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      initialChildSize: 0.55, minChildSize: 0.3, maxChildSize: 0.9,
+      builder: (context, scroll) => Container(
+        decoration: const BoxDecoration(color: _black1, borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
+        child: Column(children: [
+          Padding(padding: const EdgeInsets.all(16), child: Text('Viewers', style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w700, fontSize: 15.5))),
+          const Divider(color: _white10, height: 1),
+          Expanded(
+            child: FutureBuilder<List<String>>(
+              future: _future,
+              builder: (context, snap) {
+                if (snap.hasError) return Center(child: Text("Couldn't load viewers.", style: GoogleFonts.nunito(color: _grey)));
+                if (!snap.hasData) return const Center(child: CircularProgressIndicator(color: _white, strokeWidth: 2));
+                final ids = snap.data!;
+                if (ids.isEmpty) return Center(child: Text('No views yet.', style: GoogleFonts.nunito(color: _grey)));
+                return ListView.builder(
+                  controller: scroll, itemCount: ids.length,
+                  itemBuilder: (context, i) => FutureBuilder<Map<String, dynamic>>(
+                    future: UserInfoCache.instance.get(ids[i]),
+                    initialData: UserInfoCache.instance.peek(ids[i]),
+                    builder: (context, s) {
+                      final info = s.data ?? {'name': 'Artist', 'avatar': ''};
+                      return ListTile(
+                        leading: _Avatar(url: info['avatar'], name: info['name'], size: 40),
+                        title: Text(info['name'], style: GoogleFonts.nunito(color: _white90, fontWeight: FontWeight.w700)),
+                        onTap: () => Navigator.pushNamed(context, '/viewpro', arguments: ids[i]),
+                      );
+                    },
+                  ),
+                );
+              },
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
+class _StoryViewersSheetStateOld extends State<_StoryViewersSheet> {
   late final Future<QuerySnapshot<Map<String, dynamic>>> _future = FirebaseFirestore.instance
       .collection('stories').doc(widget.storyId).collection('viewers').limit(100).get();
 
