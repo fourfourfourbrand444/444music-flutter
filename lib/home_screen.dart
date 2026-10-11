@@ -63,7 +63,7 @@ const _blue     = Color(0xFF4DA3FF);
 const _rose     = Color(0xFFF87171);
 
 const _pageSize = 20;
-const _backendBaseUrl = 'https://four44music-broadcast-backend.onrender.com';
+const _apiBase = 'https://api.444musicdistro.com';
 
 // ─── R2 upload (posts, stories) ─────────────────────────────────────
 String _contentType(String name) {
@@ -74,24 +74,49 @@ String _contentType(String name) {
   return 'image/jpeg';
 }
 
+/// Uploads straight to the feed API. Returns the file key (not a URL).
 Future<String?> _uploadToR2(XFile file, {required String kind, required String uid}) async {
   try {
     final bytes = await file.readAsBytes();
     final type = _contentType(file.name);
+    final folder = kind == 'story' ? 'stories' : kind == 'avatar' ? 'avatars' : 'posts';
+    final tok = await FirebaseAuth.instance.currentUser?.getIdToken();
     final r = await http.post(
-      Uri.parse('$_backendBaseUrl/r2/upload-url'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'kind': kind, 'uid': uid, 'contentType': type}),
-    );
-    if (r.statusCode != 200) return null;
-    final d = jsonDecode(r.body) as Map<String, dynamic>;
-    final up = d['uploadUrl'] as String?, pub = d['publicUrl'] as String?;
-    if (up == null || pub == null) return null;
-    final put = await http.put(Uri.parse(up), headers: {'Content-Type': type}, body: bytes);
-    return put.statusCode == 200 ? pub : null;
+      Uri.parse('$_apiBase/upload?folder=$folder'),
+      headers: {'Authorization': 'Bearer $tok', 'Content-Type': type},
+      body: bytes,
+    ).timeout(const Duration(seconds: 90));
+    if (r.statusCode != 201) return null;
+    return (jsonDecode(r.body) as Map<String, dynamic>)['key'] as String?;
   } catch (_) {
     return null;
   }
+}
+
+/// Small client for the feed API (adds the Firebase login token to every call).
+class _Api {
+  static Future<dynamic> _send(String method, String path, [Map<String, dynamic>? body]) async {
+    final tok = await FirebaseAuth.instance.currentUser?.getIdToken();
+    final headers = {
+      if (tok != null) 'Authorization': 'Bearer $tok',
+      'Content-Type': 'application/json',
+    };
+    final uri = Uri.parse('$_apiBase$path');
+    final data = body == null ? '{}' : jsonEncode(body);
+    final http.Response r = await (switch (method) {
+      'POST' => http.post(uri, headers: headers, body: data),
+      'PATCH' => http.patch(uri, headers: headers, body: data),
+      'DELETE' => http.delete(uri, headers: headers),
+      _ => http.get(uri, headers: headers),
+    }).timeout(const Duration(seconds: 20));
+    if (r.statusCode < 200 || r.statusCode >= 300) throw Exception('API ${r.statusCode}');
+    return r.body.isEmpty ? null : jsonDecode(r.body);
+  }
+
+  static Future<dynamic> get(String path) => _send('GET', path);
+  static Future<dynamic> post(String path, [Map<String, dynamic>? body]) => _send('POST', path, body);
+  static Future<dynamic> patch(String path, Map<String, dynamic> body) => _send('PATCH', path, body);
+  static Future<dynamic> delete(String path) => _send('DELETE', path);
 }
 
 /// Width / height of a picked photo, saved on the post so the feed can reserve
@@ -267,7 +292,11 @@ String timeAgo(DateTime? d) {
   return '${days ~/ 365}y ago';
 }
 
-DateTime? _dt(dynamic v) => v is Timestamp ? v.toDate() : null;
+DateTime? _dt(dynamic v) {
+  if (v is Timestamp) return v.toDate();
+  if (v is num) return DateTime.fromMillisecondsSinceEpoch(v.toInt());
+  return null;
+}
 
 // docId makes repeat actions (like/unlike spam) overwrite one notification
 // instead of creating a new document every time.
@@ -277,21 +306,12 @@ Future<void> sendNotification(String to, String type, {
   final me = FirebaseAuth.instance.currentUser;
   if (me == null || to == me.uid) return;
   final mine = await UserInfoCache.instance.get(me.uid);
-  String? cut(String? s, int n) => s != null && s.length > n ? s.substring(0, n) : s;
-  final data = {
-    'type': type, 'fromUid': me.uid, 'fromName': mine['name'], 'fromAvatar': mine['avatar'],
-    'postId': postId, 'postText': cut(postText, 120), 'postImage': postImage,
-    'commentText': cut(commentText, 140), 'read': false,
-    'createdAt': FieldValue.serverTimestamp(),
-    'expiresAt': Timestamp.fromDate(DateTime.now().add(const Duration(hours: 48))),
-  };
-  final col = FirebaseFirestore.instance.collection('notifications').doc(to).collection('items');
   try {
-    if (docId == null) {
-      await col.add(data);
-    } else {
-      await col.doc(docId).set(data);
-    }
+    await _Api.post('/notify', {
+      'to': to, 'type': type, 'docId': docId,
+      'fromName': mine['name'], 'fromAvatar': mine['avatar'],
+      'postId': postId, 'postText': postText, 'postImage': postImage, 'commentText': commentText,
+    });
   } catch (_) {}
 }
 
