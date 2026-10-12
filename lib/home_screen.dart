@@ -239,6 +239,14 @@ class UserInfoCache {
 
 Widget verifiedTick({double size = 13}) => Icon(Icons.verified_rounded, color: _blue, size: size);
 
+/// Lets other screens call the feed API.
+class FeedApi {
+  static Future<dynamic> get(String path) => _Api.get(path);
+  static Future<dynamic> post(String path, [Map<String, dynamic>? body]) => _Api.post(path, body);
+  static Future<dynamic> patch(String path, Map<String, dynamic> body) => _Api.patch(path, body);
+  static Future<dynamic> delete(String path) => _Api.delete(path);
+}
+
 Future<void> openExternalLink(String url) async {
   var u = url.trim();
   if (u.isEmpty) return;
