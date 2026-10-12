@@ -51,7 +51,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
-import 'home_screen.dart' show UserInfoCache, sendNotification, timeAgo, verifiedTick, formatCount;
+import 'home_screen.dart' show UserInfoCache, sendNotification, timeAgo, verifiedTick, formatCount, FeedApi;
 
 // ─── PALETTE (matches home_screen.dart's values) ────────────────────
 const _black    = Color(0xFF000000);
@@ -207,7 +207,8 @@ class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateM
   int _followingCount = 0;
   int _postsCount = 0;
   List<Map<String, dynamic>> _posts = [];
-  DocumentSnapshot<Map<String, dynamic>>? _postsCursor;
+ DocumentSnapshot<Map<String, dynamic>>? _postsCursor;
+  int? _postsBefore;
   bool _hasMorePosts = false;
   bool _loadingMorePosts = false;
 
@@ -294,6 +295,64 @@ class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateM
   }
 
   Future<void> _loadProfile({bool force = false}) async {
+    if (!mounted) return;
+    if (!force && _lastLoad != null && DateTime.now().difference(_lastLoad!) < const Duration(seconds: 20)) {
+      return;
+    }
+    _lastLoad = DateTime.now();
+    setState(() => _loading = true);
+
+    Map<String, dynamic> data = {};
+    try {
+      final snap = await FirebaseFirestore.instance.collection('users').doc(_targetUid).get();
+      if (snap.exists) data = snap.data()!;
+    } catch (_) {}
+
+    int followersCount = _nonNeg((data['followersCount'] as num?)?.toInt() ?? 0);
+    int followingCount = _nonNeg((data['followingCount'] as num?)?.toInt() ?? 0);
+
+    List<Map<String, dynamic>> posts = [];
+    bool hasMore = false;
+    try {
+      final r = await FeedApi.get('/posts?author=$_targetUid&limit=$_kPostsPage') as List;
+      posts = r.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      hasMore = posts.length == _kPostsPage;
+    } catch (_) {}
+
+    int postsCount = posts.length;
+    if (hasMore) {
+      try {
+        final c = await FeedApi.get('/posts/count/$_targetUid') as Map;
+        postsCount = (c['count'] as num?)?.toInt() ?? posts.length;
+      } catch (_) {}
+    }
+
+    UserInfoCache.instance.invalidate(_targetUid);
+
+    if (!mounted) return;
+    setState(() {
+      _userData = data;
+      _followersCount = followersCount;
+      _followingCount = followingCount;
+      _posts = posts;
+      _postsBefore = posts.isNotEmpty ? (posts.last['createdAt'] as num?)?.toInt() : null;
+      _hasMorePosts = hasMore;
+      _postsCount = postsCount;
+      _bioCtrl.text = data['bio'] ?? '';
+      _phoneCtrl.text = data['phone'] ?? '';
+      _emailCtrl.text = data['publicEmail'] ?? '';
+      _countryCtrl.text = data['country'] ?? '';
+      _spotifyCtrl.text = data['spotifyUrl'] ?? '';
+      _appleCtrl.text = data['appleMusicUrl'] ?? '';
+      _youtubeCtrl.text = data['youtubeUrl'] ?? '';
+      if (_isOwn) _completeOpen = !_hasPublicInfo(data);
+      _loading = false;
+    });
+
+    _healOwnCounts(followersCount, followingCount);
+  }
+
+  Future<void> _loadProfileOld({bool force = false}) async {
     if (!mounted) return;
     if (!force && _lastLoad != null && DateTime.now().difference(_lastLoad!) < const Duration(seconds: 20)) {
       return; // refresh throttle — saves reads on repeated pulls
@@ -399,7 +458,25 @@ class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateM
     }
   }
 
-  Future<void> _loadMorePosts() async {
+ Future<void> _loadMorePosts() async {
+    if (_loadingMorePosts || !_hasMorePosts || _postsBefore == null) return;
+    setState(() => _loadingMorePosts = true);
+    try {
+      final r = await FeedApi.get('/posts?author=$_targetUid&limit=$_kPostsPage&before=$_postsBefore') as List;
+      final more = r.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      if (!mounted) return;
+      setState(() {
+        _posts = [..._posts, ...more];
+        if (more.isNotEmpty) _postsBefore = (more.last['createdAt'] as num).toInt();
+        _hasMorePosts = more.length == _kPostsPage;
+        _loadingMorePosts = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loadingMorePosts = false);
+    }
+  }
+
+  Future<void> _loadMorePostsOld() async {
     if (_loadingMorePosts || !_hasMorePosts || _postsCursor == null) return;
     setState(() => _loadingMorePosts = true);
     try {
@@ -1515,6 +1592,261 @@ class _PostDetailModal extends StatefulWidget {
 }
 
 class _PostDetailModalState extends State<_PostDetailModal> {
+  Map<String, dynamic>? _post;
+  bool _liked = false;
+  final _commentCtrl = TextEditingController();
+  bool _sending = false;
+  bool _liking = false;
+  List<Map<String, dynamic>>? _comments;
+  Future<Map<String, dynamic>>? _authorFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _commentCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    try {
+      final post = Map<String, dynamic>.from(await FeedApi.get('/posts/${widget.postId}') as Map);
+      if (mounted) {
+        setState(() {
+          _post = post;
+          _liked = post['liked'] == true;
+          _authorFuture = UserInfoCache.instance.get(post['authorUid']);
+        });
+      }
+      final r = await FeedApi.get('/posts/${widget.postId}/comments') as List;
+      if (mounted) setState(() => _comments = r.map((e) => Map<String, dynamic>.from(e as Map)).toList());
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _post ??= {};
+          _comments ??= [];
+        });
+      }
+    }
+  }
+
+  Future<void> _toggleLike() async {
+    if (_post == null || _post!.isEmpty || _liking) return;
+    _liking = true;
+    final wasLiked = _liked;
+    setState(() {
+      _liked = !wasLiked;
+      _post!['likesCount'] = _nonNeg(((_post!['likesCount'] ?? 0) as num).toInt() + (wasLiked ? -1 : 1));
+    });
+    try {
+      final r = wasLiked
+          ? await FeedApi.delete('/posts/${widget.postId}/like')
+          : await FeedApi.post('/posts/${widget.postId}/like');
+      if (mounted && r is Map && r['likesCount'] is num) {
+        setState(() => _post!['likesCount'] = (r['likesCount'] as num).toInt());
+      }
+      if (!wasLiked) {
+        sendNotification(_post!['authorUid'], 'like', postId: widget.postId, postText: _post!['text'],
+            postImage: _post!['imageUrl'], docId: 'like_${widget.postId}_${widget.myUid}');
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _liked = wasLiked;
+          _post!['likesCount'] = _nonNeg(((_post!['likesCount'] ?? 0) as num).toInt() + (wasLiked ? 1 : -1));
+        });
+      }
+    } finally {
+      _liking = false;
+    }
+  }
+
+  Future<void> _submitComment() async {
+    final text = _commentCtrl.text.trim();
+    if (text.isEmpty || _post == null || _post!.isEmpty || _sending) return;
+    setState(() => _sending = true);
+    _commentCtrl.clear();
+    try {
+      final myInfo = await UserInfoCache.instance.get(widget.myUid);
+      final res = await FeedApi.post('/posts/${widget.postId}/comments', {
+        'text': text, 'authorName': myInfo['name'], 'authorAvatar': myInfo['avatar'],
+      });
+      if (mounted) {
+        setState(() {
+          _comments = [...?_comments, Map<String, dynamic>.from(res as Map)];
+          _post!['commentsCount'] = ((_post!['commentsCount'] ?? 0) as num).toInt() + 1;
+        });
+      }
+      sendNotification(_post!['authorUid'], 'comment', postId: widget.postId, postText: _post!['text'],
+          postImage: _post!['imageUrl'], commentText: text);
+    } catch (_) {
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      initialChildSize: 0.8, minChildSize: 0.45, maxChildSize: 0.95,
+      builder: (context, scrollCtrl) => Container(
+        decoration: const BoxDecoration(color: _black1, borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
+        child: _post == null
+            ? const Center(child: CircularProgressIndicator(color: _white))
+            : _post!.isEmpty
+                ? Center(child: Text('Post not found.', style: GoogleFonts.nunito(color: _grey)))
+                : Column(children: [
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Row(children: [
+                        Text('Post', style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w800, fontSize: 16)),
+                        const Spacer(),
+                        GestureDetector(onTap: () => Navigator.pop(context), child: const Icon(Icons.close_rounded, color: _grey)),
+                      ]),
+                    ),
+                    const Divider(color: _white10, height: 1),
+                    Expanded(
+                      child: ListView(
+                        controller: scrollCtrl,
+                        padding: const EdgeInsets.all(16),
+                        children: [
+                          FutureBuilder<Map<String, dynamic>>(
+                            future: _authorFuture,
+                            builder: (context, snap) {
+                              final info = snap.data ?? {'name': _post!['authorName'] ?? 'Artist', 'avatar': _post!['authorAvatar'] ?? '', 'verified': false};
+                              final ca = _post!['createdAt'];
+                              final created = ca is num ? DateTime.fromMillisecondsSinceEpoch(ca.toInt()) : null;
+                              final name = (info['name'] ?? 'Artist').toString();
+                              return Row(children: [
+                                Container(
+                                  width: 42, height: 42,
+                                  decoration: BoxDecoration(shape: BoxShape.circle, color: _black3, border: Border.all(color: _white10)),
+                                  clipBehavior: Clip.antiAlias,
+                                  child: (info['avatar'] ?? '').toString().isNotEmpty
+                                      ? CachedNetworkImage(imageUrl: info['avatar'], fit: BoxFit.cover)
+                                      : Center(child: Text(name.trim().isNotEmpty ? name.trim()[0].toUpperCase() : 'A', style: GoogleFonts.outfit(color: _white70, fontWeight: FontWeight.w800))),
+                                ),
+                                const SizedBox(width: 12),
+                                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                  Row(children: [
+                                    Text(name, style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w800, fontSize: 14.5)),
+                                    if (info['verified'] == true) Padding(padding: const EdgeInsets.only(left: 4), child: verifiedTick(size: 12)),
+                                  ]),
+                                  Text(timeAgo(created), style: GoogleFonts.nunito(color: _grey, fontSize: 11.5, fontWeight: FontWeight.w600)),
+                                ]),
+                              ]);
+                            },
+                          ),
+                          if ((_post!['text'] ?? '').toString().isNotEmpty)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 12),
+                              child: Text.rich(
+                                TextSpan(children: _hashtagSpans(
+                                  (_post!['text'] ?? '').toString(),
+                                  base: GoogleFonts.nunito(color: _white90, fontSize: 14, height: 1.6),
+                                )),
+                              ),
+                            ),
+                          if ((_post!['imageUrl'] ?? '').toString().isNotEmpty)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 12),
+                              child: ClipRRect(borderRadius: BorderRadius.circular(14), child: CachedNetworkImage(imageUrl: _post!['imageUrl'], fit: BoxFit.cover)),
+                            ),
+                          Padding(
+                            padding: const EdgeInsets.only(top: 14),
+                            child: Row(children: [
+                              GestureDetector(
+                                onTap: _toggleLike,
+                                child: Row(children: [
+                                  Icon(_liked ? Icons.favorite_rounded : Icons.favorite_border_rounded, color: _liked ? _rose : _grey, size: 18),
+                                  const SizedBox(width: 6),
+                                  Text('${_post!['likesCount'] ?? 0}', style: GoogleFonts.nunito(color: _liked ? _rose : _grey, fontSize: 12.5, fontWeight: FontWeight.w700)),
+                                ]),
+                              ),
+                              const SizedBox(width: 20),
+                              const Icon(Icons.mode_comment_outlined, color: _grey, size: 18),
+                              const SizedBox(width: 6),
+                              Text('${_post!['commentsCount'] ?? 0}', style: GoogleFonts.nunito(color: _grey, fontSize: 12.5, fontWeight: FontWeight.w700)),
+                            ]),
+                          ),
+                          const Padding(padding: EdgeInsets.symmetric(vertical: 12), child: Divider(color: _white10, height: 1)),
+                          if (_comments == null)
+                            const Center(child: Padding(padding: EdgeInsets.symmetric(vertical: 20), child: CircularProgressIndicator(color: _white)))
+                          else if (_comments!.isEmpty)
+                            Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 8),
+                              child: Text('No comments yet.', style: GoogleFonts.nunito(color: _grey, fontSize: 12.5)),
+                            )
+                          else
+                            ..._comments!.map((c) {
+                              final cName = (c['authorName'] ?? 'Artist').toString();
+                              return Padding(
+                                padding: const EdgeInsets.only(bottom: 12),
+                                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                  Container(
+                                    width: 28, height: 28,
+                                    decoration: BoxDecoration(shape: BoxShape.circle, color: _black3, border: Border.all(color: _white10)),
+                                    clipBehavior: Clip.antiAlias,
+                                    child: (c['authorAvatar'] ?? '').toString().isNotEmpty
+                                        ? CachedNetworkImage(imageUrl: c['authorAvatar'], fit: BoxFit.cover)
+                                        : Center(child: Text(cName.trim().isNotEmpty ? cName.trim()[0].toUpperCase() : 'A', style: GoogleFonts.outfit(color: _white70, fontWeight: FontWeight.w800, fontSize: 11))),
+                                  ),
+                                  const SizedBox(width: 9),
+                                  Expanded(
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
+                                      decoration: BoxDecoration(color: _black3, borderRadius: BorderRadius.circular(14)),
+                                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                        Text(cName, style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w800, fontSize: 12.5)),
+                                        const SizedBox(height: 2),
+                                        Text.rich(
+                                          TextSpan(children: _hashtagSpans(
+                                            (c['text'] ?? '').toString(),
+                                            base: GoogleFonts.nunito(color: _white70, fontSize: 13),
+                                          )),
+                                        ),
+                                      ]),
+                                    ),
+                                  ),
+                                ]),
+                              );
+                            }),
+                        ],
+                      ),
+                    ),
+                    SafeArea(
+                      top: false,
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+                        child: Row(children: [
+                          Expanded(
+                            child: TextField(
+                              controller: _commentCtrl,
+                              style: GoogleFonts.nunito(color: _white, fontSize: 13.5),
+                              decoration: InputDecoration(
+                                isDense: true, filled: true, fillColor: _black3,
+                                hintText: 'Write a comment…', hintStyle: GoogleFonts.nunito(color: _grey),
+                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(100), borderSide: BorderSide.none),
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                              ),
+                              onSubmitted: (_) => _submitComment(),
+                            ),
+                          ),
+                          IconButton(icon: const Icon(Icons.send_rounded, color: _white), onPressed: _submitComment),
+                        ]),
+                      ),
+                    ),
+                  ]),
+      ),
+    );
+  }
+}
+
+class _PostDetailModalStateOld extends State<_PostDetailModal> {
   Map<String, dynamic>? _post;
   bool _liked = false;
   final _commentCtrl = TextEditingController();
