@@ -1,244 +1,122 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
-// ─── PALETTE ────────────────────────────────────────────────────────
-const _black       = Color(0xFF000000);
-const _black1      = Color(0xFF0A0A0A);
-const _black2      = Color(0xFF111111);
-const _white       = Color(0xFFFFFFFF);
-const _white80     = Color(0xCCFFFFFF);
-const _white50     = Color(0x80FFFFFF);
-const _white10     = Color(0x1AFFFFFF);
-const _white06     = Color(0x0FFFFFFF);
-const _grey        = Color(0xFF888888);
-const _greyDark    = Color(0xFF444444);
-const _green       = Color(0xFF22C55E);
-const _greenDim    = Color(0x1F22C55E);
-const _greenBorder = Color(0x4422C55E);
+// ─── PALETTE (mirrors web CSS variables) ─────────────────────────────
+const _bg     = Color(0xFF000000);
+const _s1     = Color(0xFF1C1C1E);
+const _s2     = Color(0xFF2C2C2E);
+const _sep    = Color.fromRGBO(84, 84, 88, 0.55);
+const _fill   = Color.fromRGBO(120, 120, 128, 0.24);
+const _t1     = Color(0xFFFFFFFF);
+const _t2     = Color.fromRGBO(235, 235, 245, 0.60);
+const _t3     = Color.fromRGBO(235, 235, 245, 0.30);
+const _yellow = Color(0xFFFDEB0D);
+const _ease   = Cubic(0.32, 0.72, 0, 1);
 
-// ─── PLATFORM MODEL ──────────────────────────────────────────────────
-class PlatformItem {
+TextStyle _ts(double size, FontWeight w, Color c, {double ls = -0.01, double? h}) =>
+    TextStyle(
+      fontSize: size,
+      fontWeight: w,
+      color: c,
+      letterSpacing: size * ls,
+      height: h,
+      decoration: TextDecoration.none,
+    );
+
+// ─── MODEL ───────────────────────────────────────────────────────────
+class _Store {
   final String name;
+  final String? slug;
+  final IconData icon;
   final String tag;
-  final Color  gradient1;
-  final Color  gradient2;
-  final String fallback;
-  final String simpleIconSlug;
-
-  const PlatformItem({
-    required this.name,
-    this.tag = '',
-    required this.gradient1,
-    required this.gradient2,
-    required this.fallback,
-    required this.simpleIconSlug,
-  });
-
-  String get iconUrl => simpleIconSlug.isNotEmpty
-      ? 'https://cdn.simpleicons.org/$simpleIconSlug/white'
-      : '';
-
-  bool get hasIcon => simpleIconSlug.isNotEmpty;
+  final String label;
+  const _Store(this.name, this.slug, this.icon, {this.tag = '', String? label})
+      : label = label ?? name;
 }
 
-// ─── PLATFORM DATA ────────────────────────────────────────────────────
-const _major = <PlatformItem>[
-  PlatformItem(name: 'Spotify',      tag: 'Top',
-      gradient1: Color(0xFF1DB954), gradient2: Color(0xFF0f6b32),
-      fallback: 'SP', simpleIconSlug: 'spotify'),
-  PlatformItem(name: 'Apple Music',  tag: 'Top',
-      gradient1: Color(0xFFfc3c44), gradient2: Color(0xFF8b0000),
-      fallback: 'AM', simpleIconSlug: 'applemusic'),
-  PlatformItem(name: 'YouTube Music',tag: 'Top',
-      gradient1: Color(0xFFFF0000), gradient2: Color(0xFF600000),
-      fallback: 'YT', simpleIconSlug: 'youtubemusic'),
-  PlatformItem(name: 'Amazon Music',
-      gradient1: Color(0xFF232F3E), gradient2: Color(0xFF131921),
-      fallback: 'AZ', simpleIconSlug: 'amazonmusic'),
-  PlatformItem(name: 'Tidal',
-      gradient1: Color(0xFF000000), gradient2: Color(0xFF1a1a1a),
-      fallback: 'TD', simpleIconSlug: 'tidal'),
-  PlatformItem(name: 'Deezer',
-      gradient1: Color(0xFFA238FF), gradient2: Color(0xFF5c00c7),
-      fallback: 'DZ', simpleIconSlug: 'deezer'),
-  PlatformItem(name: 'Pandora',
-      gradient1: Color(0xFF005483), gradient2: Color(0xFF00244d),
-      fallback: 'PN', simpleIconSlug: 'pandora'),
-  PlatformItem(name: 'SoundCloud',
-      gradient1: Color(0xFFFF5500), gradient2: Color(0xFF8c2f00),
-      fallback: 'SC', simpleIconSlug: 'soundcloud'),
-  PlatformItem(name: 'Napster',
-      gradient1: Color(0xFF21a0ab), gradient2: Color(0xFF0d5c63),
-      fallback: 'NS', simpleIconSlug: 'napster'),
-  PlatformItem(name: 'Qobuz',
-      gradient1: Color(0xFF0b5fff), gradient2: Color(0xFF0030aa),
-      fallback: 'QB', simpleIconSlug: 'qobuz'),
-  PlatformItem(name: 'iHeart Radio',
-      gradient1: Color(0xFFc8102e), gradient2: Color(0xFF7a0018),
-      fallback: 'iH', simpleIconSlug: 'iheartradio'),
-  PlatformItem(name: 'Anghami',
-      gradient1: Color(0xFF7d3cff), gradient2: Color(0xFF4400bb),
-      fallback: 'AN', simpleIconSlug: 'anghami'),
-];
+class _Section {
+  final String title;
+  final List<_Store> items;
+  const _Section(this.title, this.items);
+}
 
-const _social = <PlatformItem>[
-  PlatformItem(name: 'TikTok',     tag: 'Viral',
-      gradient1: Color(0xFF010101), gradient2: Color(0xFF2a2a2a),
-      fallback: 'TT', simpleIconSlug: 'tiktok'),
-  PlatformItem(name: 'Instagram',
-      gradient1: Color(0xFFf09433), gradient2: Color(0xFFbc1888),
-      fallback: 'IG', simpleIconSlug: 'instagram'),
-  PlatformItem(name: 'Facebook',
-      gradient1: Color(0xFF1877F2), gradient2: Color(0xFF0a3d8f),
-      fallback: 'FB', simpleIconSlug: 'facebook'),
-  PlatformItem(name: 'YouTube',
-      gradient1: Color(0xFFFF0000), gradient2: Color(0xFF8b0000),
-      fallback: 'YT', simpleIconSlug: 'youtube'),
-  PlatformItem(name: 'Snapchat',
-      gradient1: Color(0xFFFFD700), gradient2: Color(0xFFb8920a),
-      fallback: 'SN', simpleIconSlug: 'snapchat'),
-  PlatformItem(name: 'Triller',
-      gradient1: Color(0xFFe91e63), gradient2: Color(0xFF7b0030),
-      fallback: 'TR', simpleIconSlug: ''),
-];
-
-const _africa = <PlatformItem>[
-  PlatformItem(name: 'Boomplay',  tag: 'Africa',
-      gradient1: Color(0xFFff6b35), gradient2: Color(0xFF9e2600),
-      fallback: 'BP', simpleIconSlug: 'boomplay'),
-  PlatformItem(name: 'Audiomack', tag: 'Africa',
-      gradient1: Color(0xFFFFA500), gradient2: Color(0xFF9e5500),
-      fallback: 'AU', simpleIconSlug: 'audiomack'),
-  PlatformItem(name: 'Mdundo',
-      gradient1: Color(0xFF00a878), gradient2: Color(0xFF005c42),
-      fallback: 'MD', simpleIconSlug: ''),
-  PlatformItem(name: 'Aftown',
-      gradient1: Color(0xFFe63946), gradient2: Color(0xFF7a0010),
-      fallback: 'AF', simpleIconSlug: ''),
-  PlatformItem(name: 'Spinlet',
-      gradient1: Color(0xFF457b9d), gradient2: Color(0xFF1d3557),
-      fallback: 'SL', simpleIconSlug: ''),
-  PlatformItem(name: 'iROKING',
-      gradient1: Color(0xFFf4a261), gradient2: Color(0xFF6e2500),
-      fallback: 'IK', simpleIconSlug: ''),
-];
-
-const _radio = <PlatformItem>[
-  PlatformItem(name: 'Shazam',
-      gradient1: Color(0xFF0088ff), gradient2: Color(0xFF003faa),
-      fallback: 'SZ', simpleIconSlug: 'shazam'),
-  PlatformItem(name: 'Beatport',
-      gradient1: Color(0xFF00cc00), gradient2: Color(0xFF005500),
-      fallback: 'BT', simpleIconSlug: 'beatport'),
-  PlatformItem(name: 'Bandcamp',
-      gradient1: Color(0xFF1da0c3), gradient2: Color(0xFF0d5c73),
-      fallback: 'BC', simpleIconSlug: 'bandcamp'),
-  PlatformItem(name: '7digital',
-      gradient1: Color(0xFFe91e8c), gradient2: Color(0xFF7a004a),
-      fallback: '7D', simpleIconSlug: '7digital'),
-  PlatformItem(name: 'Resso',
-      gradient1: Color(0xFFff4e6a), gradient2: Color(0xFF7a0022),
-      fallback: 'RS', simpleIconSlug: 'resso'),
-  PlatformItem(name: 'NetEase',
-      gradient1: Color(0xFFc62828), gradient2: Color(0xFF6a0000),
-      fallback: 'NE', simpleIconSlug: 'neteasecloudmusic'),
-  PlatformItem(name: 'KKBox',
-      gradient1: Color(0xFF00bcd4), gradient2: Color(0xFF005c66),
-      fallback: 'KK', simpleIconSlug: 'kkbox'),
-  PlatformItem(name: 'Joox',
-      gradient1: Color(0xFF43a047), gradient2: Color(0xFF1a4d1c),
-      fallback: 'JX', simpleIconSlug: 'joox'),
-  PlatformItem(name: 'Claro Música',
-      gradient1: Color(0xFFe53935), gradient2: Color(0xFF6a0000),
-      fallback: 'CM', simpleIconSlug: ''),
-  PlatformItem(name: 'Fizy',
-      gradient1: Color(0xFFff8f00), gradient2: Color(0xFF8c4a00),
-      fallback: 'FZ', simpleIconSlug: ''),
-  PlatformItem(name: 'Yandex Music',
-      gradient1: Color(0xFFffcc00), gradient2: Color(0xFF997a00),
-      fallback: 'YX', simpleIconSlug: 'yandex'),
-  PlatformItem(name: 'Gaana',
-      gradient1: Color(0xFFe53935), gradient2: Color(0xFF7a0000),
-      fallback: 'GA', simpleIconSlug: ''),
-  PlatformItem(name: 'JioSaavn',
-      gradient1: Color(0xFF29b6f6), gradient2: Color(0xFF0060aa),
-      fallback: 'JS', simpleIconSlug: 'jiosaavn'),
-  PlatformItem(name: 'Hungama',
-      gradient1: Color(0xFFff6f00), gradient2: Color(0xFF8c3300),
-      fallback: 'HU', simpleIconSlug: ''),
-  PlatformItem(name: 'Nuuday',
-      gradient1: Color(0xFF546e7a), gradient2: Color(0xFF1e3038),
-      fallback: 'NU', simpleIconSlug: ''),
-  PlatformItem(name: 'MediaNet',
-      gradient1: Color(0xFF546e7a), gradient2: Color(0xFF1e3038),
-      fallback: 'MN', simpleIconSlug: ''),
-];
-
-// New group — matches web's "More Global & Regional Platforms" section
-const _moreGlobal = <PlatformItem>[
-  PlatformItem(name: 'AMI Entertainment',
-      gradient1: Color(0xFF6d4c41), gradient2: Color(0xFF2e1a15),
-      fallback: 'AE', simpleIconSlug: ''),
-  PlatformItem(name: 'AWA',
-      gradient1: Color(0xFF8e24aa), gradient2: Color(0xFF3e0a4a),
-      fallback: 'AW', simpleIconSlug: ''),
-  PlatformItem(name: 'Gracenote',
-      gradient1: Color(0xFF00838f), gradient2: Color(0xFF003339),
-      fallback: 'GN', simpleIconSlug: ''),
-  PlatformItem(name: 'InProdicon',
-      gradient1: Color(0xFF3949ab), gradient2: Color(0xFF141a5c),
-      fallback: 'IP', simpleIconSlug: ''),
-  PlatformItem(name: 'LINE',
-      gradient1: Color(0xFF06C755), gradient2: Color(0xFF035c28),
-      fallback: 'LN', simpleIconSlug: 'line'),
-  PlatformItem(name: 'MixCloud',
-      gradient1: Color(0xFF5000FF), gradient2: Color(0xFF250080),
-      fallback: 'MX', simpleIconSlug: 'mixcloud'),
-  PlatformItem(name: 'Music Aroma',
-      gradient1: Color(0xFFef6c00), gradient2: Color(0xFF6b3200),
-      fallback: 'MA', simpleIconSlug: ''),
-  PlatformItem(name: 'Muud',
-      gradient1: Color(0xFFffb300), gradient2: Color(0xFF8c6000),
-      fallback: 'MU', simpleIconSlug: ''),
-  PlatformItem(name: 'Peloton',
-      gradient1: Color(0xFF181818), gradient2: Color(0xFF3a3a3a),
-      fallback: 'PL', simpleIconSlug: 'peloton'),
-  PlatformItem(name: 'Saavn',
-      gradient1: Color(0xFF29b6f6), gradient2: Color(0xFF0060aa),
-      fallback: 'SV', simpleIconSlug: 'jiosaavn'),
-  PlatformItem(name: 'Sirius XM',
-      gradient1: Color(0xFF002F6C), gradient2: Color(0xFF001531),
-      fallback: 'SX', simpleIconSlug: 'siriusxm'),
-  PlatformItem(name: 'SoundMouse',
-      gradient1: Color(0xFF37474f), gradient2: Color(0xFF12181c),
-      fallback: 'SM', simpleIconSlug: ''),
-  PlatformItem(name: 'Tencent',
-      gradient1: Color(0xFF12B7F5), gradient2: Color(0xFF075c7c),
-      fallback: 'TC', simpleIconSlug: 'tencentqq'),
-  PlatformItem(name: 'iMusica',
-      gradient1: Color(0xFFd32f2f), gradient2: Color(0xFF6a0000),
-      fallback: 'iM', simpleIconSlug: ''),
-  PlatformItem(name: 'KION',
-      gradient1: Color(0xFF8c1aff), gradient2: Color(0xFF3e007a),
-      fallback: 'KN', simpleIconSlug: ''),
-  PlatformItem(name: 'Zvuk',
-      gradient1: Color(0xFF9c27b0), gradient2: Color(0xFF430b4d),
-      fallback: 'ZV', simpleIconSlug: ''),
-  PlatformItem(name: 'VK Музыка',
-      gradient1: Color(0xFF0077FF), gradient2: Color(0xFF003580),
-      fallback: 'VK', simpleIconSlug: 'vk'),
-  PlatformItem(name: 'ОК Музыка',
-      gradient1: Color(0xFFEE8208), gradient2: Color(0xFF6b3900),
-      fallback: 'OK', simpleIconSlug: 'odnoklassniki'),
+// ─── DATA (identical order and names to web) ─────────────────────────
+const _sections = <_Section>[
+  _Section('Streaming', [
+    _Store('Spotify', 'spotify', Icons.music_note_rounded, tag: 'Top'),
+    _Store('Apple Music', 'applemusic', Icons.apple_rounded, tag: 'Top'),
+    _Store('YouTube Music', 'youtubemusic', Icons.smart_display_rounded, tag: 'Top'),
+    _Store('Amazon Music', 'amazonmusic', Icons.shopping_bag_rounded),
+    _Store('Tidal', 'tidal', Icons.water_rounded),
+    _Store('Deezer', 'deezer', Icons.play_circle_rounded),
+    _Store('Pandora', 'pandora', Icons.radio_rounded),
+    _Store('SoundCloud', 'soundcloud', Icons.cloud_rounded),
+    _Store('Napster', 'napster', Icons.music_note_rounded),
+    _Store('Qobuz', null, Icons.album_rounded),
+    _Store('iHeart Radio', 'iheartradio', Icons.cell_tower_rounded),
+    _Store('Anghami', null, Icons.public_rounded),
+  ]),
+  _Section('Social & video', [
+    _Store('TikTok', 'tiktok', Icons.music_video_rounded, tag: 'Viral'),
+    _Store('Instagram', 'instagram', Icons.camera_alt_rounded),
+    _Store('Facebook', 'facebook', Icons.facebook_rounded),
+    _Store('YouTube', 'youtube', Icons.smart_display_rounded),
+    _Store('Snapchat', 'snapchat', Icons.chat_bubble_rounded),
+    _Store('Triller', null, Icons.videocam_rounded),
+  ]),
+  _Section('African platforms', [
+    _Store('Boomplay', null, Icons.music_note_rounded, tag: 'Africa'),
+    _Store('Audiomack', 'audiomack', Icons.headphones_rounded, tag: 'Africa'),
+    _Store('Mdundo', null, Icons.album_rounded),
+    _Store('Aftown', null, Icons.music_note_rounded),
+    _Store('Spinlet', null, Icons.headphones_rounded),
+    _Store('Iroking', null, Icons.play_arrow_rounded, label: 'iROKING'),
+  ]),
+  _Section('Radio, sync & more', [
+    _Store('Shazam', 'shazam', Icons.search_rounded),
+    _Store('Beatport', 'beatport', Icons.album_rounded),
+    _Store('Bandcamp', 'bandcamp', Icons.graphic_eq_rounded),
+    _Store('7digital', null, Icons.download_rounded),
+    _Store('Resso', null, Icons.graphic_eq_rounded),
+    _Store('NetEase Music', 'neteasecloudmusic', Icons.cloud_rounded, label: 'NetEase'),
+    _Store('KKBox', 'kkbox', Icons.inventory_2_rounded),
+    _Store('Joox', null, Icons.music_note_rounded),
+    _Store('Claro Música', null, Icons.signal_cellular_alt_rounded),
+    _Store('Fizy', null, Icons.play_arrow_rounded),
+    _Store('Yandex Music', 'yandex', Icons.music_note_rounded),
+    _Store('Gaana', null, Icons.music_note_rounded),
+    _Store('JioSaavn', 'jiosaavn', Icons.play_arrow_rounded),
+    _Store('Hungama', null, Icons.headphones_rounded),
+    _Store('Nuuday', null, Icons.cell_tower_rounded),
+    _Store('MediaNet', null, Icons.lan_rounded),
+  ]),
+  _Section('Global & regional', [
+    _Store('AMI Entertainment', null, Icons.headphones_rounded),
+    _Store('AWA', null, Icons.music_note_rounded),
+    _Store('Gracenote', null, Icons.storage_rounded),
+    _Store('InProdicon', null, Icons.interests_rounded),
+    _Store('LINE', 'line', Icons.chat_bubble_rounded),
+    _Store('MixCloud', 'mixcloud', Icons.cloud_rounded),
+    _Store('Music Aroma', null, Icons.music_note_rounded),
+    _Store('Muud', null, Icons.sentiment_satisfied_alt_rounded),
+    _Store('Peloton', 'peloton', Icons.directions_bike_rounded),
+    _Store('Saavn', 'jiosaavn', Icons.play_arrow_rounded),
+    _Store('Sirius XM', 'siriusxm', Icons.satellite_alt_rounded),
+    _Store('SoundMouse', null, Icons.mouse_rounded),
+    _Store('Tencent', 'tencentqq', Icons.chat_rounded),
+    _Store('iMusica', null, Icons.signal_cellular_alt_rounded),
+    _Store('KION', null, Icons.movie_rounded),
+    _Store('Zvuk', null, Icons.volume_up_rounded),
+    _Store('VK Музыка', 'vk', Icons.people_rounded),
+    _Store('ОК Музыка', 'odnoklassniki', Icons.people_alt_rounded),
+  ]),
 ];
 
 // ════════════════════════════════════════════════════════════════════
-//  MAIN SCREEN — every platform is pre-selected and locked, matching
-//  web's select-platforms.html: nothing here can be toggled off, the
-//  search only filters what's VISIBLE, and Continue always carries the
-//  full platform list forward, same as the web page's continueNext().
+//  SCREEN — every store is pre-selected and locked (same as web).
+//  Search only filters what is visible; Continue carries the full list.
 // ════════════════════════════════════════════════════════════════════
 class SelectScreen extends StatefulWidget {
   const SelectScreen({super.key});
@@ -246,594 +124,448 @@ class SelectScreen extends StatefulWidget {
   State<SelectScreen> createState() => _SelectScreenState();
 }
 
-class _SelectScreenState extends State<SelectScreen>
-    with TickerProviderStateMixin {
-
-  // Every platform name across every group — always fully selected.
-  late final List<String> _allPlatformNames;
-
+class _SelectScreenState extends State<SelectScreen> {
   final _searchCtrl = TextEditingController();
   String _query = '';
 
-  late AnimationController _headerCtrl;
-  late Animation<double>   _headerFade;
-  late Animation<Offset>   _headerSlide;
+  late final List<String> _allNames =
+      _sections.expand((s) => s.items).map((i) => i.name).toList();
 
   @override
   void initState() {
     super.initState();
     SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle.light.copyWith(
       statusBarColor: Colors.transparent,
-      systemNavigationBarColor: _black,
+      systemNavigationBarColor: _bg,
     ));
-
-    _allPlatformNames = [
-      ..._major, ..._social, ..._africa, ..._radio, ..._moreGlobal,
-    ].map((p) => p.name).toList();
-
-    _headerCtrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 700));
-    _headerFade  = CurvedAnimation(parent: _headerCtrl, curve: Curves.easeOut);
-    _headerSlide = Tween<Offset>(
-        begin: const Offset(0, 0.06), end: Offset.zero)
-        .animate(CurvedAnimation(
-        parent: _headerCtrl, curve: Curves.easeOutCubic));
-    _headerCtrl.forward();
-
-    _searchCtrl.addListener(
-            () => setState(() => _query = _searchCtrl.text.toLowerCase().trim()));
+    _searchCtrl.addListener(() {
+      final q = _searchCtrl.text.toLowerCase().trim();
+      if (q != _query) setState(() => _query = q);
+    });
   }
 
   @override
   void dispose() {
-    _headerCtrl.dispose();
     _searchCtrl.dispose();
     super.dispose();
   }
 
-  List<PlatformItem> _filter(List<PlatformItem> src) => _query.isEmpty
-      ? src
-      : src.where((p) => p.name.toLowerCase().contains(_query)).toList();
-
   void _continue() {
     HapticFeedback.mediumImpact();
-    Navigator.pushNamed(context, '/confirm', arguments: _allPlatformNames);
+    Navigator.pushNamed(context, '/confirm', arguments: _allNames);
   }
 
   @override
   Widget build(BuildContext context) {
-    final top    = MediaQuery.of(context).padding.top;
-    final bottom = MediaQuery.of(context).padding.bottom;
+    final mq     = MediaQuery.of(context);
+    final top    = mq.padding.top;
+    final bottom = mq.padding.bottom;
+    final width  = mq.size.width;
+    final hPad   = width > 672 ? (width - 640) / 2 + 16 : 16.0;
+    final narrow = width <= 420;
 
-    final mF = _filter(_major);
-    final sF = _filter(_social);
-    final aF = _filter(_africa);
-    final rF = _filter(_radio);
-    final gF = _filter(_moreGlobal);
-    final visibleTotal = mF.length + sF.length + aF.length + rF.length + gF.length;
+    // Filtered sections
+    final visible = <_Section>[];
+    var visibleCount = 0;
+    for (final s in _sections) {
+      final items = _query.isEmpty
+          ? s.items
+          : s.items.where((i) => i.name.toLowerCase().contains(_query)).toList();
+      if (items.isNotEmpty) {
+        visible.add(_Section(s.title, items));
+        visibleCount += items.length;
+      }
+    }
+    final showEmpty = visibleCount == 0 && _query.isNotEmpty;
 
     return Scaffold(
-      backgroundColor: _black,
+      backgroundColor: _bg,
       body: Stack(
         children: [
-
-          // ── SCROLL CONTENT ──────────────────────────────────────
+          // ── SCROLL CONTENT ────────────────────────────────────
           CustomScrollView(
             physics: const BouncingScrollPhysics(
                 parent: AlwaysScrollableScrollPhysics()),
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
             slivers: [
-              SliverToBoxAdapter(child: SizedBox(height: top + 76)),
-              SliverToBoxAdapter(
-                child: FadeTransition(
-                  opacity: _headerFade,
-                  child: SlideTransition(
-                      position: _headerSlide, child: _header()),
+              SliverPadding(
+                padding: EdgeInsets.fromLTRB(hPad, top + 56, hPad, bottom + 130),
+                sliver: SliverList(
+                  delegate: SliverChildListDelegate([
+                    _hero(narrow),
+                    _search(),
+                    for (final s in visible) _sectionBlock(s),
+                    if (_query.isEmpty) _moreBlock(),
+                    if (showEmpty) _empty(),
+                  ]),
                 ),
               ),
-              SliverToBoxAdapter(
-                  child: FadeTransition(opacity: _headerFade, child: _search())),
-              SliverToBoxAdapter(child: _banner()),
-
-              if (visibleTotal == 0 && _query.isNotEmpty)
-                SliverFillRemaining(child: _empty())
-              else ...[
-                if (mF.isNotEmpty) ...[_sLabel('🔥  Major Streaming'), _grid(mF)],
-                if (sF.isNotEmpty) ...[_sdiv('Social & Video'),         _grid(sF)],
-                if (aF.isNotEmpty) ...[_sdiv('🌍  African Platforms'),  _grid(aF)],
-                if (rF.isNotEmpty) ...[_sdiv('📻  Radio, Sync & More'), _grid(rF)],
-                if (gF.isNotEmpty) ...[_sdiv('🌐  More Global & Regional'), _grid(gF)],
-              ],
-              SliverToBoxAdapter(child: SizedBox(height: bottom + 130)),
             ],
           ),
 
-          // ── TOP BAR ─────────────────────────────────────────────
-          Positioned(top: 0, left: 0, right: 0,
-              child: RepaintBoundary(child: _topBar(top))),
+          // ── TOP BAR ───────────────────────────────────────────
+          Positioned(
+            top: 0, left: 0, right: 0,
+            child: _topBar(top, hPad),
+          ),
 
-          // ── BOTTOM BAR — always visible, never slides away, since
-          //    selection can never become empty ──────────────────
-          Positioned(bottom: 0, left: 0, right: 0, child: _bottomBar(bottom)),
+          // ── DOCK ──────────────────────────────────────────────
+          Positioned(
+            bottom: 0, left: 0, right: 0,
+            child: _dock(bottom, hPad),
+          ),
         ],
       ),
     );
   }
 
   // ── TOP BAR ─────────────────────────────────────────────────────
-  Widget _topBar(double top) => Container(
-    padding: EdgeInsets.only(top: top),
-    decoration: BoxDecoration(
-      color: _black.withOpacity(0.94),
-      border: const Border(bottom: BorderSide(color: _white10)),
-    ),
-    child: SizedBox(
-      height: 60,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20),
-        child: Row(
-          children: [
-            Material(
-              color: Colors.transparent,
-              child: InkWell(
-                onTap: () => Navigator.pop(context),
-                borderRadius: BorderRadius.circular(11),
-                child: Container(
-                  width: 36, height: 36,
-                  decoration: BoxDecoration(
-                    color: _white06,
-                    borderRadius: BorderRadius.circular(11),
-                    border: Border.all(color: _white10),
+  Widget _topBar(double top, double hPad) => ClipRect(
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+          child: Container(
+            color: const Color.fromRGBO(0, 0, 0, 0.72),
+            padding: EdgeInsets.only(top: top, left: hPad, right: hPad),
+            height: top + 56,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                _Pressable(
+                  scale: 0.92,
+                  onTap: () => Navigator.pop(context),
+                  child: Container(
+                    width: 36, height: 36,
+                    decoration: const BoxDecoration(
+                        color: _fill, shape: BoxShape.circle),
+                    child: const Icon(Icons.chevron_left_rounded,
+                        color: _t1, size: 26),
                   ),
-                  child: const Icon(Icons.arrow_back_ios_new_rounded,
-                      color: _white, size: 15),
+                ),
+                Text('Stores', style: _ts(17, FontWeight.w600, _t1)),
+                const SizedBox(width: 36),
+              ],
+            ),
+          ),
+        ),
+      );
+
+  // ── HERO ────────────────────────────────────────────────────────
+  Widget _hero(bool narrow) => Padding(
+        padding: const EdgeInsets.fromLTRB(4, 14, 4, 6),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Your stores',
+                style: _ts(narrow ? 30 : 34, FontWeight.w700, _t1,
+                    ls: -0.04, h: 1.1)),
+            const SizedBox(height: 6),
+            Text('Your release goes to every platform below.',
+                style: _ts(17, FontWeight.w400, _t2, h: 1.4)),
+          ],
+        ),
+      );
+
+  // ── SEARCH ──────────────────────────────────────────────────────
+  Widget _search() => Padding(
+        padding: const EdgeInsets.only(top: 14),
+        child: Container(
+          height: 40,
+          decoration: BoxDecoration(
+            color: _fill,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            children: [
+              const SizedBox(width: 12),
+              const Icon(Icons.search_rounded, color: _t2, size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: TextField(
+                  controller: _searchCtrl,
+                  style: _ts(17, FontWeight.w400, _t1),
+                  cursorColor: _yellow,
+                  textInputAction: TextInputAction.search,
+                  autocorrect: false,
+                  decoration: InputDecoration(
+                    hintText: 'Search',
+                    hintStyle: _ts(17, FontWeight.w400, _t2),
+                    border: InputBorder.none,
+                    isDense: true,
+                    contentPadding: EdgeInsets.zero,
+                  ),
                 ),
               ),
+              if (_query.isNotEmpty)
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () {
+                    _searchCtrl.clear();
+                    FocusScope.of(context).unfocus();
+                  },
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 12),
+                    child: Icon(Icons.cancel_rounded, color: _t2, size: 17),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      );
+
+  // ── SECTION ─────────────────────────────────────────────────────
+  Widget _sectionBlock(_Section s) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 30, 16, 8),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.baseline,
+              textBaseline: TextBaseline.alphabetic,
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(s.title.toUpperCase(),
+                    style: _ts(13, FontWeight.w500, _t2, ls: 0.04)),
+                Text('${s.items.length}',
+                    style: _ts(13, FontWeight.w400, _t3).copyWith(
+                        fontFeatures: const [FontFeature.tabularFigures()])),
+              ],
+            ),
+          ),
+          Container(
+            decoration: BoxDecoration(
+              color: _s1,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: Column(
+              children: [
+                for (var i = 0; i < s.items.length; i++) ...[
+                  if (i > 0) _divider(),
+                  _StoreRow(item: s.items[i]),
+                ],
+              ],
+            ),
+          ),
+        ],
+      );
+
+  Widget _divider() => Container(
+        height: 0.5,
+        margin: const EdgeInsets.only(left: 70),
+        color: _sep,
+      );
+
+  // ── "AND MORE" ──────────────────────────────────────────────────
+  Widget _moreBlock() => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 30, 16, 8),
+            child: Text('AND MORE',
+                style: _ts(13, FontWeight.w500, _t2, ls: 0.04)),
+          ),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: _s1,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Container(
+                  width: 36, height: 36,
+                  decoration: BoxDecoration(
+                    color: _s2,
+                    borderRadius: BorderRadius.circular(9),
+                  ),
+                  child: const Icon(Icons.layers_rounded,
+                      color: _yellow, size: 18),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('+150 more stores',
+                          style: _ts(17, FontWeight.w600, _t1)),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Your music also reaches every other store in our distribution network worldwide.',
+                        style: _ts(14, FontWeight.w400, _t2, h: 1.4),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      );
+
+  // ── EMPTY ───────────────────────────────────────────────────────
+  Widget _empty() => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 70, horizontal: 20),
+        child: Column(
+          children: [
+            Icon(Icons.search_rounded,
+                color: _t2.withOpacity(0.4), size: 36),
+            const SizedBox(height: 10),
+            Text('No results', style: _ts(17, FontWeight.w400, _t2)),
+          ],
+        ),
+      );
+
+  // ── DOCK ────────────────────────────────────────────────────────
+  Widget _dock(double bottom, double hPad) => ClipRect(
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+          child: Container(
+            padding: EdgeInsets.fromLTRB(hPad, 12, hPad, 12 + bottom),
+            decoration: const BoxDecoration(
+              color: Color.fromRGBO(0, 0, 0, 0.72),
+              border: Border(top: BorderSide(color: _sep, width: 0.5)),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text.rich(
+                  TextSpan(
+                    style: _ts(14, FontWeight.w400, _t2),
+                    children: [
+                      const TextSpan(text: 'All '),
+                      TextSpan(
+                        text: '${_allNames.length}',
+                        style: _ts(14, FontWeight.w600, _t1).copyWith(
+                            fontFeatures: const [FontFeature.tabularFigures()]),
+                      ),
+                      const TextSpan(text: ' platforms selected'),
+                    ],
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 8),
+                _Pressable(
+                  scale: 0.98,
+                  onTap: _continue,
+                  child: Container(
+                    width: double.infinity,
+                    height: 52,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: _yellow,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text('Continue',
+                        style: _ts(17, FontWeight.w600, Colors.black)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  STORE ROW — always "selected", not tappable (cursor: default on web)
+// ════════════════════════════════════════════════════════════════════
+class _StoreRow extends StatelessWidget {
+  final _Store item;
+  const _StoreRow({required this.item});
+
+  @override
+  Widget build(BuildContext context) {
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: 56),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        child: Row(
+          children: [
+            Container(
+              width: 36, height: 36,
+              decoration: BoxDecoration(
+                color: _s2,
+                borderRadius: BorderRadius.circular(9),
+              ),
+              alignment: Alignment.center,
+              child: _icon(),
             ),
             const SizedBox(width: 14),
             Expanded(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('STEP 2 OF 4',
-                      style: GoogleFonts.outfit(
-                          color: _greyDark, fontSize: 9,
-                          fontWeight: FontWeight.w700, letterSpacing: 1.4)),
-                  const SizedBox(height: 1),
-                  Text('Distribution',
-                      style: GoogleFonts.outfit(
-                          color: _white, fontSize: 16,
-                          fontWeight: FontWeight.w800)),
-                ],
-              ),
+              child: Text(item.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: _ts(17, FontWeight.w400, _t1)),
             ),
-            // Count badge — matches web's .count-badge, always shows the
-            // full, fixed total since nothing here is togglable.
+            if (item.tag.isNotEmpty) ...[
+              const SizedBox(width: 14),
+              Text(item.tag, style: _ts(13, FontWeight.w400, _t3)),
+            ],
+            const SizedBox(width: 14),
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              decoration: BoxDecoration(
-                color: _white,
-                borderRadius: BorderRadius.circular(99),
-                border: Border.all(color: _white),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.check_circle_rounded, color: _black, size: 13),
-                  const SizedBox(width: 5),
-                  Text('${_allPlatformNames.length} selected',
-                      style: GoogleFonts.outfit(
-                          color: _black, fontSize: 12, fontWeight: FontWeight.w700)),
-                ],
-              ),
+              width: 22, height: 22,
+              decoration: const BoxDecoration(
+                  color: _yellow, shape: BoxShape.circle),
+              child: const Icon(Icons.check_rounded,
+                  color: Colors.black, size: 14),
             ),
           ],
         ),
       ),
-    ),
-  );
+    );
+  }
 
-  // ── HEADER ──────────────────────────────────────────────────────
-  Widget _header() => Padding(
-    padding: const EdgeInsets.fromLTRB(22, 0, 22, 0),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('Where should\nyour music live?',
-            style: GoogleFonts.outfit(
-                color: _white, fontSize: 32, fontWeight: FontWeight.w800,
-                height: 1.1, letterSpacing: -0.5)),
-        const SizedBox(height: 10),
-        Text('Your music is distributed everywhere we work with —\nall platforms below, plus 150+ more automatically.',
-            style: GoogleFonts.dmSans(
-                color: _grey, fontSize: 13, height: 1.55)),
-        const SizedBox(height: 28),
-      ],
-    ),
-  );
-
-  // ── SEARCH (view/filter only — no "Select All" button, since
-  //    everything is already, and always, selected) ─────────────────
-  Widget _search() => Padding(
-    padding: const EdgeInsets.fromLTRB(22, 0, 22, 14),
-    child: Container(
-      height: 46,
-      decoration: BoxDecoration(
-        color: _black2,
-        borderRadius: BorderRadius.circular(13),
-        border: Border.all(color: _white10),
+  Widget _icon() {
+    final fallback = Icon(item.icon, color: _t2, size: 18);
+    if (item.slug == null) return fallback;
+    return SizedBox(
+      width: 20, height: 20,
+      child: SvgPicture.network(
+        'https://cdn.simpleicons.org/${item.slug}/ffffff',
+        fit: BoxFit.contain,
+        placeholderBuilder: (_) => const SizedBox.shrink(),
+        errorBuilder: (_, __, ___) => fallback,
       ),
-      child: Row(
-        children: [
-          const SizedBox(width: 14),
-          const Icon(Icons.search_rounded, color: _greyDark, size: 18),
-          const SizedBox(width: 10),
-          Expanded(
-            child: TextField(
-              controller: _searchCtrl,
-              style: GoogleFonts.dmSans(color: _white, fontSize: 14),
-              cursorColor: _white,
-              decoration: InputDecoration(
-                hintText: 'Search platforms…',
-                hintStyle: GoogleFonts.dmSans(color: _greyDark, fontSize: 14),
-                border: InputBorder.none,
-                isDense: true,
-              ),
-            ),
-          ),
-          if (_query.isNotEmpty)
-            GestureDetector(
-              onTap: () { _searchCtrl.clear(); FocusScope.of(context).unfocus(); },
-              child: Padding(
-                padding: const EdgeInsets.only(right: 12),
-                child: Container(
-                  width: 18, height: 18,
-                  decoration: const BoxDecoration(
-                      color: _greyDark, shape: BoxShape.circle),
-                  child: const Icon(Icons.close_rounded, color: _black, size: 11),
-                ),
-              ),
-            ),
-        ],
-      ),
-    ),
-  );
-
-  // ── INFO BANNER ──────────────────────────────────────────────────
-  Widget _banner() => Padding(
-    padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-    child: Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: _greenDim,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _greenBorder),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Icon(Icons.info_outline_rounded, color: _green, size: 16),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              'We distribute to 150+ stores worldwide. Every platform below is included automatically — this list just shows you where your music will appear.',
-              style: GoogleFonts.dmSans(color: _green, fontSize: 11.5, height: 1.5),
-            ),
-          ),
-        ],
-      ),
-    ),
-  );
-
-  SliverToBoxAdapter _sLabel(String t) => SliverToBoxAdapter(
-    child: Padding(
-      padding: const EdgeInsets.fromLTRB(22, 4, 22, 14),
-      child: Text(t, style: GoogleFonts.outfit(
-          color: _greyDark, fontSize: 10,
-          fontWeight: FontWeight.w700, letterSpacing: 1.3)),
-    ),
-  );
-
-  SliverToBoxAdapter _sdiv(String t) => SliverToBoxAdapter(
-    child: Padding(
-      padding: const EdgeInsets.fromLTRB(22, 32, 22, 20),
-      child: Row(
-        children: [
-          Expanded(child: Container(height: 1, color: _white10)),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14),
-            child: Text(t, style: GoogleFonts.outfit(
-                color: _greyDark, fontSize: 10,
-                fontWeight: FontWeight.w700, letterSpacing: 1.2)),
-          ),
-          Expanded(child: Container(height: 1, color: _white10)),
-        ],
-      ),
-    ),
-  );
-
-  SliverPadding _grid(List<PlatformItem> items) => SliverPadding(
-    padding: const EdgeInsets.symmetric(horizontal: 16),
-    sliver: SliverGrid(
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 3,
-        mainAxisSpacing: 10,
-        crossAxisSpacing: 10,
-        childAspectRatio: 0.88,
-      ),
-      delegate: SliverChildBuilderDelegate(
-            (ctx, i) => _PlatformCard(
-          item: items[i],
-          animDelay: Duration(milliseconds: 30 * i),
-        ),
-        childCount: items.length,
-      ),
-    ),
-  );
-
-  Widget _empty() => Center(
-    child: Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        const Icon(Icons.search_off_rounded, color: _greyDark, size: 44),
-        const SizedBox(height: 14),
-        Text('No platforms found',
-            style: GoogleFonts.outfit(
-                color: _grey, fontSize: 15, fontWeight: FontWeight.w600)),
-        const SizedBox(height: 6),
-        Text('Try a different search term',
-            style: GoogleFonts.dmSans(color: _greyDark, fontSize: 13)),
-      ],
-    ),
-  );
-
-  // ── BOTTOM BAR — matches web's sticky .actions-bar: count on the
-  //    left, single Continue button on the right. No Clear button,
-  //    since there's nothing a user could clear. ────────────────────
-  Widget _bottomBar(double bottom) => Container(
-    padding: EdgeInsets.only(left: 16, right: 16, top: 14, bottom: bottom + 14),
-    decoration: BoxDecoration(
-      color: _black1.withOpacity(0.97),
-      border: const Border(top: BorderSide(color: _white10)),
-    ),
-    child: Row(
-      children: [
-        Expanded(
-          child: Text(
-            'All ${_allPlatformNames.length} platforms selected',
-            style: GoogleFonts.outfit(
-                color: _white, fontSize: 14, fontWeight: FontWeight.w700),
-          ),
-        ),
-        Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: _continue,
-            borderRadius: BorderRadius.circular(13),
-            child: Container(
-              height: 48,
-              padding: const EdgeInsets.symmetric(horizontal: 22),
-              decoration: BoxDecoration(
-                color: _white,
-                borderRadius: BorderRadius.circular(13),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text('Continue', style: GoogleFonts.outfit(
-                      color: _black, fontSize: 14, fontWeight: FontWeight.w800)),
-                  const SizedBox(width: 8),
-                  const Icon(Icons.arrow_forward_rounded, color: _black, size: 16),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ],
-    ),
-  );
+    );
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  PLATFORM CARD — always rendered in the "selected" visual state,
-//  matches web's .platform.selected with cursor:default (no tap
-//  toggling, no hover-lift, purely informational).
+//  PRESSABLE — iOS-style press scale (matches web :active transform)
 // ════════════════════════════════════════════════════════════════════
-class _PlatformCard extends StatefulWidget {
-  final PlatformItem item;
-  final Duration     animDelay;
-
-  const _PlatformCard({
-    required this.item,
-    required this.animDelay,
+class _Pressable extends StatefulWidget {
+  final Widget child;
+  final VoidCallback onTap;
+  final double scale;
+  const _Pressable({
+    required this.child,
+    required this.onTap,
+    required this.scale,
   });
 
   @override
-  State<_PlatformCard> createState() => _PlatformCardState();
+  State<_Pressable> createState() => _PressableState();
 }
 
-class _PlatformCardState extends State<_PlatformCard>
-    with SingleTickerProviderStateMixin {
-
-  late AnimationController _ctrl;
-  late Animation<double>   _fade;
-  late Animation<Offset>   _slide;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 480));
-    _fade  = CurvedAnimation(parent: _ctrl, curve: Curves.easeOut);
-    _slide = Tween<Offset>(begin: const Offset(0, 0.14), end: Offset.zero)
-        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic));
-    Future.delayed(widget.animDelay, () { if (mounted) _ctrl.forward(); });
-  }
-
-  @override
-  void dispose() { _ctrl.dispose(); super.dispose(); }
+class _PressableState extends State<_Pressable> {
+  bool _down = false;
 
   @override
   Widget build(BuildContext context) {
-    final item = widget.item;
-
-    return FadeTransition(
-      opacity: _fade,
-      child: SlideTransition(
-        position: _slide,
-        // No Material/InkWell — locked cards aren't tappable, matching
-        // the web version's cursor: default / no click-to-toggle.
-        child: Container(
-          decoration: BoxDecoration(
-            color: _white.withOpacity(0.08),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: _white50, width: 1.5),
-            boxShadow: [BoxShadow(
-                color: _white.withOpacity(0.06),
-                blurRadius: 18, offset: const Offset(0, 4))],
-          ),
-          child: Stack(
-            children: [
-
-              // Tag badge
-              if (item.tag.isNotEmpty)
-                Positioned(top: 8, left: 8, child: _TagBadge(item.tag)),
-
-              // Check mark — always shown, always solid (locked/selected)
-              Positioned(
-                top: 8, right: 8,
-                child: Container(
-                  width: 20, height: 20,
-                  decoration: const BoxDecoration(color: _white, shape: BoxShape.circle),
-                  child: const Icon(Icons.check_rounded, color: _black, size: 13),
-                ),
-              ),
-
-              // Logo + name
-              Center(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(8, 20, 8, 12),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Container(
-                        width: 52, height: 52,
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(14),
-                          gradient: LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: [item.gradient1, item.gradient2],
-                          ),
-                        ),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(14),
-                          child: Padding(
-                            padding: const EdgeInsets.all(10),
-                            child: item.hasIcon
-                                ? _SvgNetworkIcon(url: item.iconUrl, fallback: item.fallback)
-                                : _FallbackIcon(item.fallback),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      Text(item.name,
-                          textAlign: TextAlign.center,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: GoogleFonts.outfit(
-                              color: _white, fontSize: 11.5,
-                              fontWeight: FontWeight.w700, height: 1.2)),
-                    ],
-                  ),
-                ),
-              ),
-
-            ],
-          ),
-        ),
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTapDown: (_) => setState(() => _down = true),
+      onTapUp: (_) => setState(() => _down = false),
+      onTapCancel: () => setState(() => _down = false),
+      onTap: widget.onTap,
+      child: AnimatedScale(
+        scale: _down ? widget.scale : 1,
+        duration: const Duration(milliseconds: 300),
+        curve: _ease,
+        child: widget.child,
       ),
-    );
-  }
-}
-
-// ════════════════════════════════════════════════════════════════════
-//  SVG NETWORK ICON — loads from Simple Icons CDN, falls back cleanly
-// ════════════════════════════════════════════════════════════════════
-class _SvgNetworkIcon extends StatefulWidget {
-  final String url;
-  final String fallback;
-  const _SvgNetworkIcon({required this.url, required this.fallback});
-
-  @override
-  State<_SvgNetworkIcon> createState() => _SvgNetworkIconState();
-}
-
-class _SvgNetworkIconState extends State<_SvgNetworkIcon> {
-  bool _failed = false;
-
-  @override
-  Widget build(BuildContext context) {
-    if (_failed) return _FallbackIcon(widget.fallback);
-
-    return SvgPicture.network(
-      widget.url,
-      fit: BoxFit.contain,
-      colorFilter: const ColorFilter.mode(Colors.white, BlendMode.srcIn),
-      placeholderBuilder: (_) => const SizedBox.shrink(),
-      headers: const {'Accept': 'image/svg+xml'},
-    );
-  }
-}
-
-// ── Styled initials fallback ──────────────────────────────────────────
-class _FallbackIcon extends StatelessWidget {
-  final String text;
-  const _FallbackIcon(this.text);
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Text(text,
-          style: GoogleFonts.outfit(
-              color: _white,
-              fontSize: text.length > 2 ? 11 : 14,
-              fontWeight: FontWeight.w800,
-              letterSpacing: -0.5)),
-    );
-  }
-}
-
-// ── Tag badge ────────────────────────────────────────────────────────
-class _TagBadge extends StatelessWidget {
-  final String label;
-  const _TagBadge(this.label);
-
-  Color get _bg => label == 'Africa'
-      ? const Color(0x2200a878)
-      : label == 'Viral'
-      ? const Color(0x22FF5500)
-      : const Color(0x22FFFFFF);
-
-  Color get _fg => label == 'Africa'
-      ? const Color(0xFF00a878)
-      : label == 'Viral'
-      ? const Color(0xFFFF5500)
-      : _white80;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(
-        color: _bg,
-        borderRadius: BorderRadius.circular(99),
-        border: Border.all(color: _fg.withOpacity(0.35)),
-      ),
-      child: Text(label,
-          style: GoogleFonts.outfit(
-              color: _fg, fontSize: 8,
-              fontWeight: FontWeight.w700, letterSpacing: 0.5)),
     );
   }
 }
