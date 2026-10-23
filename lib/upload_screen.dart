@@ -589,7 +589,7 @@ class _UploadScreenState extends State<UploadScreen> {
 
   Future<void> _pickWav(TrackModel t) async {
     try {
-      final result = await ImagePicker().pickMedia();
+           final result = await openFile(acceptedTypeGroups: [const XTypeGroup(label: 'WAV', extensions: ['wav'], mimeTypes: ['audio/wav', 'audio/x-wav', 'audio/wave', 'audio/vnd.wave'], uniformTypeIdentifiers: ['com.microsoft.waveform-audio'])]);
       if (result == null) return;
       final name = result.name.isNotEmpty ? result.name : result.path;
       final ext = name.split('.').last.toLowerCase();
