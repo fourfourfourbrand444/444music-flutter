@@ -1,64 +1,85 @@
-//  444MUSIC — My Releases Dashboard  (rebuilt to mirror web layout)
-//  Theme: Black & White Luxury  |  Font: Nunito
-//
-//  FEATURING FIX:
-//    - Singles: "Featuring" shows under Main Artist (names or "None"),
-//      and the list row shows "Artist ft. Name".
-//    - EP / Album: release level shows the Main Artist only. Featured
-//      artists are listed PER TRACK in a new "Tracklist" section, the
-//      same way DistroKid / TuneCore / Spotify do it. The list row
-//      subtitle shows the main artist only.
-//    - Data is read from audioFiles[].artists[] (type == 'featured'),
-//      with featuredArtists[] and the old `featuring` string as fallbacks.
+// ═══════════════════════════════════════════════════════════════════
+//  444MUSIC — My Releases Dashboard (App)
+//  Rebuilt to mirror the web version 1:1 — iOS look.
+//  Same logic, same Firestore reads/writes. Only the styling changed.
 // ═══════════════════════════════════════════════════════════════════
 import 'package:url_launcher/url_launcher.dart';
 import 'dart:convert';
 import 'dart:math';
 import 'dart:ui';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:image_picker/image_picker.dart';
-import 'package:share_plus/share_plus.dart';
 import 'pricing_screen.dart'; // for PaymentWaitingScreen (Pay Now)
 
-// ─── PALETTE ────────────────────────────────────────────────────────
-const _black      = Color(0xFF000000);
-const _black1     = Color(0xFF080808);
-const _black2     = Color(0xFF0D0D0D);
-const _black3     = Color(0xFF111111);
-const _black4     = Color(0xFF161616);
-const _white      = Color(0xFFFFFFFF);
-const _white70    = Color(0xB3FFFFFF);
-const _white40    = Color(0x66FFFFFF);
-const _white20    = Color(0x33FFFFFF);
-const _white10    = Color(0x1AFFFFFF);
-const _white06    = Color(0x0FFFFFFF);
-const _grey       = Color(0xFF888888);
-const _greyDark   = Color(0xFF444444);
-const _green      = Color(0xFF22C55E);
-const _amber      = Color(0xFFF59E0B);
-const _rose       = Color(0xFFEF4444);
-const _cyan       = Color(0xFF06B6D4);
-const _slate      = Color(0xFF94A3B8); // Taken Down — same grey web uses
+// ─── PALETTE (same tokens as the web) ───────────────────────────────
+const _bg        = Color(0xFF000000);
+const _s1        = Color(0xFF1C1C1E);
+const _s2        = Color(0xFF2C2C2E);
+const _s3        = Color(0xFF3A3A3C);
+const _sep       = Color(0x8C545458);
+const _fill      = Color(0x3D787880);
+const _fillSoft  = Color(0x29787880);
+const _white     = Color(0xFFFFFFFF);
+const _white90   = Color(0xE6FFFFFF);
+const _white70   = Color(0xB3EBEBF5);
+const _t2        = Color(0x99EBEBF5);
+const _t3        = Color(0x52EBEBF5);
+const _blue      = Color(0xFF0A84FF);
+const _green     = Color(0xFF30D158);
+const _amber     = Color(0xFFFF9F0A);
+const _rose      = Color(0xFFFF453A);
+const _cyan      = Color(0xFF64D2FF);
+const _takenDown = Color(0xFFAEAEB2);
 
-// ─── STATUS HELPERS (unchanged logic) ───────────────────────────────
+// ─── TYPOGRAPHY — SF on iOS, Inter elsewhere (web font stack) ───────
+bool get _isApple =>
+    defaultTargetPlatform == TargetPlatform.iOS ||
+    defaultTargetPlatform == TargetPlatform.macOS;
+
+TextStyle _ts(double size, FontWeight w, Color c,
+    {double em = -0.01, double? height, TextDecoration? deco, Color? decoColor}) {
+  final base = TextStyle(
+    fontSize: size,
+    fontWeight: w,
+    color: c,
+    letterSpacing: size * em,
+    height: height,
+    decoration: deco ?? TextDecoration.none,
+    decorationColor: decoColor,
+  );
+  return _isApple ? base : GoogleFonts.inter(textStyle: base);
+}
+
+TextStyle _mono(double size, Color c) => TextStyle(
+      fontFamily: _isApple ? 'Menlo' : 'monospace',
+      fontSize: size,
+      fontWeight: FontWeight.w500,
+      color: c,
+      letterSpacing: size * 0.04,
+      decoration: TextDecoration.none,
+    );
+
+// ─── STATUS HELPERS ─────────────────────────────────────────────────
 Color _statusColor(String s) {
   switch (s.toLowerCase()) {
-    case 'approved':    return _green;
-    case 'review':      return _cyan;
-    case 'rejected':    return _rose;
-    case 'taken down':  return _slate;
-    default:            return _amber;
+    case 'approved':   return _green;
+    case 'review':     return _cyan;
+    case 'rejected':   return _rose;
+    case 'taken down': return _takenDown;
+    default:           return _amber;
   }
 }
 
-// Display-only label mapping — matches the web dashboard's
-// statusDisplayLabel(): Firestore keeps writing/reading "Pending" and
-// "Rejected" exactly as before; only what's SHOWN on screen changes.
+Color _statusBg(String s) => s.toLowerCase() == 'taken down'
+    ? const Color(0x2E98989D)
+    : _statusColor(s).withValues(alpha: 0.16);
+
+// Display-only label mapping — same as web statusDisplayLabel().
 String _statusDisplayLabel(String rawStatus) {
   final s = rawStatus.trim();
   if (s.toLowerCase() == 'pending')  return 'Draft';
@@ -75,8 +96,7 @@ double _priceForReleaseType(dynamic releaseType) {
   return 69.99; // EP or Album (or unset — default to the higher tier)
 }
 
-// ─── FEATURING HELPERS ───────────────────────────────────────────────
-// Featured names from one track's `artists` list (type == 'featured').
+// ─── FEATURING HELPERS ──────────────────────────────────────────────
 List<String> _featuredFromArtists(dynamic artists) {
   final out = <String>[];
   if (artists is! List) return out;
@@ -91,8 +111,6 @@ List<String> _featuredFromArtists(dynamic artists) {
   return out;
 }
 
-// Per-track list: [{title, featuring: [names]}]. Uses audioFiles first,
-// falls back to featuredArtists (which stores {track, artists}).
 List<Map<String, dynamic>> _trackList(Map<String, dynamic> data) {
   for (final key in ['audioFiles', 'featuredArtists']) {
     final list = data[key];
@@ -110,11 +128,8 @@ List<Map<String, dynamic>> _trackList(Map<String, dynamic> data) {
   return <Map<String, dynamic>>[];
 }
 
-// True for EP / Album (more than one track).
 bool _isMultiTrack(Map<String, dynamic> data) => _trackList(data).length > 1;
 
-// Release-level featuring text, used for SINGLES. 'None' if nobody.
-// Also reads the old `featuring` field so older releases still show.
 String _featuringDisplay(Map<String, dynamic> data) {
   final names = <String>[];
   void add(dynamic n) {
@@ -136,31 +151,61 @@ String _featuringDisplay(Map<String, dynamic> data) {
   return names.isEmpty ? 'None' : names.join(', ');
 }
 
-// Days-left countdown — mirrors the web dashboard's
-// releaseCountdownLabel() exactly: positive days only, nothing shown
-// on/after release day.
-String? _releaseCountdownLabel(dynamic releaseDateValue) {
-  if (releaseDateValue == null) return null;
-  DateTime releaseDate;
+String _rowArtistLine(Map<String, dynamic> data) {
+  final main = (data['artistName'] ?? 'Unknown Artist').toString();
+  final feat = _featuringDisplay(data);
+  return (_isMultiTrack(data) || feat == 'None') ? main : '$main ft. $feat';
+}
+
+// ─── DATE HELPERS ───────────────────────────────────────────────────
+const _monthsShort = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const _monthsLong  = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
+DateTime? _toDate(dynamic d) {
+  if (d == null) return null;
   try {
-    if (releaseDateValue is Timestamp) {
-      releaseDate = releaseDateValue.toDate();
-    } else {
-      releaseDate = DateTime.parse(releaseDateValue.toString());
-    }
+    if (d is Timestamp) return d.toDate();
+    if (d is int) return DateTime.fromMillisecondsSinceEpoch(d);
+    return DateTime.parse(d.toString());
   } catch (_) {
     return null;
   }
+}
+
+String _two(int n) => n.toString().padLeft(2, '0');
+
+String _formatDate(dynamic d) {
+  final dt = _toDate(d);
+  if (dt == null) return d?.toString() ?? '';
+  return '${_two(dt.day)} ${_monthsShort[dt.month - 1]} ${dt.year}';
+}
+
+String _formatDateLong(dynamic d) {
+  final dt = _toDate(d);
+  if (dt == null) return '—';
+  return '${_two(dt.day)} ${_monthsLong[dt.month - 1]} ${dt.year}';
+}
+
+String _formatDateTime(dynamic d) {
+  final dt = _toDate(d);
+  if (dt == null) return '';
+  return '${_two(dt.day)} ${_monthsShort[dt.month - 1]} ${dt.year}, ${_two(dt.hour)}:${_two(dt.minute)}';
+}
+
+// Days-left countdown — mirrors web releaseCountdownLabel().
+String? _releaseCountdownLabel(dynamic releaseDateValue) {
+  final releaseDate = _toDate(releaseDateValue);
+  if (releaseDate == null) return null;
   final now = DateTime.now();
   final startOfToday   = DateTime(now.year, now.month, now.day);
   final startOfRelease = DateTime(releaseDate.year, releaseDate.month, releaseDate.day);
   final diffDays = startOfRelease.difference(startOfToday).inDays;
   if (diffDays > 1) return '$diffDays days left';
   if (diffDays == 1) return '1 day left';
-  return null; // releasing today or already out
+  return null;
 }
 
-// ─── UPC GENERATOR (unchanged) ───────────────────────────────────────
+// ─── UPC / SMART LINK ───────────────────────────────────────────────
 String _generateUPC() {
   final rng  = Random();
   String code = '731';
@@ -172,11 +217,6 @@ String _generateUPC() {
   }
   final check = (10 - ((odd * 3 + even) % 10)) % 10;
   return '$code$check';
-}
-
-String _formatUPC(String upc) {
-  if (upc.length < 12) return upc;
-  return '${upc.substring(0,3)} ${upc.substring(3,6)} ${upc.substring(6,9)} ${upc.substring(9)}';
 }
 
 String _buildSmartLinkURL(String artistName, String releaseTitle) {
@@ -192,40 +232,79 @@ String _buildSmartLinkURL(String artistName, String releaseTitle) {
   final tSlug = tRaw.length > 30 ? tRaw.substring(0, 30) : tRaw;
   return 'https://ffm.to/$aSlug-$tSlug';
 }
+
 const _smartLinkBase = 'https://444musicdistro.com/';
+
 Future<void> _launch(String url) async {
   final uri = Uri.parse(url);
   if (await canLaunchUrl(uri)) await launchUrl(uri, mode: LaunchMode.externalApplication);
 }
 
-String _formatDate(dynamic d) {
-  try {
-    DateTime dt;
-    if (d is Timestamp) dt = d.toDate();
-    else dt = DateTime.parse(d.toString());
-    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    return '${dt.day.toString().padLeft(2,'0')} ${months[dt.month-1]} ${dt.year}';
-  } catch (_) { return d.toString(); }
+// ─── SHARED SMALL HELPERS ───────────────────────────────────────────
+Widget _coverImage(String url,
+    {double? width, double? height, double iconSize = 18, Color bg = _s1}) {
+  Widget placeholder() => Container(
+        width: width, height: height, color: bg, alignment: Alignment.center,
+        child: Icon(Icons.music_note_rounded, color: _t3, size: iconSize),
+      );
+  if (url.isEmpty) return placeholder();
+  if (url.startsWith('data:image')) {
+    try {
+      return Image.memory(base64Decode(url.split(',').last),
+          width: width, height: height, fit: BoxFit.cover);
+    } catch (_) {
+      return placeholder();
+    }
+  }
+  return CachedNetworkImage(
+    imageUrl: url, width: width, height: height, fit: BoxFit.cover,
+    placeholder: (_, __) => Container(width: width, height: height, color: bg),
+    errorWidget: (_, __, ___) => placeholder(),
+  );
 }
 
-// ─── STORE CONFIG (unchanged) ────────────────────────────────────────
-class _StoreInfo {
-  final String key, name, sub;
-  final Color color;
-  final IconData icon;
-  const _StoreInfo(this.key, this.name, this.sub, this.color, this.icon);
+void _showToast(BuildContext context, String msg, {bool error = false}) {
+  final overlay = Overlay.of(context, rootOverlay: true);
+  late OverlayEntry entry;
+  entry = OverlayEntry(
+    builder: (ctx) => Positioned(
+      left: 16, right: 16,
+      bottom: MediaQuery.of(ctx).padding.bottom + 16,
+      child: TweenAnimationBuilder<double>(
+        tween: Tween(begin: 0, end: 1),
+        duration: const Duration(milliseconds: 350),
+        curve: Curves.easeOutCubic,
+        builder: (_, v, child) => Opacity(
+          opacity: v,
+          child: Transform.translate(offset: Offset(0, 24 * (1 - v)), child: child),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(16),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 13),
+              decoration: BoxDecoration(
+                color: const Color(0xEB2C2C2E),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Row(children: [
+                Icon(error ? Icons.error_outline_rounded : Icons.check_rounded,
+                    color: error ? _rose : _green, size: 18),
+                const SizedBox(width: 10),
+                Expanded(child: Text(msg, style: _ts(14, FontWeight.w500, _white))),
+              ]),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+  overlay.insert(entry);
+  Future.delayed(const Duration(milliseconds: 2600), () {
+    if (entry.mounted) entry.remove();
+  });
 }
-
-const _stores = [
-  _StoreInfo('spotifyLink',      'Spotify',       'Stream on Spotify',      Color(0xFF1DB954), Icons.music_note_rounded),
-  _StoreInfo('appleMusicLink',   'Apple Music',   'Listen on Apple Music',  Color(0xFFFC3C44), Icons.apple_rounded),
-  _StoreInfo('audiomackLink',    'Audiomack',     'Play on Audiomack',      Color(0xFFFFa200), Icons.headphones_rounded),
-  _StoreInfo('boomplayLink',     'Boomplay',      'Listen on Boomplay',     Color(0xFFFF6600), Icons.play_circle_rounded),
-  _StoreInfo('youtubeMusicLink', 'YouTube Music', 'Watch on YouTube Music', Color(0xFFFF0000), Icons.smart_display_rounded),
-  _StoreInfo('tidalLink',        'Tidal',         'Stream on Tidal',        Color(0xFF00FEFD), Icons.water_rounded),
-  _StoreInfo('deezerLink',       'Deezer',        'Play on Deezer',         Color(0xFFa238ff), Icons.equalizer_rounded),
-  _StoreInfo('amazonMusicLink',  'Amazon Music',  'Listen on Amazon Music', Color(0xFF00A8E0), Icons.storefront_rounded),
-];
 
 // ════════════════════════════════════════════════════════════════════
 //  RELEASES SCREEN
@@ -237,6 +316,8 @@ class ReleasesScreen extends StatefulWidget {
 }
 
 class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStateMixin {
+  static const int _pageSize = 10;
+
   final _auth = FirebaseAuth.instance;
   final _db   = FirebaseFirestore.instance;
 
@@ -248,8 +329,10 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
   String _filter      = 'all';
   String _searchQuery = '';
   bool   _sidebarOpen = false;
+  int    _page        = 1;
 
   final TextEditingController _searchCtrl = TextEditingController();
+  final ScrollController _scrollCtrl = ScrollController();
 
   late AnimationController _entranceCtrl;
   late Animation<double>   _entranceFade;
@@ -259,12 +342,12 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
 
   final _filters      = ['all', 'pending', 'review', 'approved', 'rejected', 'taken down'];
   final _filterLabels = {
-    'all':         'All',
-    'pending':     'Draft',
-    'review':      'In Review',
-    'approved':    'Approved',
-    'rejected':    'Rejection',
-    'taken down':  'Taken Down',
+    'all':        'All',
+    'pending':    'Draft',
+    'review':     'In Review',
+    'approved':   'Approved',
+    'rejected':   'Rejection',
+    'taken down': 'Taken Down',
   };
 
   @override
@@ -272,19 +355,19 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
     super.initState();
     SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle.light.copyWith(
       statusBarColor: Colors.transparent,
-      systemNavigationBarColor: _black,
+      systemNavigationBarColor: _bg,
     ));
-    _entranceCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 700));
+    _entranceCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 600));
     _entranceFade = CurvedAnimation(parent: _entranceCtrl, curve: Curves.easeOut);
-    _sidebarCtrl  = AnimationController(vsync: this, duration: const Duration(milliseconds: 340));
+    _sidebarCtrl  = AnimationController(vsync: this, duration: const Duration(milliseconds: 420));
     _sidebarFade  = CurvedAnimation(parent: _sidebarCtrl, curve: Curves.easeOut);
     _sidebarSlide = Tween<Offset>(begin: const Offset(-1, 0), end: Offset.zero)
-        .animate(CurvedAnimation(parent: _sidebarCtrl, curve: Curves.easeOutCubic));
+        .animate(CurvedAnimation(parent: _sidebarCtrl, curve: const Cubic(0.32, 0.72, 0, 1)));
     _searchCtrl.addListener(() {
       final q = _searchCtrl.text.trim().toLowerCase();
       if (q != _searchQuery) {
         _searchQuery = q;
-        _recomputeFiltered();
+        _recomputeFiltered(resetPage: true);
       }
     });
     _loadReleases();
@@ -295,6 +378,7 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
     _entranceCtrl.dispose();
     _sidebarCtrl.dispose();
     _searchCtrl.dispose();
+    _scrollCtrl.dispose();
     super.dispose();
   }
 
@@ -317,7 +401,7 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
         data['_id'] = doc.id;
         final status = (data['status'] ?? 'Pending').toString().toLowerCase();
         if (status == 'approved' && (data['upc'] == null || data['smartLinkURL'] == null)) {
-                   final upc = (data['upc'] ?? '').toString().trim().isNotEmpty
+          final upc = (data['upc'] ?? '').toString().trim().isNotEmpty
               ? data['upc'].toString()
               : _generateUPC();
           final url = _buildSmartLinkURL(data['artistName'] ?? '', data['releaseTitle'] ?? '');
@@ -329,18 +413,13 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
       }
 
       // Newest first, same ordering the web dashboard uses.
-      list.sort((a, b) {
-        final aTime = a['createdAt'];
-        final bTime = b['createdAt'];
-        final aMs = aTime is Timestamp ? aTime.millisecondsSinceEpoch : (aTime is int ? aTime : 0);
-        final bMs = bTime is Timestamp ? bTime.millisecondsSinceEpoch : (bTime is int ? bTime : 0);
-        return bMs.compareTo(aMs);
-      });
+      int ms(dynamic v) => v is Timestamp ? v.millisecondsSinceEpoch : (v is int ? v : 0);
+      list.sort((a, b) => ms(b['createdAt']).compareTo(ms(a['createdAt'])));
 
       if (mounted) {
         _releases = list;
         _loading = false;
-        _recomputeFiltered();
+        _recomputeFiltered(resetPage: false);
         _entranceCtrl.forward();
       }
     } catch (e) {
@@ -350,14 +429,14 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
 
   void _applyFilter(String f) {
     _filter = f;
-    _recomputeFiltered();
+    _recomputeFiltered(resetPage: true);
   }
 
-  void _recomputeFiltered() {
+  void _recomputeFiltered({required bool resetPage}) {
     setState(() {
       Iterable<Map<String, dynamic>> base = _releases;
       if (_filter != 'all') {
-        base = base.where((r) => (r['status'] ?? 'Pending').toString().toLowerCase() == _filter);
+        base = base.where((r) => (r['status'] ?? 'Pending').toString().trim().toLowerCase() == _filter);
       }
       if (_searchQuery.isNotEmpty) {
         base = base.where((r) {
@@ -367,12 +446,28 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
         });
       }
       _filtered = base.toList();
+      if (resetPage) _page = 1;
+      final pages = _pageCount;
+      if (_page > pages) _page = pages;
     });
   }
 
-  String get _firstName {
-    final name = _user?.displayName ?? 'Artist';
-    return name.split(' ').first;
+  int get _pageCount => max(1, (_filtered.length / _pageSize).ceil());
+
+  void _goToPage(int p) {
+    setState(() => _page = p);
+    if (_scrollCtrl.hasClients) {
+      _scrollCtrl.animateTo(0, duration: const Duration(milliseconds: 400), curve: Curves.easeOutCubic);
+    }
+  }
+
+  String get _displayName {
+    final u = _user;
+    if (u == null) return 'Artist';
+    final n = (u.displayName ?? '').trim();
+    if (n.isNotEmpty) return n;
+    final e = u.email ?? '';
+    return e.contains('@') ? e.split('@').first : 'Artist';
   }
 
   @override
@@ -380,7 +475,7 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
     final top    = MediaQuery.of(context).padding.top;
     final bottom = MediaQuery.of(context).padding.bottom;
     return Scaffold(
-      backgroundColor: _black,
+      backgroundColor: _bg,
       extendBody: true,
       body: Stack(
         children: [
@@ -388,8 +483,7 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
             opacity: _loading ? const AlwaysStoppedAnimation(1) : _entranceFade,
             child: Column(
               children: [
-                SizedBox(height: top),
-                _buildTopBar(),
+                _buildTopBar(top),
                 Expanded(child: _loading ? _buildSkeletons() : _buildBody(bottom)),
               ],
             ),
@@ -400,7 +494,10 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
               onTap: _closeSidebar,
               child: FadeTransition(
                 opacity: _sidebarFade,
-                child: Container(color: Colors.black.withValues(alpha: 0.7)),
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 6, sigmaY: 6),
+                  child: Container(color: Colors.black.withValues(alpha: 0.5)),
+                ),
               ),
             ),
 
@@ -414,139 +511,134 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
     );
   }
 
-  Widget _buildTopBar() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-      decoration: const BoxDecoration(
-        color: _black,
-        border: Border(bottom: BorderSide(color: _white10)),
-      ),
-      child: Row(
-        children: [
-          _IconBtn(icon: Icons.menu_rounded, onTap: _openSidebar),
-          const SizedBox(width: 12),
-          Text(
-            'My Releases',
-            style: GoogleFonts.outfit(color: _white, fontSize: 17, fontWeight: FontWeight.w800),
+  // ── TOP BAR ───────────────────────────────────────────────────────
+  Widget _buildTopBar(double top) {
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+        child: Container(
+          padding: EdgeInsets.fromLTRB(16, top + 10, 16, 10),
+          color: _bg.withValues(alpha: 0.72),
+          child: Row(
+            children: [
+              _CircleBtn(icon: Icons.menu_rounded, onTap: _openSidebar, color: _white),
+              const SizedBox(width: 12),
+              Text('My Releases', style: _ts(17, FontWeight.w700, _white, em: -0.02)),
+              const Spacer(),
+              _PillBtn(
+                label: 'New Release',
+                icon: Icons.add_circle_outline_rounded,
+                onTap: () => Navigator.pushNamed(context, '/upload'),
+              ),
+              const SizedBox(width: 10),
+              _CircleBtn(
+                icon: Icons.help_outline_rounded,
+                color: _t2,
+                onTap: () => Navigator.pushNamed(context, '/support'),
+              ),
+            ],
           ),
-          const Spacer(),
-          _TopBtn(
-            label: 'New Release',
-            icon: Icons.add_circle_outline_rounded,
-            onTap: () => Navigator.pushNamed(context, '/upload'),
-          ),
-        ],
+        ),
       ),
     );
   }
 
+  // ── BODY ──────────────────────────────────────────────────────────
   Widget _buildBody(double bottom) {
     return SingleChildScrollView(
+      controller: _scrollCtrl,
       physics: const BouncingScrollPhysics(),
-      padding: EdgeInsets.only(bottom: bottom + 24),
+      padding: EdgeInsets.fromLTRB(16, 18, 16, bottom + 36),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const SizedBox(height: 18),
           _buildSearchBar(),
-          const SizedBox(height: 16),
+          const SizedBox(height: 20),
           _buildSectionHeader(),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
           _buildFilterRow(),
           const SizedBox(height: 16),
-          _releases.isEmpty ? _buildEmptyState() : _buildRows(),
+          if (_releases.isEmpty) _buildEmptyState() else ...[
+            _buildListHead(),
+            _buildRows(),
+            if (_filtered.length > _pageSize) _buildPager(),
+          ],
         ],
       ),
     );
   }
 
   Widget _buildSearchBar() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-        decoration: BoxDecoration(
-          color: _black2,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: _white10),
-        ),
-        child: Row(
-          children: [
-            const Icon(Icons.search_rounded, color: _greyDark, size: 18),
-            const SizedBox(width: 10),
-            Expanded(
-              child: TextField(
-                controller: _searchCtrl,
-                style: GoogleFonts.nunito(color: _white, fontSize: 14, fontWeight: FontWeight.w600),
-                decoration: InputDecoration(
-                  isCollapsed: true,
-                  border: InputBorder.none,
-                  hintText: 'Search by title or artist...',
-                  hintStyle: GoogleFonts.nunito(color: _greyDark, fontWeight: FontWeight.w500),
-                ),
-              ),
-            ),
-            if (_searchCtrl.text.trim().isNotEmpty)
-              GestureDetector(
-                onTap: () { _searchCtrl.clear(); },
-                child: Container(
-                  width: 20, height: 20,
-                  margin: const EdgeInsets.only(left: 8),
-                  decoration: BoxDecoration(color: _white10, shape: BoxShape.circle),
-                  child: const Icon(Icons.close_rounded, color: _grey, size: 12),
-                ),
-              ),
-            const SizedBox(height: 12),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSectionHeader() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20),
+    return Container(
+      height: 40,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(color: _fill, borderRadius: BorderRadius.circular(12)),
       child: Row(
         children: [
-          Container(width: 6, height: 6, decoration: BoxDecoration(color: _white, borderRadius: BorderRadius.circular(3))),
+          const Icon(Icons.search_rounded, color: _t2, size: 17),
           const SizedBox(width: 8),
-          Text('All Releases', style: GoogleFonts.nunito(color: _white, fontSize: 15, fontWeight: FontWeight.w800)),
-          const Spacer(),
-          Text('${_filtered.length} release${_filtered.length != 1 ? 's' : ''}',
-              style: GoogleFonts.nunito(color: _grey, fontSize: 12, fontWeight: FontWeight.w600)),
+          Expanded(
+            child: TextField(
+              controller: _searchCtrl,
+              cursorColor: _white,
+              style: _ts(16, FontWeight.w400, _white),
+              decoration: InputDecoration(
+                isCollapsed: true,
+                border: InputBorder.none,
+                hintText: 'Search by title or artist...',
+                hintStyle: _ts(16, FontWeight.w400, _t2),
+              ),
+            ),
+          ),
+          if (_searchCtrl.text.trim().isNotEmpty)
+            GestureDetector(
+              onTap: () { _searchCtrl.clear(); setState(() {}); },
+              child: Container(
+                width: 18, height: 18,
+                decoration: const BoxDecoration(color: _t2, shape: BoxShape.circle),
+                child: const Icon(Icons.close_rounded, color: Colors.black, size: 11),
+              ),
+            ),
         ],
       ),
     );
   }
 
+  Widget _buildSectionHeader() {
+    return Row(
+      children: [
+        Container(width: 6, height: 6, decoration: const BoxDecoration(color: _white, shape: BoxShape.circle)),
+        const SizedBox(width: 8),
+        Text('All Releases', style: _ts(17.6, FontWeight.w700, _white, em: -0.02)),
+      ],
+    );
+  }
+
   Widget _buildFilterRow() {
     return SizedBox(
-      height: 36,
+      height: 32,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 20),
+        clipBehavior: Clip.none,
         physics: const BouncingScrollPhysics(),
         itemCount: _filters.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        separatorBuilder: (_, __) => const SizedBox(width: 6),
         itemBuilder: (_, i) {
           final f      = _filters[i];
           final active = f == _filter;
           return GestureDetector(
             onTap: () => _applyFilter(f),
             child: AnimatedContainer(
-              duration: const Duration(milliseconds: 220),
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+              duration: const Duration(milliseconds: 250),
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              alignment: Alignment.center,
               decoration: BoxDecoration(
-                color: active ? _white : _black2,
-                borderRadius: BorderRadius.circular(99),
-                border: Border.all(color: active ? _white : _white10),
+                color: active ? _white : _fillSoft,
+                borderRadius: BorderRadius.circular(999),
               ),
               child: Text(
                 _filterLabels[f]!,
-                style: GoogleFonts.nunito(
-                  color: active ? _black : _grey,
-                  fontSize: 12, fontWeight: FontWeight.w700,
-                ),
+                style: _ts(14, FontWeight.w500, active ? Colors.black : _white90),
               ),
             ),
           );
@@ -555,63 +647,108 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
     );
   }
 
+  Widget _buildListHead() {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(6, 0, 6, 8),
+      decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: _sep, width: 0.5))),
+      child: Row(
+        children: [
+          const SizedBox(width: 20 + 12 + 48 + 12),
+          Text('RELEASE', style: _ts(12, FontWeight.w500, _t3, em: 0.04)),
+        ],
+      ),
+    );
+  }
+
   Widget _buildRows() {
+    final start = (_page - 1) * _pageSize;
+    final end   = min(start + _pageSize, _filtered.length);
+    final slice = _filtered.sublist(start, end);
+    return Column(
+      children: List.generate(slice.length, (i) {
+        return TweenAnimationBuilder<double>(
+          key: ValueKey('${slice[i]['_id']}_$_page'),
+          tween: Tween(begin: 0, end: 1),
+          duration: Duration(milliseconds: 400 + i * 45),
+          curve: const Cubic(0.32, 0.72, 0, 1),
+          builder: (_, v, child) => Transform.translate(
+            offset: Offset(0, 8 * (1 - v)),
+            child: Opacity(opacity: v.clamp(0.0, 1.0), child: child),
+          ),
+          child: _ReleaseRow(
+            index: start + i,
+            data: slice[i],
+            db: _db,
+            onRefresh: _loadReleases,
+            onOpenRejection: (data) =>
+                Navigator.pushNamed(context, '/rejection', arguments: data)
+                    .then((_) => _loadReleases()),
+          ),
+        );
+      }),
+    );
+  }
+
+  Widget _buildPager() {
+    final pages = _pageCount;
+    Widget btn(String label, bool enabled, VoidCallback onTap) => GestureDetector(
+          onTap: enabled ? onTap : null,
+          child: AnimatedOpacity(
+            duration: const Duration(milliseconds: 200),
+            opacity: enabled ? 1 : 0.3,
+            child: Container(
+              height: 36,
+              padding: const EdgeInsets.symmetric(horizontal: 18),
+              alignment: Alignment.center,
+              decoration: BoxDecoration(color: _fill, borderRadius: BorderRadius.circular(999)),
+              child: Text(label, style: _ts(15, FontWeight.w600, _white)),
+            ),
+          ),
+        );
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: Column(
-        children: List.generate(_filtered.length, (i) {
-          return TweenAnimationBuilder<double>(
-            tween: Tween(begin: 0, end: 1),
-            duration: Duration(milliseconds: 300 + i * 45),
-            curve: Curves.easeOutCubic,
-            builder: (_, v, child) => Transform.translate(
-              offset: Offset(0, 8 * (1 - v)),
-              child: Opacity(opacity: v, child: child),
-            ),
-            child: _ReleaseRow(
-              index: i,
-              data: _filtered[i],
-              db: _db,
-              onRefresh: _loadReleases,
-              onOpenRejection: (data) =>
-                  Navigator.pushNamed(context, '/rejection', arguments: data)
-                      .then((_) => _loadReleases()),
-            ),
-          );
-        }),
+      padding: const EdgeInsets.only(top: 20),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          btn('Previous', _page > 1, () => _goToPage(_page - 1)),
+          Text('Page $_page of $pages',
+              style: _ts(13, FontWeight.w400, _t2).copyWith(fontFeatures: const [FontFeature.tabularFigures()])),
+          btn('Next', _page < pages, () => _goToPage(_page + 1)),
+        ],
       ),
     );
   }
 
   Widget _buildEmptyState() {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 60),
+      padding: const EdgeInsets.symmetric(vertical: 70),
       child: Center(
         child: Column(
           children: [
             Container(
               width: 72, height: 72,
-              decoration: BoxDecoration(color: _black2, borderRadius: BorderRadius.circular(20), border: Border.all(color: _white10)),
-              child: const Icon(Icons.music_note_rounded, color: _grey, size: 34),
+              decoration: BoxDecoration(color: _s1, borderRadius: BorderRadius.circular(22)),
+              child: const Icon(Icons.music_note_rounded, color: _t2, size: 34),
             ),
             const SizedBox(height: 18),
-            Text('No releases yet', style: GoogleFonts.nunito(color: _white, fontSize: 18, fontWeight: FontWeight.w800)),
-            const SizedBox(height: 6),
+            Text('No releases yet', style: _ts(19, FontWeight.w700, _white, em: -0.02)),
+            const SizedBox(height: 7),
             Text(
-              'Create your first release to start distributing\nyour music worldwide.',
-              style: GoogleFonts.nunito(color: _grey, fontSize: 13, height: 1.5),
+              'Create your first release to start distributing your music worldwide.',
+              style: _ts(15, FontWeight.w400, _t2, height: 1.5),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 24),
             GestureDetector(
               onTap: () => Navigator.pushNamed(context, '/upload'),
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 13),
-                decoration: BoxDecoration(color: _white, borderRadius: BorderRadius.circular(12)),
+                height: 46,
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                decoration: BoxDecoration(color: _white, borderRadius: BorderRadius.circular(999)),
                 child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  const Icon(Icons.add_rounded, color: _black, size: 18),
+                  const Icon(Icons.add_circle_outline_rounded, color: Colors.black, size: 18),
                   const SizedBox(width: 8),
-                  Text('New Release', style: GoogleFonts.nunito(color: _black, fontSize: 14, fontWeight: FontWeight.w800)),
+                  Text('New Release', style: _ts(16, FontWeight.w600, Colors.black)),
                 ]),
               ),
             ),
@@ -623,142 +760,150 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
 
   Widget _buildSkeletons() {
     return Padding(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.fromLTRB(16, 18, 16, 0),
       child: Column(
-        children: List.generate(4, (_) => Padding(
-          padding: const EdgeInsets.only(bottom: 10),
-          child: _SkeletonRow(),
-        )),
+        children: List.generate(4, (_) => const _SkeletonRow()),
       ),
     );
   }
 
+  // ── SIDEBAR ───────────────────────────────────────────────────────
   Widget _buildSidebar(double top, double bottom) {
-    final w = MediaQuery.of(context).size.width * 0.78;
-    return Container(
+    final w = (MediaQuery.of(context).size.width * 0.78).clamp(260.0, 320.0);
+    return SizedBox(
       width: w, height: double.infinity,
-      color: _black1,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: EdgeInsets.fromLTRB(20, top + 18, 20, 18),
-            decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: _white10))),
-            child: Row(
+      child: ClipRect(
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
+          child: Container(
+            decoration: const BoxDecoration(
+              color: Color(0xC71C1C1E),
+              border: Border(right: BorderSide(color: _sep, width: 0.5)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  width: 34, height: 34,
-                  decoration: BoxDecoration(color: _white, borderRadius: BorderRadius.circular(9)),
-                  child: const Icon(Icons.music_note_rounded, color: _black, size: 18),
+                Padding(
+                  padding: EdgeInsets.fromLTRB(20, top + 20, 16, 14),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 32, height: 32,
+                        decoration: BoxDecoration(color: _white, borderRadius: BorderRadius.circular(8)),
+                        child: const Icon(Icons.music_note_rounded, color: Colors.black, size: 18),
+                      ),
+                      const SizedBox(width: 10),
+                      Text('444Music', style: _ts(17, FontWeight.w700, _white, em: -0.02)),
+                      const Spacer(),
+                      _CircleBtn(icon: Icons.close_rounded, onTap: _closeSidebar, color: _t2, size: 32, iconSize: 16),
+                    ],
+                  ),
                 ),
-                const SizedBox(width: 10),
-                Text('444Music', style: GoogleFonts.nunito(color: _white, fontSize: 18, fontWeight: FontWeight.w800)),
-                const Spacer(),
-                GestureDetector(
-                  onTap: _closeSidebar,
-                  child: Container(
-                    width: 32, height: 32,
-                    decoration: BoxDecoration(border: Border.all(color: _white10), borderRadius: BorderRadius.circular(8)),
-                    child: const Icon(Icons.close_rounded, color: _grey, size: 17),
+                Expanded(
+                  child: SingleChildScrollView(
+                    physics: const BouncingScrollPhysics(),
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const _SidebarSection(label: 'Main'),
+                        _SidebarItem(icon: Icons.home_rounded, label: 'Home',
+                            onTap: () { _closeSidebar(); Navigator.pushNamedAndRemoveUntil(context, '/home', (_) => false); }),
+                        _SidebarItem(icon: Icons.library_music_rounded, label: 'My Releases',
+                            onTap: _closeSidebar, active: true),
+                        _SidebarItem(icon: Icons.add_circle_outline_rounded, label: 'New Release',
+                            onTap: () { _closeSidebar(); Future.delayed(const Duration(milliseconds: 300), () => Navigator.pushNamed(context, '/upload')); }),
+                        const _SidebarSection(label: 'Finance'),
+                        _SidebarItem(icon: Icons.attach_money_rounded, label: 'Royalties',
+                            onTap: () { _closeSidebar(); Future.delayed(const Duration(milliseconds: 300), () => Navigator.pushNamed(context, '/earnings')); }),
+                        _SidebarItem(icon: Icons.ondemand_video_rounded, label: 'Watch Tutorials',
+                            onTap: () { _closeSidebar(); _launch('https://www.youtube.com/@444musicdistribution'); }),
+                        _SidebarItem(icon: Icons.call_split_rounded, label: 'Royalty Split',
+                            onTap: () { _closeSidebar(); Future.delayed(const Duration(milliseconds: 300), () async {
+                              final Uri url = Uri.parse('https://444music-distribution.vercel.app/splits');
+                              if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
+                                throw Exception('Could not launch $url');
+                              }
+                            }); }),
+                        const _SidebarSection(label: 'Tools'),
+                        _SidebarItem(icon: Icons.trending_up_rounded, label: 'Promote/Playlist',
+                            onTap: () { _closeSidebar(); _launch('https://444musicblog.vercel.app'); }),
+                        _SidebarItem(icon: Icons.bar_chart_rounded, label: 'Analytics',
+                            onTap: () { _closeSidebar(); Future.delayed(const Duration(milliseconds: 300), () => Navigator.pushNamed(context, '/analytics')); }),
+                        _SidebarItem(icon: Icons.help_outline_rounded, label: 'Support',
+                            onTap: () { _closeSidebar(); Future.delayed(const Duration(milliseconds: 300), () => Navigator.pushNamed(context, '/support')); }),
+                        _SidebarItem(icon: Icons.speed_rounded, label: 'Dashboard',
+                            onTap: () { _closeSidebar(); Future.delayed(const Duration(milliseconds: 300), () => Navigator.pushNamed(context, '/dashboard')); }),
+                      ],
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: EdgeInsets.fromLTRB(12, 0, 12, bottom + 18),
+                  child: Column(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        decoration: BoxDecoration(color: _s2, borderRadius: BorderRadius.circular(14)),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 34, height: 34,
+                              decoration: const BoxDecoration(color: _s3, shape: BoxShape.circle),
+                              alignment: Alignment.center,
+                              child: Text(_displayName.isNotEmpty ? _displayName[0].toUpperCase() : 'A',
+                                  style: _ts(14, FontWeight.w600, _white)),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(_displayName,
+                                      style: _ts(14, FontWeight.w600, _white),
+                                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                                  Text('Artist', style: _ts(12, FontWeight.w400, _t2)),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      GestureDetector(
+                        onTap: () async {
+                          await FirebaseAuth.instance.signOut();
+                          _closeSidebar();
+                          if (context.mounted) Navigator.pushReplacementNamed(context, '/login');
+                        },
+                        child: Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(vertical: 13),
+                          decoration: BoxDecoration(
+                            color: _rose.withValues(alpha: 0.14),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                            const Icon(Icons.logout_rounded, color: _rose, size: 17),
+                            const SizedBox(width: 9),
+                            Text('Logout', style: _ts(15, FontWeight.w600, _rose)),
+                          ]),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],
             ),
           ),
-
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-            child: Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(color: _white06, borderRadius: BorderRadius.circular(14), border: Border.all(color: _white10)),
-              child: Row(
-                children: [
-                  Container(
-                    width: 38, height: 38,
-                    decoration: BoxDecoration(shape: BoxShape.circle, color: _white20, border: Border.all(color: _white20)),
-                    child: Center(child: Text(
-                      _firstName.isNotEmpty ? _firstName[0].toUpperCase() : 'A',
-                      style: GoogleFonts.nunito(color: _white, fontSize: 16, fontWeight: FontWeight.w800),
-                    )),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(_user?.displayName ?? 'Artist',
-                          style: GoogleFonts.nunito(color: _white, fontSize: 13, fontWeight: FontWeight.w800),
-                          overflow: TextOverflow.ellipsis),
-                      Text(_user?.email ?? '',
-                          style: GoogleFonts.nunito(color: _grey, fontSize: 11),
-                          overflow: TextOverflow.ellipsis),
-                    ],
-                  )),
-                ],
-              ),
-            ),
-          ),
-
-          Expanded(
-            child: SingleChildScrollView(
-              physics: const BouncingScrollPhysics(),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _SidebarSection(label: 'Main'),
-                  _SidebarItem(icon: Icons.home_rounded,          label: 'Home',               onTap: () { _closeSidebar(); Navigator.pushNamedAndRemoveUntil(context, '/home', (_) => false); }),
-                  _SidebarItem(icon: Icons.library_music_rounded, label: 'My Releases',        onTap: _closeSidebar, active: true),
-                  _SidebarItem(icon: Icons.cloud_upload_rounded,  label: 'New Release',        onTap: () { _closeSidebar(); Future.delayed(const Duration(milliseconds: 300), () => Navigator.pushNamed(context, '/upload')); }),
-                  _SidebarSection(label: 'Finance'),
-                  _SidebarItem(icon: Icons.attach_money_rounded,  label: 'Royalties',          onTap: () { _closeSidebar(); Future.delayed(const Duration(milliseconds: 300), () => Navigator.pushNamed(context, '/earnings')); }),
-                  _SidebarItem(icon: Icons.ondemand_video_rounded, label: 'Watch Tutorials', onTap: () { _closeSidebar(); _launch('https://www.youtube.com/@444musicdistribution'); }),
-                  _SidebarItem(icon: Icons.call_split_rounded,    label: 'Royalty Split',      onTap: () { _closeSidebar(); Future.delayed(const Duration(milliseconds: 300), () async {
-                    final Uri url = Uri.parse('https://444music-distribution.vercel.app/splits');
-                    if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
-                      throw Exception('Could not launch $url');
-                    }
-                  }); }),
-                  _SidebarSection(label: 'Tools'),
-                  _SidebarItem(icon: Icons.trending_up_rounded,   label: 'Promote / Playlist', onTap: () { _closeSidebar(); _launch('https://444musicblog.vercel.app'); }),
-                  _SidebarItem(icon: Icons.bar_chart_rounded,     label: 'Analytics',          onTap: () { _closeSidebar(); Future.delayed(const Duration(milliseconds: 300), () => Navigator.pushNamed(context, '/analytics')); }),
-                  _SidebarItem(icon: Icons.help_outline_rounded,  label: 'Support',            onTap: () { _closeSidebar(); Future.delayed(const Duration(milliseconds: 300), () => Navigator.pushNamed(context, '/support')); }),
-                  _SidebarItem(icon: Icons.speed_rounded,         label: 'Dashboard',          onTap: () { _closeSidebar(); Future.delayed(const Duration(milliseconds: 300), () => Navigator.pushNamed(context, '/dashboard')); }),
-                  const _SidebarDivider(),
-                ],
-              ),
-            ),
-          ),
-
-          Padding(
-            padding: EdgeInsets.fromLTRB(14, 0, 14, bottom + 14),
-            child: GestureDetector(
-              onTap: () async {
-                await FirebaseAuth.instance.signOut();
-                _closeSidebar();
-                if (context.mounted) Navigator.pushReplacementNamed(context, '/login');
-              },
-              child: Container(
-                padding: const EdgeInsets.symmetric(vertical: 13),
-                decoration: BoxDecoration(
-                  color: Colors.red.shade900.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.red.shade900.withValues(alpha: 0.22)),
-                ),
-                child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                  const Icon(Icons.logout_rounded, color: Color(0xFFFF6B6B), size: 17),
-                  const SizedBox(width: 9),
-                  Text('Logout', style: GoogleFonts.nunito(color: const Color(0xFFFF6B6B), fontSize: 14, fontWeight: FontWeight.w700)),
-                ]),
-              ),
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  RELEASE ROW — index | thumb | title/artist/meta | countdown+chevron
+//  RELEASE ROW — index | thumb | title / artist / meta | countdown + chevron
 // ════════════════════════════════════════════════════════════════════
 class _ReleaseRow extends StatefulWidget {
   final int index;
@@ -787,9 +932,8 @@ class _ReleaseRowState extends State<_ReleaseRow> {
     final proceed = await Navigator.of(context).push<bool>(
       PageRouteBuilder(
         opaque: true,
-        barrierColor: Colors.transparent,
-        transitionDuration: const Duration(milliseconds: 260),
-        reverseTransitionDuration: const Duration(milliseconds: 200),
+        transitionDuration: const Duration(milliseconds: 500),
+        reverseTransitionDuration: const Duration(milliseconds: 300),
         pageBuilder: (_, __, ___) => _AppleShowcaseScreen(data: widget.data),
         transitionsBuilder: (_, anim, __, child) =>
             FadeTransition(opacity: anim, child: child),
@@ -803,6 +947,7 @@ class _ReleaseRowState extends State<_ReleaseRow> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.55),
       builder: (_) => _ReleaseDetailModal(
         data: widget.data,
         db: widget.db,
@@ -812,127 +957,108 @@ class _ReleaseRowState extends State<_ReleaseRow> {
     );
   }
 
-  Widget _buildThumb() {
-    final url = widget.data['coverURL']?.toString() ?? '';
-    const size = 62.0;
-    Widget child;
-    if (url.isEmpty) {
-      child = const Icon(Icons.music_note_rounded, color: _greyDark, size: 20);
-    } else if (url.startsWith('data:image')) {
-      try {
-        final bytes = base64Decode(url.split(',').last);
-        child = Image.memory(bytes, width: size, height: size, fit: BoxFit.cover);
-      } catch (_) {
-        child = const Icon(Icons.music_note_rounded, color: _greyDark, size: 20);
-      }
-    } else {
-      child = CachedNetworkImage(
-        imageUrl: url, width: size, height: size, fit: BoxFit.cover,
-        placeholder: (_, __) => Container(color: _black3),
-        errorWidget: (_, __, ___) => const Icon(Icons.music_note_rounded, color: _greyDark, size: 20),
-      );
-    }
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        width: size, height: size, color: _black3,
-        alignment: Alignment.center,
-        child: child,
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final releaseDate = widget.data['releaseDate'] != null ? _formatDate(widget.data['releaseDate']) : 'TBA';
     final countdown   = _releaseCountdownLabel(widget.data['releaseDate']);
-    final releaseType = (widget.data['releaseType'] ?? 'Single').toString().toUpperCase();
-
-    // Singles: "Artist ft. Name". EP/Album: main artist only — featuring
-    // lives per track inside the detail modal.
-    final featText  = _featuringDisplay(widget.data);
-    final featuring = (_isMultiTrack(widget.data) || featText == 'None') ? '' : featText;
+    final releaseType = (widget.data['releaseType'] ?? 'Single').toString();
+    final showMeta    = MediaQuery.of(context).size.width > 480;
 
     return GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onTapDown:   (_) => setState(() => _pressed = true),
       onTapUp:     (_) { setState(() => _pressed = false); _openModal(); },
       onTapCancel: ()  => setState(() => _pressed = false),
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 120),
-        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 6),
         decoration: BoxDecoration(
-          color: _pressed ? _black2 : Colors.transparent,
-          borderRadius: BorderRadius.circular(12),
-          border: const Border(bottom: BorderSide(color: _white10)),
+          color: _pressed ? const Color(0x14FFFFFF) : Colors.transparent,
+          borderRadius: BorderRadius.circular(14),
         ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
+        child: Stack(
           children: [
-            SizedBox(
-              width: 24,
-              child: Text(
-                '${widget.index + 1}',
-                textAlign: TextAlign.center,
-                style: GoogleFonts.outfit(color: _greyDark, fontSize: 13, fontWeight: FontWeight.w800),
-              ),
-            ),
-            const SizedBox(width: 12),
-            _buildThumb(),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    widget.data['releaseTitle'] ?? 'Untitled Release',
-                    maxLines: 1, overflow: TextOverflow.ellipsis,
-                    style: GoogleFonts.outfit(color: _white, fontSize: 15, fontWeight: FontWeight.w800, letterSpacing: -0.1),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                SizedBox(
+                  width: 20,
+                  child: Text(
+                    '${widget.index + 1}',
+                    textAlign: TextAlign.center,
+                    style: _ts(13, FontWeight.w600, _t3).copyWith(fontFeatures: const [FontFeature.tabularFigures()]),
                   ),
-                  const SizedBox(height: 2),
-                  Text(
-                    featuring.isNotEmpty
-                        ? '${widget.data['artistName'] ?? 'Unknown Artist'} ft. $featuring'
-                        : (widget.data['artistName'] ?? 'Unknown Artist'),
-                    maxLines: 1, overflow: TextOverflow.ellipsis,
-                    style: GoogleFonts.nunito(color: _grey, fontSize: 13, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(width: 12),
+                Container(
+                  width: 48, height: 48,
+                  decoration: BoxDecoration(
+                    color: _s1,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0x1AFFFFFF), width: 0.5),
                   ),
-                  const SizedBox(height: 6),
-                  Row(
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: _coverImage(widget.data['coverURL']?.toString() ?? '', width: 48, height: 48),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(releaseType,
-                          style: GoogleFonts.nunito(color: _grey, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.4)),
-                      const SizedBox(width: 7),
-                      Container(width: 3, height: 3, decoration: BoxDecoration(color: _greyDark, borderRadius: BorderRadius.circular(2))),
-                      const SizedBox(width: 7),
-                      Flexible(
-                        child: Text(
-                          '${_isPending ? "Scheduled: " : "Release: "}$releaseDate',
-                          maxLines: 1, overflow: TextOverflow.ellipsis,
-                          style: GoogleFonts.nunito(color: _greyDark, fontSize: 11),
-                        ),
+                      Text(
+                        (widget.data['releaseTitle'] ?? 'Untitled Release').toString(),
+                        maxLines: 1, overflow: TextOverflow.ellipsis,
+                        style: _ts(16, FontWeight.w600, _white, em: -0.02),
                       ),
+                      const SizedBox(height: 2),
+                      Text(
+                        _rowArtistLine(widget.data),
+                        maxLines: 1, overflow: TextOverflow.ellipsis,
+                        style: _ts(14, FontWeight.w400, _t2),
+                      ),
+                      if (showMeta) ...[
+                        const SizedBox(height: 5),
+                        Row(
+                          children: [
+                            Text(releaseType.toUpperCase(),
+                                style: _ts(11, FontWeight.w600, _t2, em: 0.04)),
+                            const SizedBox(width: 7),
+                            Container(width: 3, height: 3, decoration: const BoxDecoration(color: _t3, shape: BoxShape.circle)),
+                            const SizedBox(width: 7),
+                            Flexible(
+                              child: Text(
+                                '${_isPending ? "Scheduled: " : "Release: "}$releaseDate',
+                                maxLines: 1, overflow: TextOverflow.ellipsis,
+                                style: _ts(12, FontWeight.w400, _t3),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
                     ],
                   ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                if (countdown != null)
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: _white,
-                      borderRadius: BorderRadius.circular(999),
-                      border: Border.all(color: _white),
-                    ),
-                    child: Text(countdown, style: GoogleFonts.nunito(color: _black, fontSize: 11, fontWeight: FontWeight.w800)),
-                  ),
-                const SizedBox(height: 6),
-                const Icon(Icons.chevron_right_rounded, color: _greyDark, size: 18),
+                ),
+                const SizedBox(width: 12),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (countdown != null)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(color: _white, borderRadius: BorderRadius.circular(999)),
+                        child: Text(countdown, style: _ts(11, FontWeight.w600, Colors.black)),
+                      ),
+                    const SizedBox(width: 8),
+                    const Icon(Icons.chevron_right_rounded, color: _t3, size: 18),
+                  ],
+                ),
               ],
+            ),
+            Positioned(
+              left: 92, right: -6, bottom: -12,
+              child: Container(height: 0.5, color: _sep),
             ),
           ],
         ),
@@ -942,8 +1068,8 @@ class _ReleaseRowState extends State<_ReleaseRow> {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  APPLE-STYLE SHOWCASE — white/grey gradient screen shown first when a
-//  row is tapped; tapping anywhere continues to the detail modal.
+//  APPLE-STYLE SHOWCASE — shown first when a row is tapped;
+//  tapping anywhere continues to the detail sheet.
 // ════════════════════════════════════════════════════════════════════
 class _AppleShowcaseScreen extends StatefulWidget {
   final Map<String, dynamic> data;
@@ -1012,45 +1138,30 @@ class _AppleShowcaseScreenState extends State<_AppleShowcaseScreen>
 
   Widget _buildArtwork() {
     final url = widget.data['coverURL']?.toString() ?? '';
-    Widget img;
-    if (url.isEmpty) {
-      img = Container(color: const Color(0xFFE3E2DD));
-    } else if (url.startsWith('data:image')) {
-      try {
-        img = Image.memory(base64Decode(url.split(',').last), fit: BoxFit.cover);
-      } catch (_) {
-        img = Container(color: const Color(0xFFE3E2DD));
-      }
-    } else {
-      img = CachedNetworkImage(
-        imageUrl: url, fit: BoxFit.cover,
-        placeholder: (_, __) => Container(color: const Color(0xFFE3E2DD)),
-        errorWidget: (_, __, ___) => Container(color: const Color(0xFFE3E2DD)),
-      );
-    }
     return AnimatedBuilder(
       animation: _artworkAnim,
       builder: (_, c) => Opacity(
         opacity: _artworkAnim.value.clamp(0.0, 1.0),
         child: Transform.translate(
           offset: Offset(0, 26 * (1 - _artworkAnim.value)),
-          child: Transform.scale(
-            scale: 0.96 + (0.04 * _artworkAnim.value),
-            child: c,
-          ),
+          child: Transform.scale(scale: 0.96 + (0.04 * _artworkAnim.value), child: c),
         ),
       ),
       child: AspectRatio(
         aspectRatio: 1,
         child: Container(
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(16),
+            color: const Color(0xFFE3E2DD),
             boxShadow: [
               BoxShadow(color: Colors.black.withValues(alpha: 0.20), blurRadius: 60, offset: const Offset(0, 30)),
               BoxShadow(color: Colors.black.withValues(alpha: 0.10), blurRadius: 18, offset: const Offset(0, 8)),
             ],
           ),
-          child: ClipRRect(borderRadius: BorderRadius.circular(14), child: img),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(16),
+            child: _coverImage(url, bg: const Color(0xFFE3E2DD)),
+          ),
         ),
       ),
     );
@@ -1087,7 +1198,7 @@ class _AppleShowcaseScreenState extends State<_AppleShowcaseScreen>
           child: Stack(
             children: [
               SingleChildScrollView(
-                padding: EdgeInsets.fromLTRB(hPad, top + 100, hPad, 60),
+                padding: EdgeInsets.fromLTRB(hPad, top + 80, hPad, 48),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -1097,18 +1208,18 @@ class _AppleShowcaseScreenState extends State<_AppleShowcaseScreen>
                         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
                         decoration: BoxDecoration(color: Colors.black, borderRadius: BorderRadius.circular(999)),
                         child: Text(displayStatus.toUpperCase(),
-                            style: GoogleFonts.nunito(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.6)),
+                            style: _ts(12, FontWeight.w600, Colors.white, em: 0.04)),
                       )),
                     _fadeUp(_titleAnim, child: Padding(
                       padding: const EdgeInsets.only(bottom: 10),
                       child: RichText(
                         text: TextSpan(
-                          style: GoogleFonts.outfit(color: Colors.black, fontSize: 26, fontWeight: FontWeight.w800, letterSpacing: -0.3, height: 1.25),
+                          style: _ts(24, FontWeight.w700, Colors.black, em: -0.03, height: 1.2),
                           children: [
                             TextSpan(text: title),
                             TextSpan(
-                              text: '  - $releaseType',
-                              style: GoogleFonts.outfit(color: Colors.black.withValues(alpha: 0.55), fontWeight: FontWeight.w500),
+                              text: ' - $releaseType',
+                              style: _ts(24, FontWeight.w500, Colors.black.withValues(alpha: 0.5), em: -0.03, height: 1.2),
                             ),
                           ],
                         ),
@@ -1117,22 +1228,18 @@ class _AppleShowcaseScreenState extends State<_AppleShowcaseScreen>
                     _fadeUp(_subtitleAnim, child: Padding(
                       padding: const EdgeInsets.only(bottom: 28),
                       child: Text('Distributed by',
-                          style: GoogleFonts.nunito(color: Colors.black.withValues(alpha: 0.48), fontSize: 16, fontWeight: FontWeight.w600)),
+                          style: _ts(16, FontWeight.w500, Colors.black.withValues(alpha: 0.46))),
                     )),
                     _fadeUp(_distribAnim, child: Padding(
                       padding: const EdgeInsets.only(bottom: 52),
                       child: Row(children: [
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(4),
-                          child: Image.network(
-                            'https://www.444musicdistro.com/black.png',
-                            height: 26,
-                            errorBuilder: (_, __, ___) => const SizedBox(width: 26, height: 26),
-                          ),
+                        Image.network(
+                          'https://www.444musicdistro.com/black.png',
+                          height: 26,
+                          errorBuilder: (_, __, ___) => const SizedBox(width: 26, height: 26),
                         ),
                         const SizedBox(width: 10),
-                        Text('444Music',
-                            style: GoogleFonts.outfit(color: Colors.black, fontSize: 18, fontWeight: FontWeight.w700, letterSpacing: -0.1)),
+                        Text('444Music', style: _ts(18, FontWeight.w600, Colors.black, em: -0.02)),
                       ]),
                     )),
                     _buildArtwork(),
@@ -1142,7 +1249,7 @@ class _AppleShowcaseScreenState extends State<_AppleShowcaseScreen>
                         width: double.infinity,
                         child: Center(
                           child: Text('TAP ANYWHERE TO VIEW DETAILS',
-                              style: GoogleFonts.nunito(color: Colors.black.withValues(alpha: 0.32), fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 1.2)),
+                              style: _ts(12, FontWeight.w500, Colors.black.withValues(alpha: 0.32), em: 0.06)),
                         ),
                       ),
                     )),
@@ -1154,12 +1261,8 @@ class _AppleShowcaseScreenState extends State<_AppleShowcaseScreen>
                 child: GestureDetector(
                   onTap: _dismiss,
                   child: Container(
-                    width: 36, height: 36,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Colors.black.withValues(alpha: 0.06),
-                      border: Border.all(color: Colors.black.withValues(alpha: 0.10)),
-                    ),
+                    width: 34, height: 34,
+                    decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0x243C3C43)),
                     child: Icon(Icons.close_rounded, color: Colors.black.withValues(alpha: 0.55), size: 16),
                   ),
                 ),
@@ -1172,49 +1275,57 @@ class _AppleShowcaseScreenState extends State<_AppleShowcaseScreen>
   }
 }
 
+// ── SKELETON ─────────────────────────────────────────────────────────
 class _SkeletonRow extends StatefulWidget {
+  const _SkeletonRow();
   @override
   State<_SkeletonRow> createState() => _SkeletonRowState();
 }
+
 class _SkeletonRowState extends State<_SkeletonRow> with SingleTickerProviderStateMixin {
   late AnimationController _c;
   late Animation<double> _a;
   @override
   void initState() {
     super.initState();
-    _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 1400))..repeat();
+    _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 1500))..repeat();
     _a = Tween<double>(begin: -2, end: 2).animate(_c);
   }
   @override
   void dispose() { _c.dispose(); super.dispose(); }
+
+  BoxDecoration _shimmer(double radius) => BoxDecoration(
+        borderRadius: BorderRadius.circular(radius),
+        gradient: LinearGradient(
+          begin: Alignment(_a.value - 1, 0),
+          end: Alignment(_a.value + 1, 0),
+          colors: const [_s1, Color(0x0FFFFFFF), _s1],
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: _a,
-      builder: (_, __) => Container(
-        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
-        decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: _white10))),
+      builder: (_, __) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 6),
         child: Row(children: [
-          Container(width: 62, height: 62, decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-            gradient: LinearGradient(begin: Alignment(_a.value - 1, 0), end: Alignment(_a.value + 1, 0), colors: [_black3, _black4, _black3]),
-          )),
-          const SizedBox(width: 14),
+          const SizedBox(width: 32),
+          Container(width: 48, height: 48, decoration: _shimmer(12)),
+          const SizedBox(width: 12),
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            _shimmerLine(0.6), const SizedBox(height: 8), _shimmerLine(0.4),
+            FractionallySizedBox(widthFactor: 0.6, child: Container(height: 12, decoration: _shimmer(8))),
+            const SizedBox(height: 8),
+            FractionallySizedBox(widthFactor: 0.4, child: Container(height: 12, decoration: _shimmer(8))),
           ])),
         ]),
       ),
     );
   }
-  Widget _shimmerLine(double w) => FractionallySizedBox(
-    widthFactor: w,
-    child: Container(height: 12, decoration: BoxDecoration(color: _black3, borderRadius: BorderRadius.circular(6))),
-  );
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  RELEASE DETAIL MODAL
+//  RELEASE DETAIL SHEET
 // ════════════════════════════════════════════════════════════════════
 class _ReleaseDetailModal extends StatefulWidget {
   final Map<String, dynamic> data;
@@ -1232,10 +1343,6 @@ class _ReleaseDetailModal extends StatefulWidget {
 }
 
 class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
-  bool    _generatingLink = false;
-  String? _copiedMsg;
-  bool    _coverUploading = false;
-
   String get _id          => widget.data['_id'] ?? '';
   String get _status      => (widget.data['status'] ?? 'Pending').toString().trim();
   bool   get _isApproved  => _status.toLowerCase() == 'approved';
@@ -1249,6 +1356,8 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
   bool get _needsPayment => _isPending && !_isPaid;
   bool get _isMulti      => _isMultiTrack(_data);
 
+  bool _smartLinkCopied = false;
+
   @override
   void initState() {
     super.initState();
@@ -1259,39 +1368,28 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
   }
 
   Future<void> _generateSmartLink() async {
-    if (!mounted) return;
-    setState(() => _generatingLink = true);
     try {
       final snap     = await widget.db.collection('submissions').doc(_id).get();
       final existing = snap.data() ?? {};
       if (existing['upc'] != null && existing['smartLinkURL'] != null) {
-        setState(() {
-          _data['upc']          = existing['upc'];
-          _data['smartLinkURL'] = existing['smartLinkURL'];
-          _generatingLink       = false;
-        });
+        if (mounted) {
+          setState(() {
+            _data['upc']          = existing['upc'];
+            _data['smartLinkURL'] = existing['smartLinkURL'];
+          });
+        }
         return;
       }
-           final upc = (existing['upc'] ?? '').toString().trim().isNotEmpty
+      final upc = (existing['upc'] ?? '').toString().trim().isNotEmpty
           ? existing['upc'].toString()
           : _generateUPC();
       final url = _buildSmartLinkURL(_data['artistName'] ?? '', _data['releaseTitle'] ?? '');
       await widget.db.collection('submissions').doc(_id).update({
         'upc': upc, 'smartLinkURL': url, 'smartLinkGeneratedAt': FieldValue.serverTimestamp(),
       });
-      if (mounted) setState(() { _data['upc'] = upc; _data['smartLinkURL'] = url; _generatingLink = false; });
+      if (mounted) setState(() { _data['upc'] = upc; _data['smartLinkURL'] = url; });
       widget.onRefresh();
-    } catch (e) {
-      if (mounted) setState(() => _generatingLink = false);
-    }
-  }
-
-  void _copyLink() {
-    final url = _data['smartLinkURL']?.toString() ?? '';
-    if (url.isEmpty) return;
-    Clipboard.setData(ClipboardData(text: url));
-    setState(() => _copiedMsg = 'Copied!');
-    Future.delayed(const Duration(seconds: 2), () { if (mounted) setState(() => _copiedMsg = null); });
+    } catch (_) {}
   }
 
   String? get _smartLinkSlug {
@@ -1301,80 +1399,36 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
 
   String get _smartLinkUrl => '$_smartLinkBase${_smartLinkSlug ?? ''}';
 
-  bool _smartLinkCopied = false;
-
   void _copySmartLinkUrl() {
     Clipboard.setData(ClipboardData(text: _smartLinkUrl));
     HapticFeedback.lightImpact();
     setState(() => _smartLinkCopied = true);
+    _showToast(context, 'SmartLink copied to clipboard!');
     Future.delayed(const Duration(seconds: 2), () {
       if (mounted) setState(() => _smartLinkCopied = false);
     });
   }
 
-  Widget _buildSmartLinkRow() {
-    final url = _smartLinkUrl;
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: _black3,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: _white10),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: GestureDetector(
-              onTap: () => _launch(url),
-              behavior: HitTestBehavior.opaque,
-              child: Text(
-                url,
-                style: GoogleFonts.nunito(
-                  color: _white,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w800,
-                  decoration: TextDecoration.underline,
-                  decorationColor: _white40,
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          GestureDetector(
-            onTap: _copySmartLinkUrl,
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              width: 32,
-              height: 32,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: _smartLinkCopied ? _green : _white,
-              ),
-              child: Icon(
-                _smartLinkCopied ? Icons.check_rounded : Icons.copy_rounded,
-                color: _smartLinkCopied ? _white : _black,
-                size: 15,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _share() {
-    final url    = _data['smartLinkURL']?.toString() ?? '';
-    final title  = _data['releaseTitle']?.toString() ?? '';
-    final artist = _data['artistName']?.toString() ?? '';
-    if (url.isEmpty) return;
-    Share.share('Listen to "$title" by $artist on all streaming platforms\n$url');
-  }
-
+  // iOS-style "Proceed to payment?" alert, then the existing pay flow.
   Future<void> _payNow() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null || _id.isEmpty) return;
     final amount = _priceForReleaseType(_data['releaseType']);
+    final title  = (_data['releaseTitle'] ?? 'this release').toString();
+
+    final go = await showDialog<bool>(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.5),
+      builder: (_) => _IosAlert(
+        icon: Icons.credit_card_rounded,
+        iconColor: _cyan,
+        title: 'Proceed to payment?',
+        message: 'You\'ll be taken to a secure payment page to release "$title" (GHC ${amount.toStringAsFixed(2)}) for review.',
+        cancelLabel: 'Cancel',
+        confirmLabel: 'Continue',
+      ),
+    );
+    if (go != true || !mounted) return;
 
     await Navigator.push(
       context,
@@ -1392,172 +1446,181 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
     widget.onRefresh();
   }
 
-  Future<void> _editCoverArt() async {
-    final picker = ImagePicker();
-    final file   = await picker.pickImage(source: ImageSource.gallery, maxWidth: 1200, imageQuality: 85);
-    if (file == null) return;
-    setState(() => _coverUploading = true);
-    try {
-      final bytes     = await file.readAsBytes();
-      final base64Str = base64Encode(bytes);
-      final dataUrl   = 'data:image/jpeg;base64,$base64Str';
-      await widget.db.collection('submissions').doc(_id).update({'coverURL': dataUrl});
-      if (mounted) setState(() { _data['coverURL'] = dataUrl; _coverUploading = false; });
-      widget.onRefresh();
-    } catch (e) {
-      if (mounted) setState(() => _coverUploading = false);
-    }
+  bool get _hasProducers  => _hasCreditsIn('producer');
+  bool get _hasMusicians  => _hasCreditsIn('musician');
+  bool get _hasWriters    => _hasCreditsIn('writer');
+  bool get _hasPublishers => _hasCreditsIn('publishing');
+
+  bool _hasCreditsIn(String key) {
+    final c = _data['credits'];
+    if (c == null || c is! Map) return false;
+    final list = c[key];
+    return list is List && list.any((x) => x is Map && (x['name'] ?? '').toString().trim().isNotEmpty);
+  }
+
+  List _creditList(String key) {
+    final c = _data['credits'];
+    if (c is Map && c[key] is List) return c[key] as List;
+    return const [];
   }
 
   @override
   Widget build(BuildContext context) {
-    final bottom = MediaQuery.of(context).padding.bottom;
+    final bottom   = MediaQuery.of(context).padding.bottom;
+    final feat     = _featuringDisplay(_data);
+    final upcText  = (_data['upc'] ?? '').toString().trim();
+    final catText  = (_data['catalogNumber'] ?? '').toString().trim();
+    final submitted = _formatDateTime(_data['createdAt']);
+    final rejection = (_data['rejectionReason'] ?? '').toString().trim();
+    final takedown  = (_data['takedownReason'] ?? '').toString().trim();
+    final lyrics    = (_data['description'] ?? '').toString().trim();
+    final referral  = (_data['refferal'] ?? '').toString().trim();
+
     return Container(
-      height: MediaQuery.of(context).size.height * 0.90,
+      height: MediaQuery.of(context).size.height * 0.92,
       decoration: const BoxDecoration(
-        color: _black2,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+        color: _s1,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(26)),
       ),
-      child: Column(
-        children: [
-          _ModalHeader(title: 'Release Details', subtitle: _data['releaseTitle'] ?? ''),
-          Container(height: 1, decoration: const BoxDecoration(
-            gradient: LinearGradient(colors: [Colors.transparent, _white40, Colors.transparent]),
-          )),
-          _buildTopAction(),
-          Expanded(
-            child: SingleChildScrollView(
-              physics: const BouncingScrollPhysics(),
-              padding: EdgeInsets.fromLTRB(20, 16, 20, bottom + 24),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildCoverStrip(),
-                  const SizedBox(height: 20),
+      child: ClipRRect(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
+        child: Column(
+          children: [
+            _SheetHeader(title: 'Release Details', subtitle: (_data['releaseTitle'] ?? '').toString()),
+            _buildTopAction(),
+            Expanded(
+              child: SingleChildScrollView(
+                physics: const BouncingScrollPhysics(),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildCoverStrip(),
+                    Padding(
+                      padding: EdgeInsets.fromLTRB(20, 20, 20, bottom + 28),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // STATUS
+                          const _SectionLabel(label: 'Status', icon: Icons.info_outline_rounded),
+                          _buildStatusRow(submitted),
+                          if (_isRejected && rejection.isNotEmpty)
+                            _ReasonBox(label: 'Reason for rejection', text: rejection, color: _rose, bg: const Color(0x1FFF453A)),
+                          if (_isTakenDown && takedown.isNotEmpty)
+                            _ReasonBox(label: 'Reason for takedown', text: takedown, color: _takenDown, bg: const Color(0x2498989D)),
+                          if (_isApproved && _smartLinkSlug != null) ...[
+                            const SizedBox(height: 22),
+                            _buildSmartLinkRow(),
+                          ],
+                          const SizedBox(height: 22),
 
-                  _MetaSectionLabel(label: 'Status', icon: Icons.info_outline_rounded),
-                  const SizedBox(height: 10),
-                  _buildStatusRow(),
-                  if (_isApproved && _smartLinkSlug != null) ...[
-                    const SizedBox(height: 10),
-                    _buildSmartLinkRow(),
-                  ],
-                  if (_isRejected && (_data['rejectionReason'] ?? '').toString().trim().isNotEmpty) ...[
-                    const SizedBox(height: 10),
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(13),
-                      decoration: BoxDecoration(
-                        color: _rose.withValues(alpha: 0.08),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: _rose.withValues(alpha: 0.25)),
+                          // ARTIST & RELEASE
+                          const _SectionLabel(label: 'Artist & Release', icon: Icons.person_outline_rounded),
+                          _MetaGrid(fields: [
+                            _MetaField(label: 'Main Artist', value: _data['artistName'], full: true),
+                            if (!_isMulti)
+                              _MetaField(label: 'Featuring', value: feat, full: true, dim: feat == 'None'),
+                            _MetaField(label: 'Release Title', value: _data['releaseTitle'], full: true),
+                            _MetaField(label: 'Type',     value: _data['releaseType']),
+                            _MetaField(label: 'Genre',    value: _data['genre']),
+                            _MetaField(label: 'Language', value: _data['language']),
+                            _MetaField(label: 'Release Date', value: _data['releaseDate'] != null ? _formatDateLong(_data['releaseDate']) : null),
+                            _MetaField(label: 'Explicit Content', value: _data['explicit']?.toString() ?? 'No'),
+                          ]),
+
+                          if (_isMulti) ...[
+                            const SizedBox(height: 22),
+                            const _SectionLabel(label: 'Tracklist', icon: Icons.format_list_bulleted_rounded),
+                            _buildTracklistSection(),
+                          ],
+                          const SizedBox(height: 22),
+
+                          // LABEL & RIGHTS
+                          const _SectionLabel(label: 'Label & Rights', icon: Icons.shield_outlined),
+                          _MetaGrid(fields: [
+                            _MetaField(label: 'Label Name', value: (_data['label'] ?? '').toString().trim().isEmpty ? 'Independent' : _data['label']),
+                            _MetaField(label: 'Copyright Holder', value: _data['copyright']),
+                          ]),
+                          const SizedBox(height: 22),
+
+                          // IDENTIFIERS
+                          const _SectionLabel(label: 'Identifiers', icon: Icons.grid_view_rounded),
+                          _MetaGrid(fields: [
+                            _MetaField(label: 'ISRC Code', value: _data['isrc'], mono: true),
+                            _MetaField(
+                              label: 'UPC / EAN Barcode',
+                              value: upcText.isNotEmpty ? upcText : (_isApproved ? 'Generating…' : 'Assigned upon approval'),
+                              mono: true, dim: upcText.isEmpty,
+                            ),
+                            _MetaField(
+                              label: 'Catalog Number',
+                              value: catText.isNotEmpty ? catText : (_isApproved ? 'Pending assignment' : 'Assigned upon approval'),
+                              dim: catText.isEmpty,
+                            ),
+                          ]),
+                          const SizedBox(height: 22),
+
+                          // CONTACT & LOCATION
+                          const _SectionLabel(label: 'Contact & Location', icon: Icons.location_on_outlined),
+                          _MetaGrid(fields: [
+                            _MetaField(label: 'Country', value: _data['country']),
+                            _MetaField(label: 'Email', value: _data['email'], full: true),
+                            if (referral.isNotEmpty)
+                              _MetaField(label: 'Referral Code', value: referral),
+                          ]),
+
+                          if (_hasProducers || _hasMusicians) ...[
+                            const SizedBox(height: 22),
+                            const _SectionLabel(label: 'Production Credits', icon: Icons.star_outline_rounded),
+                            if (_hasProducers) ...[
+                              const _SubLabel(label: 'Producers & Engineers'),
+                              _CreditsList(list: _creditList('producer')),
+                            ],
+                            if (_hasMusicians) ...[
+                              _SubLabel(label: 'Musicians', spaced: _hasProducers),
+                              _CreditsList(list: _creditList('musician')),
+                            ],
+                          ],
+
+                          if (_hasWriters || _hasPublishers) ...[
+                            const SizedBox(height: 22),
+                            const _SectionLabel(label: 'Songwriting & Publishing'),
+                            if (_hasWriters) ...[
+                              const _SubLabel(label: 'Songwriters & Composers'),
+                              _CreditsList(list: _creditList('writer')),
+                            ],
+                            if (_hasPublishers) ...[
+                              _SubLabel(label: 'Publishing & PRO', spaced: _hasWriters),
+                              _CreditsList(list: _creditList('publishing')),
+                            ],
+                          ],
+
+                          if (lyrics.isNotEmpty) ...[
+                            const SizedBox(height: 22),
+                            const _SectionLabel(label: 'Lyrics', icon: Icons.menu_book_outlined),
+                            Container(
+                              width: double.infinity,
+                              constraints: const BoxConstraints(maxHeight: 240),
+                              padding: const EdgeInsets.all(14),
+                              decoration: BoxDecoration(color: _s2, borderRadius: BorderRadius.circular(14)),
+                              child: SingleChildScrollView(
+                                child: Text(lyrics, style: _ts(14, FontWeight.w400, _t2, height: 1.7)),
+                              ),
+                            ),
+                          ],
+                        ],
                       ),
-                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text('REASON FOR REJECTION', style: GoogleFonts.nunito(color: _rose, fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 1)),
-                        const SizedBox(height: 5),
-                        Text(_data['rejectionReason'] ?? '', style: GoogleFonts.nunito(color: _white70, fontSize: 13, height: 1.5)),
-                      ]),
                     ),
                   ],
-                  if (_isTakenDown && (_data['takedownReason'] ?? '').toString().trim().isNotEmpty) ...[
-                    const SizedBox(height: 10),
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(13),
-                      decoration: BoxDecoration(
-                        color: _slate.withValues(alpha: 0.08),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: _slate.withValues(alpha: 0.25)),
-                      ),
-                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text('REASON FOR TAKEDOWN', style: GoogleFonts.nunito(color: _slate, fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 1)),
-                        const SizedBox(height: 5),
-                        Text(_data['takedownReason'] ?? '', style: GoogleFonts.nunito(color: _white70, fontSize: 13, height: 1.5)),
-                      ]),
-                    ),
-                  ],
-                  const SizedBox(height: 22),
-
-                  _MetaSectionLabel(label: 'Artist & Release', icon: Icons.person_rounded),
-                  const SizedBox(height: 10),
-                  _buildMetaGrid([
-                    _MetaField(label: 'Main Artist', value: _data['artistName'], full: true),
-                    // Singles: Featuring right under Main Artist.
-                    // EP/Album: featuring is per track (see Tracklist below).
-                    if (!_isMulti)
-                      _MetaField(label: 'Featuring', value: _featuringDisplay(_data), full: true),
-                    _MetaField(label: 'Release Title', value: _data['releaseTitle'], full: true),
-                    _MetaField(label: 'Type',          value: _data['releaseType']),
-                    _MetaField(label: 'Genre',         value: _data['genre']),
-                    _MetaField(label: 'Language',      value: _data['language']),
-                    _MetaField(label: 'Release Date',  value: _data['releaseDate'] != null ? _formatDate(_data['releaseDate']) : null),
-                    _MetaField(label: 'Explicit',      value: _data['explicit']?.toString() ?? 'No'),
-                  ]),
-
-                  if (_isMulti) ...[
-                    const SizedBox(height: 22),
-                    _MetaSectionLabel(label: 'Tracklist', icon: Icons.queue_music_rounded),
-                    const SizedBox(height: 10),
-                    _buildTracklistSection(),
-                  ],
-                  const SizedBox(height: 22),
-
-                  _MetaSectionLabel(label: 'Label & Rights', icon: Icons.verified_rounded),
-                  const SizedBox(height: 10),
-                  _buildMetaGrid([
-                    _MetaField(label: 'Label Name',       value: _data['label'] ?? 'Independent'),
-                    _MetaField(label: 'Copyright Holder', value: _data['copyright']),
-                  ]),
-                  const SizedBox(height: 22),
-
-                  _MetaSectionLabel(label: 'Identifiers', icon: Icons.qr_code_rounded),
-                  const SizedBox(height: 10),
-                  _buildMetaGrid([
-                    _MetaField(label: 'ISRC Code',     value: _data['isrc'],        mono: true),
-                    _MetaField(label: 'UPC / Barcode', value: _data['upc'] != null ? _formatUPC(_data['upc']) : (_isApproved ? 'Generating…' : 'Auto-assign'), mono: true),
-                    _MetaField(label: 'Catalog No.',   value: _data['catalogNumber']),
-                  ]),
-                  const SizedBox(height: 22),
-
-                  _MetaSectionLabel(label: 'Contact & Location', icon: Icons.location_on_rounded),
-                  const SizedBox(height: 10),
-                  _buildMetaGrid([
-                    _MetaField(label: 'Country', value: _data['country']),
-                    _MetaField(label: 'Phone',   value: _data['phone']),
-                    _MetaField(label: 'Email',   value: _data['email'], full: true),
-                    if ((_data['refferal'] ?? '').toString().trim().isNotEmpty)
-                      _MetaField(label: 'Referral Code', value: _data['refferal']),
-                  ]),
-
-                  if (_hasCredits) ...[
-                    const SizedBox(height: 22),
-                    _MetaSectionLabel(label: 'Production Credits', icon: Icons.star_rounded),
-                    const SizedBox(height: 10),
-                    _buildCreditsSection(),
-                  ],
-
-                  if ((_data['description'] ?? '').toString().trim().isNotEmpty) ...[
-                    const SizedBox(height: 22),
-                    _MetaSectionLabel(label: 'Lyrics / Notes', icon: Icons.lyrics_rounded),
-                    const SizedBox(height: 10),
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(color: _black3, borderRadius: BorderRadius.circular(12), border: Border.all(color: _white10)),
-                      child: Text(_data['description'] ?? '',
-                          style: GoogleFonts.nunito(color: _white70, fontSize: 12, height: 1.8)),
-                    ),
-                  ],
-                ],
+                ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
 
-  // ── TRACKLIST — one row per track with ITS OWN featured artists ────
+  // ── TRACKLIST ─────────────────────────────────────────────────────
   Widget _buildTracklistSection() {
     final tracks = _trackList(_data);
     return Column(
@@ -1568,31 +1631,21 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
         return Container(
           width: double.infinity,
           margin: const EdgeInsets.only(bottom: 8),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          decoration: BoxDecoration(
-            color: _black3,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: _white10),
-          ),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+          decoration: BoxDecoration(color: _s2, borderRadius: BorderRadius.circular(14)),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              SizedBox(
-                width: 26,
-                child: Text('${i + 1}',
-                    style: GoogleFonts.outfit(color: _greyDark, fontSize: 13, fontWeight: FontWeight.w800)),
-              ),
+              SizedBox(width: 30, child: Text('${i + 1}', style: _ts(14, FontWeight.w600, _t3))),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(title,
-                        style: GoogleFonts.nunito(color: _white, fontSize: 13, fontWeight: FontWeight.w700)),
+                    Text(title, style: _ts(15, FontWeight.w600, _white)),
                     const SizedBox(height: 3),
                     Text(
                       feats.isEmpty ? 'Featuring: None' : 'Featuring: ${feats.join(', ')}',
-                      style: GoogleFonts.nunito(
-                          color: feats.isEmpty ? _greyDark : _white70, fontSize: 12),
+                      style: _ts(13, FontWeight.w400, feats.isEmpty ? _t3 : _white70),
                     ),
                   ],
                 ),
@@ -1604,355 +1657,183 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
     );
   }
 
+  // ── TOP ACTION BAR ────────────────────────────────────────────────
+  Widget _actionBar({
+    required IconData icon,
+    required String label,
+    required Color color,
+    required Color bg,
+    VoidCallback? onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 16),
+        color: bg,
+        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Icon(icon, color: color, size: 17),
+          const SizedBox(width: 9),
+          Text(label, style: _ts(15, FontWeight.w600, color)),
+        ]),
+      ),
+    );
+  }
+
   Widget _buildTopAction() {
     if (_needsPayment) {
       final price = _priceForReleaseType(_data['releaseType']);
-      return GestureDetector(
-        onTap: _payNow,
-        child: Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(vertical: 14),
-          color: _cyan.withValues(alpha: 0.14),
-          child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-            const Icon(Icons.credit_card_rounded, color: _cyan, size: 16),
-            const SizedBox(width: 8),
-            Text('Pay GHC ${price.toStringAsFixed(2)} to Release',
-                style: GoogleFonts.nunito(color: _cyan, fontSize: 13, fontWeight: FontWeight.w800)),
-          ]),
-        ),
+      return _actionBar(
+        icon: Icons.credit_card_rounded,
+        label: 'Pay GHC ${price.toStringAsFixed(2)} to Release',
+        color: _cyan, bg: _cyan.withValues(alpha: 0.16), onTap: _payNow,
       );
     }
     if (_isApproved) {
-      return GestureDetector(
+      return _actionBar(
+        icon: Icons.show_chart_rounded,
+        label: 'Promote This Release',
+        color: _amber, bg: _amber.withValues(alpha: 0.16),
         onTap: () => _launch('https://444musicblog.vercel.app'),
-        child: Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(vertical: 14),
-          color: _amber.withValues(alpha: 0.14),
-          child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-            const Icon(Icons.trending_up_rounded, color: _amber, size: 16),
-            const SizedBox(width: 8),
-            Text('Promote This Release',
-                style: GoogleFonts.nunito(color: _amber, fontSize: 13, fontWeight: FontWeight.w800)),
-          ]),
-        ),
       );
     }
     if (_isTakenDown) {
-      return Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(vertical: 14),
-        color: _slate.withValues(alpha: 0.14),
-        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-          const Icon(Icons.info_outline_rounded, color: _slate, size: 16),
-          const SizedBox(width: 8),
-          Text('This Release Was Taken Down',
-              style: GoogleFonts.nunito(color: _slate, fontSize: 13, fontWeight: FontWeight.w800)),
-        ]),
+      return _actionBar(
+        icon: Icons.info_outline_rounded,
+        label: 'This Release Was Taken Down',
+        color: _takenDown, bg: const Color(0x2998989D),
       );
     }
     if (_isRejected) {
-      return GestureDetector(
+      return _actionBar(
+        icon: Icons.info_outline_rounded,
+        label: 'Check Reasons & Fix',
+        color: _rose, bg: _rose.withValues(alpha: 0.16),
         onTap: () { Navigator.pop(context); widget.onOpenRejection(_data); },
-        child: Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(vertical: 14),
-          color: _rose.withValues(alpha: 0.14),
-          child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-            const Icon(Icons.info_rounded, color: _rose, size: 16),
-            const SizedBox(width: 8),
-            Text('Check Reasons & Fix',
-                style: GoogleFonts.nunito(color: _rose, fontSize: 13, fontWeight: FontWeight.w800)),
-          ]),
-        ),
       );
     }
     return const SizedBox.shrink();
   }
 
-  bool get _hasCredits {
-    final c = _data['credits'];
-    if (c == null || c is! Map) return false;
-    for (final key in ['producer', 'musician', 'writer', 'publishing']) {
-      final list = c[key];
-      if (list is List && list.any((x) => x is Map && (x['name'] ?? '').toString().trim().isNotEmpty)) return true;
-    }
-    return false;
-  }
-
   Widget _buildCoverStrip() {
+    const h = 190.0;
     final url = _data['coverURL']?.toString() ?? '';
-    const h   = 190.0;
-    Widget img;
-    if (url.isNotEmpty && url.startsWith('data:image')) {
-      try {
-        img = Image.memory(base64Decode(url.split(',').last), height: h, width: double.infinity, fit: BoxFit.cover);
-      } catch (_) { img = Container(height: h, color: _black3, width: double.infinity, child: const Icon(Icons.music_note_rounded, color: _greyDark, size: 40)); }
-    } else if (url.isNotEmpty) {
-      img = CachedNetworkImage(imageUrl: url, height: h, width: double.infinity, fit: BoxFit.cover,
-          placeholder: (_, __) => Container(height: h, color: _black3),
-          errorWidget: (_, __, ___) => Container(height: h, color: _black3, width: double.infinity, child: const Icon(Icons.music_note_rounded, color: _greyDark, size: 40)));
-    } else {
-      img = Container(height: h, color: _black3, width: double.infinity, child: const Icon(Icons.music_note_rounded, color: _greyDark, size: 40));
-    }
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(14),
+    return SizedBox(
+      height: h, width: double.infinity,
       child: Stack(
+        fit: StackFit.expand,
         children: [
-          img,
-          Positioned(bottom: 0, left: 0, right: 0,
-            child: Container(height: 60,
-              decoration: BoxDecoration(
-                gradient: LinearGradient(begin: Alignment.bottomCenter, end: Alignment.topCenter,
-                    colors: [_black2, Colors.transparent]),
-              ),
-            ),
-          ),
-          // Cover art can no longer be changed once a release is submitted.
-        ],
-      ),
-    );
-  }
-
-  Widget _buildGeneratingCard() {
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(color: _black3, borderRadius: BorderRadius.circular(14), border: Border.all(color: _white10)),
-      child: Row(children: [
-        const SizedBox(width: 28, height: 28,
-            child: CircularProgressIndicator(strokeWidth: 2, color: _white, backgroundColor: _white10)),
-        const SizedBox(width: 14),
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('Generating Smart Link & UPC…', style: GoogleFonts.nunito(color: _white, fontSize: 13, fontWeight: FontWeight.w700)),
-          Text('Setting up your release profile', style: GoogleFonts.nunito(color: _grey, fontSize: 11)),
-        ])),
-      ]),
-    );
-  }
-
-  Widget _buildSmartLinkCard() {
-    final url = _data['smartLinkURL']?.toString() ?? '';
-    final upc = _data['upc']?.toString() ?? '';
-    return Container(
-      decoration: BoxDecoration(color: _black3, borderRadius: BorderRadius.circular(16), border: Border.all(color: _white20)),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(height: 2, decoration: const BoxDecoration(
-            borderRadius: BorderRadius.vertical(top: Radius.circular(15)),
-            gradient: LinearGradient(colors: [_white40, _white, _white40]),
-          )),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
-            child: Row(children: [
-              const Icon(Icons.link_rounded, color: _white70, size: 15),
-              const SizedBox(width: 6),
-              Text('Smart Link', style: GoogleFonts.nunito(color: _white70, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1)),
-              const Spacer(),
-              const _LiveDot(),
-            ]),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
+          _coverImage(url, width: double.infinity, height: h, iconSize: 44, bg: _s2),
+          Positioned(
+            bottom: 0, left: 0, right: 0,
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              decoration: BoxDecoration(color: _black4, borderRadius: BorderRadius.circular(10), border: Border.all(color: _white10)),
-              child: Row(children: [
-                const Icon(Icons.language_rounded, color: _grey, size: 15),
-                const SizedBox(width: 8),
-                Expanded(child: Text(url,
-                    style: const TextStyle(color: _white70, fontSize: 11, fontFamily: 'monospace'),
-                    overflow: TextOverflow.ellipsis)),
-                const SizedBox(width: 8),
-                GestureDetector(
-                  onTap: _copyLink,
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                    decoration: BoxDecoration(
-                      color: _copiedMsg != null ? _green : _white,
-                      borderRadius: BorderRadius.circular(7),
-                    ),
-                    child: Text(_copiedMsg ?? 'Copy',
-                        style: GoogleFonts.nunito(color: _copiedMsg != null ? _white : _black, fontSize: 11, fontWeight: FontWeight.w800)),
-                  ),
+              height: 70,
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.bottomCenter, end: Alignment.topCenter,
+                  colors: [_s1, Colors.transparent],
                 ),
-              ]),
-            ),
-          ),
-          if (upc.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-                decoration: BoxDecoration(color: _cyan.withValues(alpha: 0.06), borderRadius: BorderRadius.circular(9), border: Border.all(color: _cyan.withValues(alpha: 0.18))),
-                child: Row(children: [
-                  Icon(Icons.qr_code_rounded, color: _cyan.withValues(alpha: 0.7), size: 14),
-                  const SizedBox(width: 6),
-                  Text('UPC / Barcode', style: GoogleFonts.nunito(color: _cyan.withValues(alpha: 0.7), fontSize: 9, fontWeight: FontWeight.w800, letterSpacing: 1)),
-                  const Spacer(),
-                  Text(_formatUPC(upc), style: GoogleFonts.nunito(color: _white, fontSize: 13, fontWeight: FontWeight.w800, letterSpacing: 1)),
-                ]),
               ),
             ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
-            child: Wrap(
-              spacing: 6, runSpacing: 6,
-              children: _stores.map((s) {
-                final hasLink = (_data[s.key] ?? '').toString().trim().isNotEmpty;
-                return Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: hasLink ? _white.withValues(alpha: 0.08) : _black4,
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: hasLink ? _white20 : _white06),
-                  ),
-                  child: Text(s.name, style: GoogleFonts.nunito(color: hasLink ? _white : _greyDark, fontSize: 10, fontWeight: FontWeight.w700)),
-                );
-              }).toList(),
-            ),
           ),
-          Container(
-            padding: const EdgeInsets.fromLTRB(14, 10, 14, 14),
-            decoration: const BoxDecoration(border: Border(top: BorderSide(color: _white10))),
-            child: Row(children: [
-              Expanded(child: _SlBtn(label: 'Open Smart Link', icon: Icons.open_in_new_rounded, primary: true, onTap: () => _launch(url))),
-              const SizedBox(width: 8),
-              Expanded(child: _SlBtn(label: 'Share', icon: Icons.share_rounded, green: true, onTap: _share)),
-            ]),
-          ),
-          if (_stores.any((s) => (_data[s.key] ?? '').toString().trim().isNotEmpty))
-            _buildStoreLinks(),
         ],
       ),
     );
   }
 
-  Widget _buildStoreLinks() {
-    final active = _stores.where((s) => (_data[s.key] ?? '').toString().trim().isNotEmpty).toList();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Divider(color: _white10, height: 1),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-          child: Text('Listen Now', style: GoogleFonts.nunito(color: _grey, fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 1)),
-        ),
-        ...active.map((s) => GestureDetector(
-          onTap: () => _launch(_data[s.key] ?? ''),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-              decoration: BoxDecoration(color: _black4, borderRadius: BorderRadius.circular(12), border: Border.all(color: _white06)),
-              child: Row(children: [
-                Container(width: 34, height: 34,
-                    decoration: BoxDecoration(color: s.color.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(8)),
-                    child: Icon(s.icon, color: s.color, size: 17)),
-                const SizedBox(width: 12),
-                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(s.name, style: GoogleFonts.nunito(color: _white, fontSize: 13, fontWeight: FontWeight.w700)),
-                  Text(s.sub,  style: GoogleFonts.nunito(color: _grey,  fontSize: 10)),
-                ])),
-                const Icon(Icons.chevron_right_rounded, color: _greyDark, size: 18),
-              ]),
-            ),
+  Widget _buildStatusRow(String submitted) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      child: Wrap(
+        spacing: 8, runSpacing: 8,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          _Badge(
+            label: _statusDisplayLabel(_status),
+            color: _statusColor(_status),
+            bg: _statusBg(_status),
+            pulse: _isRejected,
           ),
-        )),
-        const SizedBox(height: 6),
-      ],
+          _Badge(
+            label: _isPaid ? 'Paid' : 'Unpaid',
+            color: _isPaid ? _green : _amber,
+            bg: (_isPaid ? _green : _amber).withValues(alpha: 0.16),
+          ),
+          if (submitted.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(left: 4),
+              child: Text('Submitted $submitted', style: _ts(12, FontWeight.w400, _t2)),
+            ),
+        ],
+      ),
     );
   }
 
-  Widget _buildStatusRow() {
-      final rawCreated = _data['createdAt'];
-    final submittedAt = rawCreated is Timestamp
-        ? _formatDate(rawCreated.toDate())
-        : (rawCreated is int
-            ? _formatDate(DateTime.fromMillisecondsSinceEpoch(rawCreated))
-            : '');
-    final displayLabel = _statusDisplayLabel(_status);
-    final c = _statusColor(_status);
-    return Wrap(
-      spacing: 8, runSpacing: 8,
-      children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          decoration: BoxDecoration(color: c.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(999), border: Border.all(color: c.withValues(alpha: 0.5))),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Container(width: 5, height: 5, decoration: BoxDecoration(color: c, shape: BoxShape.circle)),
-            const SizedBox(width: 5),
-            Text(displayLabel, style: GoogleFonts.nunito(color: c, fontSize: 11, fontWeight: FontWeight.w700)),
-          ]),
-        ),
-        _PaidBadge(paid: _isPaid),
-        if (submittedAt.isNotEmpty)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-            decoration: BoxDecoration(color: _black3, borderRadius: BorderRadius.circular(7), border: Border.all(color: _white10)),
-            child: Text('Submitted $submittedAt', style: GoogleFonts.nunito(color: _grey, fontSize: 11)),
-          ),
-      ],
-    );
-  }
-
-  Widget _buildMetaGrid(List<_MetaField> fields) {
-    return Wrap(spacing: 8, runSpacing: 8,
-        children: fields.map((f) => _MetaFieldWidget(field: f)).toList());
-  }
-
-  Widget _buildCreditsSection() {
-    final credits = _data['credits'];
-    if (credits == null || credits is! Map) return const SizedBox();
-    const sections = [
-      ('producer',   'Producers & Engineers'),
-      ('musician',   'Musicians'),
-      ('writer',     'Songwriters'),
-      ('publishing', 'Publishing & PRO'),
-    ];
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: sections.map((s) {
-        final list  = credits[s.$1];
-        if (list == null || list is! List) return const SizedBox();
-        final valid = list.where((x) => x is Map && (x['name'] ?? '').toString().trim().isNotEmpty).toList();
-        if (valid.isEmpty) return const SizedBox();
-        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(s.$2, style: GoogleFonts.nunito(color: _grey, fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 0.8)),
-          const SizedBox(height: 6),
-          ...valid.map((c) => Padding(
-            padding: const EdgeInsets.only(bottom: 6),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              decoration: BoxDecoration(color: _black3, borderRadius: BorderRadius.circular(10), border: Border.all(color: _white10)),
-              child: Row(children: [
-                Container(width: 6, height: 6, decoration: BoxDecoration(color: _white, borderRadius: BorderRadius.circular(3))),
-                const SizedBox(width: 10),
-                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(c['name'] ?? '', style: GoogleFonts.nunito(color: _white, fontSize: 13, fontWeight: FontWeight.w700)),
-                  if ((c['role'] ?? '').toString().trim().isNotEmpty)
-                    Text(c['role'] ?? '', style: GoogleFonts.nunito(color: _grey, fontSize: 11)),
-                  if ((c['ipi'] ?? '').toString().trim().isNotEmpty)
-                    Text('IPI: ${c['ipi']}', style: GoogleFonts.nunito(color: _greyDark, fontSize: 10)),
-                ])),
-              ]),
+  Widget _buildSmartLinkRow() {
+    final url = _smartLinkUrl;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(14, 10, 12, 10),
+      decoration: BoxDecoration(color: _s2, borderRadius: BorderRadius.circular(14)),
+      child: Row(
+        children: [
+          Expanded(
+            child: GestureDetector(
+              onTap: () => _launch(url),
+              behavior: HitTestBehavior.opaque,
+              child: Text(url, style: _ts(14, FontWeight.w500, _blue)),
             ),
-          )),
-          const SizedBox(height: 10),
-        ]);
-      }).toList(),
+          ),
+          const SizedBox(width: 10),
+          GestureDetector(
+            onTap: _copySmartLinkUrl,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              width: 34, height: 34,
+              decoration: BoxDecoration(shape: BoxShape.circle, color: _smartLinkCopied ? _green : _white),
+              child: Icon(
+                _smartLinkCopied ? Icons.check_rounded : Icons.copy_rounded,
+                color: _smartLinkCopied ? _white : Colors.black,
+                size: 15,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
 
-// ── META FIELD ───────────────────────────────────────────────────────
+// ── META FIELD + GRID ───────────────────────────────────────────────
 class _MetaField {
   final String label;
   final dynamic value;
   final bool full;
   final bool mono;
-  const _MetaField({required this.label, this.value, this.full = false, this.mono = false});
+  final bool dim;
+  const _MetaField({required this.label, this.value, this.full = false, this.mono = false, this.dim = false});
+}
+
+class _MetaGrid extends StatelessWidget {
+  final List<_MetaField> fields;
+  const _MetaGrid({required this.fields});
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, c) {
+      // Phones: single column, like the web at ≤768px. Wider: two columns.
+      final narrow = MediaQuery.of(context).size.width < 768;
+      final full   = c.maxWidth;
+      final half   = (c.maxWidth - 8) / 2;
+      return Wrap(
+        spacing: 8, runSpacing: 8,
+        children: fields.map((f) => SizedBox(
+          width: (narrow || f.full) ? full : half,
+          child: _MetaFieldWidget(field: f),
+        )).toList(),
+      );
+    });
+  }
 }
 
 class _MetaFieldWidget extends StatelessWidget {
@@ -1961,177 +1842,243 @@ class _MetaFieldWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final val     = field.value?.toString().trim() ?? '';
-    final screenW = MediaQuery.of(context).size.width;
-    final w       = field.full ? screenW - 40 : (screenW - 48) / 2;
-    return SizedBox(
-      width: w,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        decoration: BoxDecoration(color: _black3, borderRadius: BorderRadius.circular(10), border: Border.all(color: _white10)),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(field.label.toUpperCase(),
-              style: GoogleFonts.nunito(color: _greyDark, fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 1)),
-          const SizedBox(height: 4),
-          Text(
-            val.isEmpty ? '—' : val,
-            style: field.mono
-                ? TextStyle(fontFamily: 'monospace', color: val.isEmpty ? _greyDark : _white, fontSize: 13, fontWeight: FontWeight.w600, letterSpacing: 0.08)
-                : GoogleFonts.nunito(color: val.isEmpty ? _greyDark : _white, fontSize: 13, fontWeight: FontWeight.w600,
-                fontStyle: val.isEmpty ? FontStyle.italic : FontStyle.normal),
-          ),
-        ]),
-      ),
-    );
-  }
-}
-
-// ════════════════════════════════════════════════════════════════════
-//  SHARED WIDGETS (unchanged)
-// ════════════════════════════════════════════════════════════════════
-class _PaidBadge extends StatelessWidget {
-  final bool paid;
-  const _PaidBadge({required this.paid});
-  @override
-  Widget build(BuildContext context) {
-    final c = paid ? _green : _amber;
+    final raw   = field.value?.toString().trim() ?? '';
+    final empty = raw.isEmpty;
+    final val   = empty ? '—' : raw;
+    final dim   = empty || field.dim;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(color: c.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(999), border: Border.all(color: c.withValues(alpha: 0.5))),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Container(width: 5, height: 5, decoration: BoxDecoration(color: c, shape: BoxShape.circle)),
-        const SizedBox(width: 5),
-        Text(paid ? 'Paid' : 'Unpaid', style: GoogleFonts.nunito(color: c, fontSize: 11, fontWeight: FontWeight.w700)),
-      ]),
-    );
-  }
-}
-
-class _LiveDot extends StatefulWidget {
-  const _LiveDot();
-  @override
-  State<_LiveDot> createState() => _LiveDotState();
-}
-class _LiveDotState extends State<_LiveDot> with SingleTickerProviderStateMixin {
-  late AnimationController _c;
-  @override
-  void initState() { super.initState(); _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 1600))..repeat(reverse: true); }
-  @override
-  void dispose() { _c.dispose(); super.dispose(); }
-  @override
-  Widget build(BuildContext context) => Row(mainAxisSize: MainAxisSize.min, children: [
-    FadeTransition(opacity: _c, child: Container(width: 5, height: 5, decoration: BoxDecoration(color: _green, borderRadius: BorderRadius.circular(3)))),
-    const SizedBox(width: 5),
-    Text('Live', style: GoogleFonts.nunito(color: _green, fontSize: 11, fontWeight: FontWeight.w700)),
-  ]);
-}
-
-class _SlBtn extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final VoidCallback onTap;
-  final bool primary;
-  final bool green;
-  const _SlBtn({required this.label, required this.icon, required this.onTap, this.primary = false, this.green = false});
-  @override
-  Widget build(BuildContext context) {
-    Color bg = _black4; Color fg = _white70; Color border = _white10;
-    if (primary) { bg = _white;  fg = _black;  border = _white; }
-    if (green)   { bg = _green.withValues(alpha: 0.1); fg = _green; border = _green.withValues(alpha: 0.4); }
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 10),
-        decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(9), border: Border.all(color: border)),
-        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-          Icon(icon, color: fg, size: 13),
-          const SizedBox(width: 6),
-          Text(label, style: GoogleFonts.nunito(color: fg, fontSize: 12, fontWeight: FontWeight.w700)),
-        ]),
-      ),
-    );
-  }
-}
-
-class _MetaSectionLabel extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  const _MetaSectionLabel({required this.label, required this.icon});
-  @override
-  Widget build(BuildContext context) => Row(children: [
-    Icon(icon, color: _white70, size: 13),
-    const SizedBox(width: 7),
-    Text(label.toUpperCase(), style: GoogleFonts.nunito(color: _white70, fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 1.2)),
-    const SizedBox(width: 10),
-    Expanded(child: Container(height: 1, decoration: const BoxDecoration(
-      gradient: LinearGradient(colors: [_white20, Colors.transparent]),
-    ))),
-  ]);
-}
-
-class _ModalHeader extends StatelessWidget {
-  final String title, subtitle;
-  const _ModalHeader({required this.title, required this.subtitle});
-  @override
-  Widget build(BuildContext context) => Column(children: [
-    const SizedBox(height: 10),
-    Container(width: 36, height: 4, decoration: BoxDecoration(color: _white20, borderRadius: BorderRadius.circular(2))),
-    const SizedBox(height: 14),
-    Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: Row(children: [
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(title, style: GoogleFonts.nunito(color: _white, fontSize: 16, fontWeight: FontWeight.w800)),
-          if (subtitle.isNotEmpty)
-            Text(subtitle, style: GoogleFonts.nunito(color: _grey, fontSize: 12), overflow: TextOverflow.ellipsis),
-        ])),
-        GestureDetector(
-          onTap: () => Navigator.pop(context),
-          child: Container(
-            width: 30, height: 30,
-            decoration: BoxDecoration(color: _black3, shape: BoxShape.circle, border: Border.all(color: _white10)),
-            child: const Icon(Icons.close_rounded, color: _grey, size: 15),
-          ),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+      decoration: BoxDecoration(color: _s2, borderRadius: BorderRadius.circular(14)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(field.label, style: _ts(12, FontWeight.w500, _t2)),
+        const SizedBox(height: 3),
+        Text(
+          val,
+          style: field.mono
+              ? _mono(15, dim ? _t3 : _white)
+              : _ts(dim ? 14 : 15, dim ? FontWeight.w400 : FontWeight.w500, dim ? _t3 : _white, height: 1.4),
         ),
       ]),
-    ),
-    const SizedBox(height: 14),
-  ]);
+    );
+  }
 }
 
-class _IconBtn extends StatelessWidget {
+// ── CREDITS ──────────────────────────────────────────────────────────
+class _CreditsList extends StatelessWidget {
+  final List list;
+  const _CreditsList({required this.list});
+
+  @override
+  Widget build(BuildContext context) {
+    final valid = list.where((x) => x is Map && (x['name'] ?? '').toString().trim().isNotEmpty).toList();
+    if (valid.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4),
+        child: Text('None added', style: _ts(14, FontWeight.w400, _t3)),
+      );
+    }
+    return Column(
+      children: valid.map((c) => Container(
+        width: double.infinity,
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+        decoration: BoxDecoration(color: _s2, borderRadius: BorderRadius.circular(14)),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 7),
+            child: Container(width: 6, height: 6, decoration: const BoxDecoration(color: _white, shape: BoxShape.circle)),
+          ),
+          const SizedBox(width: 10),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text((c['name'] ?? '').toString(), style: _ts(15, FontWeight.w600, _white)),
+            if ((c['role'] ?? '').toString().trim().isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text(c['role'].toString(), style: _ts(13, FontWeight.w400, _t2)),
+              ),
+            if ((c['ipi'] ?? '').toString().trim().isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text('IPI / CAE: ${c['ipi']}', style: _mono(12, _t3)),
+              ),
+          ])),
+        ]),
+      )).toList(),
+    );
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  SHARED WIDGETS
+// ════════════════════════════════════════════════════════════════════
+class _Badge extends StatefulWidget {
+  final String label;
+  final Color color, bg;
+  final bool pulse;
+  const _Badge({required this.label, required this.color, required this.bg, this.pulse = false});
+  @override
+  State<_Badge> createState() => _BadgeState();
+}
+
+class _BadgeState extends State<_Badge> with SingleTickerProviderStateMixin {
+  AnimationController? _c;
+  @override
+  void initState() {
+    super.initState();
+    if (widget.pulse) {
+      _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 1500))..repeat(reverse: true);
+    }
+  }
+  @override
+  void dispose() { _c?.dispose(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext context) {
+    final dot = Container(width: 6, height: 6, decoration: BoxDecoration(color: widget.color, shape: BoxShape.circle));
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 4),
+      decoration: BoxDecoration(color: widget.bg, borderRadius: BorderRadius.circular(999)),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        _c != null ? FadeTransition(opacity: Tween(begin: 1.0, end: 0.3).animate(_c!), child: dot) : dot,
+        const SizedBox(width: 6),
+        Text(widget.label, style: _ts(12, FontWeight.w600, widget.color, em: 0)),
+      ]),
+    );
+  }
+}
+
+class _ReasonBox extends StatelessWidget {
+  final String label, text;
+  final Color color, bg;
+  const _ReasonBox({required this.label, required this.text, required this.color, required this.bg});
+  @override
+  Widget build(BuildContext context) => Container(
+        width: double.infinity,
+        margin: const EdgeInsets.only(top: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 13),
+        decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(14)),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(label.toUpperCase(), style: _ts(12, FontWeight.w600, color, em: 0.04)),
+          const SizedBox(height: 5),
+          Text(text, style: _ts(14, FontWeight.w400, _white90, height: 1.55)),
+        ]),
+      );
+}
+
+class _SectionLabel extends StatelessWidget {
+  final String label;
+  final IconData? icon;
+  const _SectionLabel({required this.label, this.icon});
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
+        child: Row(children: [
+          if (icon != null) ...[
+            Icon(icon, color: _t2, size: 13),
+            const SizedBox(width: 7),
+          ],
+          Text(label.toUpperCase(), style: _ts(12, FontWeight.w500, _t2, em: 0.04)),
+        ]),
+      );
+}
+
+class _SubLabel extends StatelessWidget {
+  final String label;
+  final bool spaced;
+  const _SubLabel({required this.label, this.spaced = false});
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: EdgeInsets.fromLTRB(4, spaced ? 14 : 4, 4, 8),
+        child: Text(label, style: _ts(13, FontWeight.w500, _t2)),
+      );
+}
+
+class _SheetHeader extends StatelessWidget {
+  final String title, subtitle;
+  const _SheetHeader({required this.title, required this.subtitle});
+  @override
+  Widget build(BuildContext context) => ClipRect(
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+          child: Container(
+            decoration: const BoxDecoration(
+              color: Color(0xDB1C1C1E),
+              border: Border(bottom: BorderSide(color: _sep, width: 0.5)),
+            ),
+            child: Column(children: [
+              const SizedBox(height: 6),
+              Container(
+                width: 36, height: 5,
+                decoration: BoxDecoration(color: const Color(0x4DEBEBF5), borderRadius: BorderRadius.circular(3)),
+              ),
+              const SizedBox(height: 12),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 14),
+                child: Row(children: [
+                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Row(children: [
+                      const Icon(Icons.music_note_rounded, color: _t2, size: 16),
+                      const SizedBox(width: 8),
+                      Text(title, style: _ts(16.8, FontWeight.w700, _white, em: -0.02)),
+                    ]),
+                    if (subtitle.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(subtitle,
+                            style: _ts(13, FontWeight.w400, _t2),
+                            maxLines: 1, overflow: TextOverflow.ellipsis),
+                      ),
+                  ])),
+                  const SizedBox(width: 12),
+                  _CircleBtn(
+                    icon: Icons.close_rounded,
+                    onTap: () => Navigator.pop(context),
+                    color: _t2, size: 30, iconSize: 15,
+                  ),
+                ]),
+              ),
+            ]),
+          ),
+        ),
+      );
+}
+
+class _CircleBtn extends StatelessWidget {
   final IconData icon;
   final VoidCallback onTap;
-  const _IconBtn({required this.icon, required this.onTap});
+  final Color color;
+  final double size, iconSize;
+  const _CircleBtn({required this.icon, required this.onTap, required this.color, this.size = 36, this.iconSize = 17});
   @override
   Widget build(BuildContext context) => GestureDetector(
-    onTap: onTap,
-    child: Container(
-      width: 38, height: 38,
-      decoration: BoxDecoration(color: _white06, borderRadius: BorderRadius.circular(11), border: Border.all(color: _white10)),
-      child: Icon(icon, color: _white, size: 19),
-    ),
-  );
+        onTap: onTap,
+        child: Container(
+          width: size, height: size,
+          decoration: const BoxDecoration(color: _fill, shape: BoxShape.circle),
+          child: Icon(icon, color: color, size: iconSize),
+        ),
+      );
 }
 
-class _TopBtn extends StatelessWidget {
+class _PillBtn extends StatelessWidget {
   final String label;
   final IconData icon;
   final VoidCallback onTap;
-  const _TopBtn({required this.label, required this.icon, required this.onTap});
+  const _PillBtn({required this.label, required this.icon, required this.onTap});
   @override
   Widget build(BuildContext context) => GestureDetector(
-    onTap: onTap,
-    child: Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-      decoration: BoxDecoration(color: _white, borderRadius: BorderRadius.circular(10)),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(icon, color: _black, size: 14),
-        const SizedBox(width: 6),
-        Text(label, style: GoogleFonts.nunito(color: _black, fontSize: 12, fontWeight: FontWeight.w800)),
-      ]),
-    ),
-  );
+        onTap: onTap,
+        child: Container(
+          height: 36,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          decoration: BoxDecoration(color: _white, borderRadius: BorderRadius.circular(999)),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(icon, color: Colors.black, size: 15),
+            const SizedBox(width: 7),
+            Text(label, style: _ts(14, FontWeight.w600, Colors.black)),
+          ]),
+        ),
+      );
 }
 
 class _SidebarSection extends StatelessWidget {
@@ -2139,10 +2086,9 @@ class _SidebarSection extends StatelessWidget {
   const _SidebarSection({required this.label});
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(22, 12, 22, 6),
-    child: Text(label.toUpperCase(),
-        style: GoogleFonts.nunito(color: _greyDark, fontSize: 9, fontWeight: FontWeight.w800, letterSpacing: 2)),
-  );
+        padding: const EdgeInsets.fromLTRB(10, 16, 10, 6),
+        child: Text(label.toUpperCase(), style: _ts(12, FontWeight.w500, _t3, em: 0.04)),
+      );
 }
 
 class _SidebarItem extends StatefulWidget {
@@ -2154,38 +2100,101 @@ class _SidebarItem extends StatefulWidget {
   @override
   State<_SidebarItem> createState() => _SidebarItemState();
 }
+
 class _SidebarItemState extends State<_SidebarItem> {
   bool _pressed = false;
   @override
   Widget build(BuildContext context) => GestureDetector(
-    onTapDown:   (_) => setState(() => _pressed = true),
-    onTapUp:     (_) { setState(() => _pressed = false); widget.onTap(); },
-    onTapCancel: ()  => setState(() => _pressed = false),
-    child: AnimatedContainer(
-      duration: const Duration(milliseconds: 140),
-      margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 1),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-      decoration: BoxDecoration(
-        color: widget.active ? _white10 : (_pressed ? _white06 : Colors.transparent),
-        borderRadius: BorderRadius.circular(11),
-        border: widget.active ? Border.all(color: _white10) : null,
-      ),
-      child: Row(children: [
-        Icon(widget.icon, color: widget.active ? _white : _grey, size: 17),
-        const SizedBox(width: 13),
-        Text(widget.label, style: GoogleFonts.nunito(
-            color: widget.active ? _white : _grey,
-            fontSize: 14, fontWeight: widget.active ? FontWeight.w700 : FontWeight.w600)),
-        const Spacer(),
-        Icon(Icons.arrow_forward_ios_rounded, color: widget.active ? _white40 : Colors.transparent, size: 11),
-      ]),
-    ),
-  );
+        behavior: HitTestBehavior.opaque,
+        onTapDown:   (_) => setState(() => _pressed = true),
+        onTapUp:     (_) { setState(() => _pressed = false); widget.onTap(); },
+        onTapCancel: ()  => setState(() => _pressed = false),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          margin: const EdgeInsets.symmetric(vertical: 1),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: widget.active ? _fill : (_pressed ? _fillSoft : Colors.transparent),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(children: [
+            Icon(widget.icon, color: widget.active ? _white : _t2, size: 17),
+            const SizedBox(width: 11),
+            Text(widget.label,
+                style: _ts(15, FontWeight.w500, widget.active ? _white : _t2)),
+          ]),
+        ),
+      );
 }
 
-class _SidebarDivider extends StatelessWidget {
-  const _SidebarDivider();
+// iOS-style alert (used for "Proceed to payment?")
+class _IosAlert extends StatelessWidget {
+  final IconData icon;
+  final Color iconColor;
+  final String title, message, cancelLabel, confirmLabel;
+  const _IosAlert({
+    required this.icon,
+    required this.iconColor,
+    required this.title,
+    required this.message,
+    required this.cancelLabel,
+    required this.confirmLabel,
+  });
+
   @override
-  Widget build(BuildContext context) =>
-      Container(margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 8), height: 1, color: _white10);
+  Widget build(BuildContext context) {
+    Widget action(String label, bool primary, bool result) => Expanded(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => Navigator.pop(context, result),
+            child: Container(
+              padding: const EdgeInsets.symmetric(vertical: 13),
+              alignment: Alignment.center,
+              child: Text(label, style: _ts(17, primary ? FontWeight.w600 : FontWeight.w400, _blue, em: -0.02)),
+            ),
+          ),
+        );
+    return Center(
+      child: Material(
+        color: Colors.transparent,
+        child: SizedBox(
+          width: 300,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(18),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
+              child: Container(
+                color: const Color(0xF02C2C2E),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 22, 16, 18),
+                      child: Column(children: [
+                        Container(
+                          width: 48, height: 48,
+                          decoration: BoxDecoration(color: iconColor.withValues(alpha: 0.16), shape: BoxShape.circle),
+                          child: Icon(icon, color: iconColor, size: 22),
+                        ),
+                        const SizedBox(height: 14),
+                        Text(title, textAlign: TextAlign.center, style: _ts(17, FontWeight.w600, _white, em: -0.02)),
+                        const SizedBox(height: 6),
+                        Text(message, textAlign: TextAlign.center, style: _ts(13, FontWeight.w400, _white70, height: 1.45)),
+                      ]),
+                    ),
+                    Container(height: 0.5, color: _sep),
+                    Row(children: [
+                      action(cancelLabel, false, false),
+                      Container(width: 0.5, height: 48, color: _sep),
+                      action(confirmLabel, true, true),
+                    ]),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
