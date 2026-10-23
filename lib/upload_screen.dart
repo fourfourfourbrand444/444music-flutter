@@ -1,54 +1,65 @@
+// 444MUSIC — Upload Files screen (step 1 of 3)
+// Mirrors upload files.html: iOS grouped rows, large title, 3-step progress,
+// 4000x4000 JPG cover check, WAV header check, R2 audio upload via backend,
+// Cloudinary cover upload, artist sheet (Main on Track 1 only, Featured).
+//
+// pubspec needs: firebase_auth, google_fonts, http, image_picker, url_launcher
+
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
+import 'dart:typed_data';
+import 'dart:ui' show ImageFilter;
+
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
+import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'dart:convert';
 
-// ─── PALETTE ────────────────────────────────────────────────────────
-const _black       = Color(0xFF000000);
-const _black1      = Color(0xFF0A0A0A);
-const _black2      = Color(0xFF111111);
-const _black3      = Color(0xFF1A1A1A);
-const _black4      = Color(0xFF222222);
-const _white       = Color(0xFFFFFFFF);
-const _white70     = Color(0xB3FFFFFF);
-const _white40     = Color(0x66FFFFFF);
-const _white20     = Color(0x33FFFFFF);
-const _white10     = Color(0x1AFFFFFF);
-const _white06     = Color(0x0FFFFFFF);
-const _grey        = Color(0xFF888888);
-const _greyDark    = Color(0xFF444444);
-const _green       = Color(0xFF22C55E);
-const _greenDim    = Color(0x1F22C55E);
-const _greenBorder = Color(0x3322C55E);
-const _red         = Color(0xFFEF4444);
-const _redDim      = Color(0x18EF4444);
-const _redBorder   = Color(0x33EF4444);
-const _amber       = Color(0xFFF59E0B);
-const _amberDim    = Color(0x18F59E0B);
-const _amberBorder = Color(0x33F59E0B);
-
-// ─── CLOUDINARY ──────────────────────────────────────────────────────
-const _cloudinaryUrl    = 'https://api.cloudinary.com/v1_1/dlbgqtvqg/auto/upload';
+// ─── CONFIG ──────────────────────────────────────────────────────────
+const _cloudinaryUrl = 'https://api.cloudinary.com/v1_1/dlbgqtvqg/auto/upload';
 const _cloudinaryPreset = 'glmamp2y';
+const _backendUrl = 'https://four44music-broadcast-backend.onrender.com';
 
-// ─── BRAND ICONS (Simple Icons CDN) ──────────────────────────────────
-const _spotifyIconUrl    = 'https://cdn.simpleicons.org/spotify/1DB954';
-const _appleMusicIconUrl = 'https://cdn.simpleicons.org/applemusic/fc3c44';
+// ─── PALETTE (same tokens as the web page) ───────────────────────────
+class _C {
+  static const bg = Color(0xFF000000);
+  static const s1 = Color(0xFF1C1C1E);
+  static const s2 = Color(0xFF2C2C2E);
+  static const s3 = Color(0xFF636366);
+  static const sep = Color(0x8C545458);
+  static const fill = Color(0x3D787880);
+  static const t1 = Color(0xFFFFFFFF);
+  static const t2 = Color(0x99EBEBF5);
+  static const t3 = Color(0x4DEBEBF5);
+  static const blue = Color(0xFF0A84FF);
+  static const yellow = Color(0xFFFDEB0D);
+  static const green = Color(0xFF30D158);
+  static const rose = Color(0xFFFF453A);
+  static const green14 = Color(0x2430D158);
+  static const green16 = Color(0x2930D158);
+  static const rose12 = Color(0x1FFF453A);
+  static const rose14 = Color(0x24FF453A);
+  static const bar = Color(0xB8000000);
+}
 
-// ─── ARTIST ENTRY ──────────────────────────────────────────────────
-// Replaces the old flat artistName + featuring strings. `type` is one
-// of 'main' / 'featured' / 'secondary'. Only Track 1 (index 0) is ever
-// allowed to hold an artist tagged 'main' — enforced both in the
-// add/edit dialog (Main pill hidden on later tracks) and defensively
-// via _normalizeArtistTypes(), so a release can never end up with more
-// than one Main artist even if track order changes.
+TextStyle _ts(double s, FontWeight w, Color c, {double? ls, double? h}) =>
+    GoogleFonts.inter(
+      fontSize: s,
+      fontWeight: w,
+      color: c,
+      letterSpacing: ls ?? -s * 0.011,
+      height: h,
+    );
+
+// ─── MODELS ──────────────────────────────────────────────────────────
 class ArtistEntry {
   String name;
-  String type;
+  String type; // 'main' | 'featured'
   String spotifyUrl;
   String appleUrl;
   ArtistEntry({
@@ -66,60 +77,336 @@ class ArtistEntry {
       };
 }
 
-// ─── TRACK MODEL ─────────────────────────────────────────────────────
 class TrackModel {
   final String id;
-  List<ArtistEntry> artists;
-  String releaseTitle;
-  File? mp3File;
-  String? mp3FileName;
-  double progress;
-  String status;
-  String errorMsg;
-  Map<String, String> errors;
-  // The real Cloudinary URL once this track finishes uploading. Carried
-  // forward to Release Info so the submission doc (and any email) can
-  // always find the actual audio file.
-  String? fileUrl;
+  final TextEditingController titleCtrl = TextEditingController();
+  final List<ArtistEntry> artists = [];
+  File? wavFile;
+  String? wavName;
+  int wavSize = 0;
+  double progress = 0;
+  String status = 'idle'; // idle | uploading | success | error
+  String errorMsg = '';
+  final Map<String, String> errors = {}; // title | artists | wav
+  String? fileKey;
+  TrackModel(this.id);
+}
 
-  TrackModel({
-    required this.id,
-    List<ArtistEntry>? artists,
-    this.releaseTitle = '',
-    this.mp3File,
-    this.mp3FileName,
-    this.progress = 0,
-    this.status = 'idle',
-    this.errorMsg = '',
-    Map<String, String>? errors,
-    this.fileUrl,
-  })  : artists = artists ?? [],
-        errors = errors ?? {};
+class _UpRow {
+  final String name;
+  final String status; // uploading | done | error
+  final int pct;
+  const _UpRow(this.name, this.status, this.pct);
+}
 
-  TrackModel copyWith({
-    List<ArtistEntry>? artists,
-    String? releaseTitle,
-    File? mp3File,
-    String? mp3FileName,
-    double? progress,
-    String? status,
-    String? errorMsg,
-    Map<String, String>? errors,
-    String? fileUrl,
-  }) {
-    return TrackModel(
-      id:           id,
-      artists:      artists      ?? this.artists,
-      releaseTitle: releaseTitle ?? this.releaseTitle,
-      mp3File:      mp3File      ?? this.mp3File,
-      mp3FileName:  mp3FileName  ?? this.mp3FileName,
-      progress:     progress     ?? this.progress,
-      status:       status       ?? this.status,
-      errorMsg:     errorMsg     ?? this.errorMsg,
-      errors:       errors       ?? this.errors,
-      fileUrl:      fileUrl      ?? this.fileUrl,
+// ─── SHARED HELPERS ──────────────────────────────────────────────────
+String _msg(Object e) => e.toString().replaceFirst('Exception: ', '');
+
+List<String> _badNameChars(String s) {
+  final out = <String>[];
+  for (final m in RegExp(r'[,<>{}\[\]"]').allMatches(s)) {
+    final ch = m.group(0)!;
+    if (!out.contains(ch)) out.add(ch);
+  }
+  var depth = 0;
+  var broken = false;
+  for (final ch in s.split('')) {
+    if (ch == '(') {
+      depth++;
+    } else if (ch == ')') {
+      depth--;
+      if (depth < 0) {
+        broken = true;
+        break;
+      }
+    }
+  }
+  if (broken || depth != 0) out.add('OPEN');
+  return out;
+}
+
+String _nameMsg(String name, List<String> bad) {
+  final chars = bad.where((x) => x != 'OPEN').toList();
+  final parts = <String>[];
+  if (chars.isNotEmpty) parts.add("can't contain ${chars.join(' ')}");
+  if (bad.contains('OPEN')) parts.add('has a bracket ( ) that is not closed');
+  final tail = bad.contains(',')
+      ? ' Add each artist separately instead of using commas.'
+      : '';
+  return 'Artist name "$name" ${parts.join(' and ')}.$tail';
+}
+
+String _fmtBytes(int b) => b < 1024 * 1024
+    ? '${(b / 1024).toStringAsFixed(1)} KB'
+    : '${(b / (1024 * 1024)).toStringAsFixed(1)} MB';
+
+Future<void> _openUrl(String url) async {
+  var u = url.trim();
+  if (u.isEmpty) return;
+  if (!u.startsWith('http')) u = 'https://$u';
+  final uri = Uri.tryParse(u);
+  if (uri == null) return;
+  try {
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
+  } catch (_) {}
+}
+
+// Grouped iOS surface with inset hairline separators between rows.
+Widget _group(List<Widget> rows,
+    {Color color = _C.s1, Border? border}) {
+  final items = <Widget>[];
+  for (var i = 0; i < rows.length; i++) {
+    if (i > 0) items.add(const _Sep());
+    items.add(rows[i]);
+  }
+  return Container(
+    decoration: BoxDecoration(
+      color: color,
+      borderRadius: BorderRadius.circular(16),
+      border: border,
+    ),
+    clipBehavior: Clip.antiAlias,
+    child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: items),
+  );
+}
+
+class _Sep extends StatelessWidget {
+  const _Sep();
+  @override
+  Widget build(BuildContext context) => const Padding(
+        padding: EdgeInsets.only(left: 16),
+        child: SizedBox(
+          height: 0.5,
+          width: double.infinity,
+          child: ColoredBox(color: _C.sep),
+        ),
+      );
+}
+
+Widget _sh(String title, {String? trailing}) => Padding(
+      padding: const EdgeInsets.fromLTRB(16, 30, 16, 8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        crossAxisAlignment: CrossAxisAlignment.baseline,
+        textBaseline: TextBaseline.alphabetic,
+        children: [
+          Text(title.toUpperCase(),
+              style: _ts(13, FontWeight.w500, _C.t2, ls: 0.52)),
+          if (trailing != null)
+            Text(trailing, style: _ts(13, FontWeight.w400, _C.t3)),
+        ],
+      ),
+    );
+
+Widget _ferr(String msg,
+        {bool center = false,
+        EdgeInsets pad = const EdgeInsets.fromLTRB(16, 8, 16, 10)}) =>
+    Padding(
+      padding: pad,
+      child: Row(
+        mainAxisAlignment:
+            center ? MainAxisAlignment.center : MainAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.only(top: 1),
+            child: Icon(Icons.error_outline_rounded, size: 14, color: _C.rose),
+          ),
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(msg,
+                style: _ts(13, FontWeight.w500, _C.rose, h: 1.3)),
+          ),
+        ],
+      ),
+    );
+
+Widget _tnote(String msg, {required bool ok}) => Container(
+      margin: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+      decoration: BoxDecoration(
+        color: ok ? _C.green14 : _C.rose14,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(children: [
+        Icon(
+            ok ? Icons.check_circle_outline_rounded : Icons.warning_amber_rounded,
+            size: 17,
+            color: ok ? _C.green : _C.rose),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(msg,
+              style: _ts(14, FontWeight.w500, ok ? _C.green : _C.rose, h: 1.35)),
+        ),
+      ]),
+    );
+
+Widget _bareField({
+  required TextEditingController c,
+  required String hint,
+  bool enabled = true,
+  ValueChanged<String>? onChanged,
+  TextInputType? type,
+  bool autofocus = false,
+}) =>
+    TextField(
+      controller: c,
+      enabled: enabled,
+      onChanged: onChanged,
+      keyboardType: type,
+      autofocus: autofocus,
+      autocorrect: type == null,
+      textAlign: TextAlign.right,
+      cursorColor: _C.yellow,
+      style: _ts(16, FontWeight.w400, enabled ? _C.t1 : _C.t2),
+      decoration: InputDecoration(
+        isDense: true,
+        border: InputBorder.none,
+        hintText: hint,
+        hintStyle: _ts(16, FontWeight.w400, _C.t3),
+        contentPadding: const EdgeInsets.symmetric(vertical: 15),
+      ),
+    );
+
+// Press feedback: gentle scale and/or row highlight, like iOS.
+class _Tap extends StatefulWidget {
+  final VoidCallback? onTap;
+  final Widget child;
+  final bool highlight;
+  final double scale;
+  const _Tap({
+    required this.onTap,
+    required this.child,
+    this.highlight = false,
+    this.scale = 1,
+  });
+  @override
+  State<_Tap> createState() => _TapState();
+}
+
+class _TapState extends State<_Tap> {
+  bool _down = false;
+  void _set(bool v) {
+    if (_down != v) setState(() => _down = v);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final on = widget.onTap != null;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTapDown: on ? (_) => _set(true) : null,
+      onTapUp: on ? (_) => _set(false) : null,
+      onTapCancel: on ? () => _set(false) : null,
+      onTap: widget.onTap,
+      child: AnimatedScale(
+        scale: (_down && widget.scale != 1) ? widget.scale : 1,
+        duration: const Duration(milliseconds: 160),
+        curve: Curves.easeOutCubic,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          color: (widget.highlight && _down)
+              ? const Color(0x0FFFFFFF)
+              : const Color(0x00000000),
+          child: widget.child,
+        ),
+      ),
     );
   }
+}
+
+// Small round icon button used for edit / remove.
+Widget _roundBtn(IconData icon, VoidCallback onTap, {double size = 28}) =>
+    _Tap(
+      onTap: onTap,
+      scale: 0.9,
+      child: Container(
+        width: size,
+        height: size,
+        decoration:
+            const BoxDecoration(color: _C.fill, shape: BoxShape.circle),
+        child: Icon(icon, size: 13, color: _C.t2),
+      ),
+    );
+
+// ─── BRAND GLYPHS (drawn, so no SVG package is needed) ───────────────
+class _Brand extends StatelessWidget {
+  final bool spotify;
+  final double size;
+  final double opacity;
+  const _Brand({required this.spotify, this.size = 14, this.opacity = 1});
+
+  @override
+  Widget build(BuildContext context) {
+    final w = spotify
+        ? CustomPaint(size: Size.square(size), painter: _SpotifyPainter())
+        : Container(
+            width: size,
+            height: size,
+            decoration: BoxDecoration(
+              color: const Color(0xFFFC3C44),
+              borderRadius: BorderRadius.circular(size * 0.26),
+            ),
+            child: Icon(Icons.music_note_rounded,
+                size: size * 0.74, color: Colors.white),
+          );
+    return Opacity(opacity: opacity, child: w);
+  }
+}
+
+class _SpotifyPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    canvas.drawCircle(Offset(w / 2, w / 2), w / 2,
+        Paint()..color = const Color(0xFF1DB954));
+    final p = Paint()
+      ..color = Colors.black
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    void arc(double y, double half, double peak, double sw) {
+      p.strokeWidth = sw;
+      final path = Path()
+        ..moveTo(w / 2 - half, y)
+        ..quadraticBezierTo(w / 2, y - peak * 2, w / 2 + half, y);
+      canvas.drawPath(path, p);
+    }
+
+    arc(w * 0.40, w * 0.28, w * 0.10, w * 0.085);
+    arc(w * 0.55, w * 0.23, w * 0.08, w * 0.07);
+    arc(w * 0.68, w * 0.17, w * 0.06, w * 0.06);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter old) => false;
+}
+
+class _PulseDot extends StatefulWidget {
+  const _PulseDot();
+  @override
+  State<_PulseDot> createState() => _PulseDotState();
+}
+
+class _PulseDotState extends State<_PulseDot>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: 900))
+    ..repeat(reverse: true);
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => FadeTransition(
+        opacity: Tween<double>(begin: 0.35, end: 1).animate(_c),
+        child: Container(
+            width: 8,
+            height: 8,
+            decoration: const BoxDecoration(
+                color: _C.yellow, shape: BoxShape.circle)),
+      );
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -131,188 +418,234 @@ class UploadScreen extends StatefulWidget {
   State<UploadScreen> createState() => _UploadScreenState();
 }
 
-class _UploadScreenState extends State<UploadScreen>
-    with TickerProviderStateMixin {
+class _UploadScreenState extends State<UploadScreen> {
+  final ScrollController _scroll = ScrollController();
 
   File? _coverFile;
   String? _coverError;
+  String? _coverUrl;
 
-  final List<TrackModel> _tracks   = [TrackModel(id: '1')];
-  final Set<String>      _expanded = {'1'};
+  int _idSeq = 0;
+  late final List<TrackModel> _tracks = [TrackModel('t${++_idSeq}')];
+  late final Set<String> _expanded = {_tracks.first.id};
 
-  bool   _uploading   = false;
-  bool   _allDone     = false;
+  bool _uploading = false;
+  bool _allDone = false;
   String _globalError = '';
+  bool _rulesOpen = false;
+
+  final Map<String, _UpRow> _up = {};
 
   String? _paymentReference;
-  bool _paymentArgLoaded = false;
-
-  late AnimationController _entranceCtrl;
-  late Animation<double>   _entranceFade;
-  late Animation<Offset>   _entranceSlide;
-
-  // ── FONT SHORTHAND ───────────────────────────────────────────────
-  TextStyle _t(double size, FontWeight w, Color c, {double ls = 0}) =>
-      GoogleFonts.bebasNeue(fontSize: size, fontWeight: w, color: c, letterSpacing: ls);
-
-  TextStyle _body(double size, FontWeight w, Color c, {double ls = 0, double h = 1.4}) =>
-      GoogleFonts.nunito(fontSize: size, fontWeight: w, color: c, letterSpacing: ls, height: h);
+  bool _argLoaded = false;
 
   @override
   void initState() {
     super.initState();
     SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle.light.copyWith(
-      statusBarColor:           Colors.transparent,
-      systemNavigationBarColor: _black,
+      statusBarColor: Colors.transparent,
+      systemNavigationBarColor: _C.bg,
     ));
-    _entranceCtrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 600));
-    _entranceFade = CurvedAnimation(
-        parent: _entranceCtrl, curve: Curves.easeOut);
-    _entranceSlide = Tween<Offset>(
-        begin: const Offset(0, 0.04), end: Offset.zero).animate(
-        CurvedAnimation(parent: _entranceCtrl, curve: Curves.easeOutCubic));
-    _entranceCtrl.forward();
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (!_paymentArgLoaded) {
+    if (!_argLoaded) {
       final args = ModalRoute.of(context)?.settings.arguments;
-      if (args is String && args.isNotEmpty) {
-        _paymentReference = args;
-      }
-      _paymentArgLoaded = true;
+      if (args is String && args.isNotEmpty) _paymentReference = args;
+      _argLoaded = true;
     }
   }
 
   @override
   void dispose() {
-    _entranceCtrl.dispose();
+    _scroll.dispose();
+    for (final t in _tracks) {
+      t.titleCtrl.dispose();
+    }
     super.dispose();
   }
 
-  // ── LINK OPEN (Spotify / Apple Music profile icons) ────────────────
-  Future<void> _openUrl(String url) async {
-    final uri = Uri.tryParse(url);
-    if (uri == null) return;
+  int get _completed => _tracks.where((t) => t.status == 'success').length;
+
+  // ── COVER ──────────────────────────────────────────────────────────
+  // AVVO rule: JPG, exactly 4000 x 4000, RGB. Read from the file header.
+  Future<String> _checkCover(File file, String name) async {
+    if (!RegExp(r'\.jpe?g$', caseSensitive: false).hasMatch(name)) {
+      return 'Cover art must be a JPG file.';
+    }
+    final len = await file.length();
+    final raf = await file.open();
+    final Uint8List b;
     try {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } catch (_) {}
+      b = await raf.read(math.min(len, 2 * 1024 * 1024));
+    } finally {
+      await raf.close();
+    }
+    final v = ByteData.sublistView(b);
+    if (v.lengthInBytes < 4 || v.getUint16(0) != 0xFFD8) {
+      return 'This is not a valid JPG file.';
+    }
+    var p = 2;
+    while (p + 4 <= v.lengthInBytes) {
+      if (v.getUint8(p) != 0xFF) {
+        p++;
+        continue;
+      }
+      final m = v.getUint8(p + 1);
+      if (m == 0xFF) {
+        p++;
+        continue;
+      }
+      if (m == 0xDA) break;
+      if (m == 0xD8 || m == 0x01 || (m >= 0xD0 && m <= 0xD7)) {
+        p += 2;
+        continue;
+      }
+      final segLen = v.getUint16(p + 2);
+      if (m >= 0xC0 && m <= 0xCF && m != 0xC4 && m != 0xC8 && m != 0xCC) {
+        if (p + 10 > v.lengthInBytes) break;
+        final h = v.getUint16(p + 5);
+        final w = v.getUint16(p + 7);
+        final comps = v.getUint8(p + 9);
+        if (w != 4000 || h != 4000) {
+          return 'Cover art must be exactly 4000 × 4000 px. Yours is $w × $h.';
+        }
+        if (comps != 3) {
+          return 'Cover art must be RGB. CMYK and grayscale images are not accepted.';
+        }
+        return '';
+      }
+      p += 2 + segLen;
+    }
+    return 'Could not read this image. Please export it again as a JPG.';
   }
 
-  // ── COVER ART PICKER ─────────────────────────────────────────────
   Future<void> _pickCover() async {
-    final picker = ImagePicker();
-    final picked = await picker.pickImage(
-        source: ImageSource.gallery, imageQuality: 95);
-    if (picked != null) {
+    if (_uploading) return;
+    try {
+      final picked =
+          await ImagePicker().pickImage(source: ImageSource.gallery);
+      if (picked == null) return;
+      final file = File(picked.path);
+      final problem = await _checkCover(file, picked.name);
+      if (!mounted) return;
       setState(() {
-        _coverFile  = File(picked.path);
-        _coverError = null;
+        if (problem.isNotEmpty) {
+          _coverError = problem;
+        } else {
+          _coverFile = file;
+          _coverUrl = null;
+          _coverError = null;
+        }
       });
+    } catch (_) {
+      if (mounted) setState(() => _coverError = 'Could not pick the image. Try again.');
     }
   }
 
-  // ── MP3 PICKER ───────────────────────────────────────────────────
-  Future<void> _pickMp3(String trackId) async {
+  // ── WAV ────────────────────────────────────────────────────────────
+  // AVVO rule: WAV, 16-bit+, 44.1 kHz+, stereo. Read from the real header.
+  Future<String> _checkWav(File file) async {
+    final len = await file.length();
+    final raf = await file.open();
+    final Uint8List b;
     try {
-      _updateTrack(trackId, (t) {
-        final errs = Map<String, String>.from(t.errors)..remove('mp3');
-        return t.copyWith(errors: errs);
-      });
+      b = await raf.read(math.min(len, 65536));
+    } finally {
+      await raf.close();
+    }
+    final v = ByteData.sublistView(b);
+    String tag(int o) => String.fromCharCodes(
+        [v.getUint8(o), v.getUint8(o + 1), v.getUint8(o + 2), v.getUint8(o + 3)]);
+    if (v.lengthInBytes < 12 || tag(0) != 'RIFF' || tag(8) != 'WAVE') {
+      return 'This is not a valid WAV file.';
+    }
+    var pos = 12;
+    while (pos + 8 <= v.lengthInBytes) {
+      final id = tag(pos);
+      final size = v.getUint32(pos + 4, Endian.little);
+      if (id == 'fmt ' && pos + 24 <= v.lengthInBytes) {
+        final channels = v.getUint16(pos + 10, Endian.little);
+        final rate = v.getUint32(pos + 12, Endian.little);
+        final bits = v.getUint16(pos + 22, Endian.little);
+        if (bits < 16) {
+          return 'Audio must be 16-bit or higher. Re-export at 16-bit or 24-bit.';
+        }
+        if (rate < 44100) {
+          return 'Audio must be 44.1 kHz or higher. Re-export at 44.1 kHz or 48 kHz.';
+        }
+        if (channels != 2) {
+          return 'Audio must be stereo. Mono files are not accepted.';
+        }
+        return '';
+      }
+      pos += 8 + size + (size % 2);
+    }
+    return 'Could not read this WAV file. Please re-export it and try again.';
+  }
 
+  Future<void> _pickWav(TrackModel t) async {
+    try {
       final result = await ImagePicker().pickMedia();
       if (result == null) return;
-
-      final ext = result.path.split('.').last.toLowerCase();
-      if (ext != 'mp3') {
-        _updateTrack(trackId, (t) => t.copyWith(
-          errors: {...t.errors, 'mp3':
-          '.$ext files are not accepted. Please select an MP3 file only.'},
-        ));
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            backgroundColor: _black2,
-            behavior: SnackBarBehavior.floating,
-            margin: const EdgeInsets.all(16),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-              side: const BorderSide(color: _redBorder),
-            ),
-            content: Row(children: [
-              const Icon(Icons.block_rounded, color: _red, size: 18),
-              const SizedBox(width: 10),
-              Expanded(child: Text(
-                '.$ext is not allowed — MP3 only',
-                style: GoogleFonts.nunito(
-                    color: _white, fontSize: 13, fontWeight: FontWeight.w600),
-              )),
-            ]),
-            duration: const Duration(seconds: 4),
-          ));
-        }
+      final name = result.name.isNotEmpty ? result.name : result.path;
+      final ext = name.split('.').last.toLowerCase();
+      if (ext != 'wav') {
+        setState(() => t.errors['wav'] =
+            '.$ext files are not accepted. Please select a WAV file only.');
         return;
       }
-
       final file = File(result.path);
       final size = await file.length();
-      if (size > 50 * 1024 * 1024) {
-        _updateTrack(trackId, (t) => t.copyWith(
-          errors: {...t.errors, 'mp3': 'File exceeds 50 MB limit.'},
-        ));
+      if (size > 100 * 1024 * 1024) {
+        setState(() => t.errors['wav'] = 'File exceeds the 100 MB limit.');
         return;
       }
-
-      _updateTrack(trackId, (t) => t.copyWith(
-        mp3File:     file,
-        mp3FileName: result.name,
-        errors:      Map.from(t.errors)..remove('mp3'),
-      ));
-    } catch (e) {
-      _updateTrack(trackId, (t) => t.copyWith(
-        errors: {...t.errors, 'mp3': 'Could not pick file. Try again.'},
-      ));
+      final problem = await _checkWav(file);
+      if (!mounted) return;
+      if (problem.isNotEmpty) {
+        setState(() => t.errors['wav'] = problem);
+        return;
+      }
+      setState(() {
+        t.wavFile = file;
+        t.wavName = name;
+        t.wavSize = size;
+        t.errors.remove('wav');
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(() => t.errors['wav'] = 'Could not pick the file. Try again.');
+      }
     }
   }
 
-  // ── TRACK HELPERS ────────────────────────────────────────────────
-  void _updateTrack(String id, TrackModel Function(TrackModel) fn) {
-    setState(() {
-      final i = _tracks.indexWhere((t) => t.id == id);
-      if (i != -1) _tracks[i] = fn(_tracks[i]);
-    });
-  }
-
+  // ── TRACK HELPERS ──────────────────────────────────────────────────
   void _addTrack() {
-    final id = DateTime.now().millisecondsSinceEpoch.toString();
+    final t = TrackModel('t${++_idSeq}');
     setState(() {
-      _tracks.add(TrackModel(id: id));
-      _expanded.add(id);
+      _tracks.add(t);
+      _expanded.add(t.id);
     });
   }
 
-  void _removeTrack(String id) {
+  void _removeTrack(TrackModel t) {
     setState(() {
-      _tracks.removeWhere((t) => t.id == id);
-      _expanded.remove(id);
-      _normalizeArtistTypes();
+      _tracks.remove(t);
+      _expanded.remove(t.id);
+      _normalize();
     });
+    t.titleCtrl.dispose();
   }
 
-  void _toggleExpand(String id) {
-    setState(() {
-      if (_expanded.contains(id)) _expanded.remove(id);
-      else _expanded.add(id);
-    });
-  }
+  void _toggle(String id) => setState(() {
+        if (!_expanded.remove(id)) _expanded.add(id);
+      });
 
-  // Only _tracks[0] may hold a Main-tagged artist. If track order shifts
-  // (Track 1 removed, a later track becomes index 0, etc.), any artist
-  // still tagged 'main' on a track that's no longer first is downgraded
-  // to 'featured' here — so a stray Main tag can never survive a reorder.
-  void _normalizeArtistTypes() {
+  // Only Track 1 may hold a Main artist.
+  void _normalize() {
     for (var i = 1; i < _tracks.length; i++) {
       for (final a in _tracks[i].artists) {
         if (a.type == 'main') a.type = 'featured';
@@ -320,219 +653,363 @@ class _UploadScreenState extends State<UploadScreen>
     }
   }
 
-  // ── VALIDATE ─────────────────────────────────────────────────────
+  Future<ArtistEntry?> _artistSheet(
+      {ArtistEntry? existing, required bool first, required bool hasMain}) {
+    return showModalBottomSheet<ArtistEntry>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: const Color(0x80000000),
+      constraints: const BoxConstraints(maxWidth: 520),
+      builder: (_) =>
+          _ArtistSheet(existing: existing, first: first, hasMain: hasMain),
+    );
+  }
+
+  Future<void> _addArtist(TrackModel t, bool first) async {
+    final r = await _artistSheet(
+        first: first, hasMain: t.artists.any((a) => a.type == 'main'));
+    if (r != null && mounted) {
+      setState(() {
+        t.errors.remove('artists');
+        t.artists.add(r);
+        _normalize();
+      });
+    }
+  }
+
+  Future<void> _editArtist(TrackModel t, int idx, bool first) async {
+    final r = await _artistSheet(
+        existing: t.artists[idx],
+        first: first,
+        hasMain: t.artists.any((a) => a.type == 'main'));
+    if (r != null && mounted) {
+      setState(() {
+        t.artists[idx] = r;
+        _normalize();
+      });
+    }
+  }
+
+  // ── VALIDATION ─────────────────────────────────────────────────────
   bool _validateAll() {
-    bool valid = true;
+    var valid = true;
     if (_coverFile == null) {
-      setState(() => _coverError = 'Cover art is required.');
+      _coverError = 'Cover art is required.';
       valid = false;
     }
-    for (int i = 0; i < _tracks.length; i++) {
-      final track = _tracks[i];
-      final errs = <String, String>{};
-      if (track.releaseTitle.trim().isEmpty) errs['releaseTitle'] = 'Required';
-      if (track.artists.isEmpty) {
-        errs['artists'] = 'Add at least one artist.';
-      } else if (i == 0 && !track.artists.any((a) => a.type == 'main')) {
-        errs['artists'] = 'Track 1 must have one artist tagged Main.';
-      }
-      if (track.mp3File == null) errs['mp3'] = 'Please select an MP3 file.';
-      if (errs.isNotEmpty) {
+    for (var i = 0; i < _tracks.length; i++) {
+      final t = _tracks[i];
+      t.errors.clear();
+      if (t.titleCtrl.text.trim().isEmpty) {
+        t.errors['title'] = 'Required';
         valid = false;
-        _updateTrack(track.id, (t) => t.copyWith(errors: errs));
-        setState(() => _expanded.add(track.id));
       }
+      if (t.artists.isEmpty) {
+        t.errors['artists'] = 'Add at least one artist.';
+        valid = false;
+      } else if (i == 0 && !t.artists.any((a) => a.type == 'main')) {
+        t.errors['artists'] = 'Track 1 must have one artist tagged Main.';
+        valid = false;
+      }
+      if (t.wavFile == null) {
+        t.errors['wav'] = 'Please select a WAV file.';
+        valid = false;
+      }
+      if (t.errors.isNotEmpty) _expanded.add(t.id);
+    }
+    setState(() {});
+    if (!valid && _coverFile == null && _scroll.hasClients) {
+      _scroll.animateTo(0,
+          duration: const Duration(milliseconds: 350),
+          curve: Curves.easeOutCubic);
     }
     return valid;
   }
 
-  // ── CLOUDINARY UPLOAD ────────────────────────────────────────────
-  Future<String?> _uploadToCloudinary(File file, String folder) async {
-    try {
-      final request = http.MultipartRequest('POST', Uri.parse(_cloudinaryUrl));
-      request.fields['upload_preset'] = _cloudinaryPreset;
-      request.fields['folder']        = folder;
-      request.files.add(await http.MultipartFile.fromPath('file', file.path));
-      final streamed = await request.send();
-      final body     = await streamed.stream.bytesToString();
-      final json     = jsonDecode(body) as Map<String, dynamic>;
-      if (json.containsKey('secure_url')) return json['secure_url'] as String;
-      debugPrint('Cloudinary error: $body');
-      return null;
-    } catch (e) {
-      debugPrint('Cloudinary upload exception: $e');
-      return null;
+  // ── UPLOADS ────────────────────────────────────────────────────────
+  String _friendlyUploadError(String m) {
+    if (RegExp('preset', caseSensitive: false).hasMatch(m)) {
+      return 'Cover art could not be uploaded. Please close this page, reopen it and try again.';
     }
+    if (RegExp('network', caseSensitive: false).hasMatch(m)) {
+      return 'Network error while uploading. Check your connection and try again.';
+    }
+    return m.isEmpty ? 'Upload failed. Please try again.' : m;
   }
 
-  // ── UPLOAD ALL ───────────────────────────────────────────────────
-  Future<void> _uploadAll() async {
-    if (!_validateAll()) return;
-    setState(() { _uploading = true; _globalError = ''; });
-
-    String? coverUrl;
-    if (_coverFile != null) {
-      coverUrl = await _uploadToCloudinary(_coverFile!, 'covers');
-    }
-
-    bool anyError = false;
-
-    for (final track in _tracks) {
-      if (track.status == 'success') continue;
-      _updateTrack(track.id, (t) => t.copyWith(
-          status: 'uploading', progress: 0, errorMsg: ''));
+  // Cloudinary (cover only) — up to 3 tries for preset / network errors.
+  Future<String> _uploadCover(File file) async {
+    var last = '';
+    for (var attempt = 1; attempt <= 3; attempt++) {
       try {
-        double sim = 0;
-        final ticker = Stream.periodic(
-            const Duration(milliseconds: 200)).listen((_) {
-          sim = (sim + 8).clamp(0, 85);
-          _updateTrack(track.id, (t) => t.copyWith(progress: sim));
-        });
-        final fileUrl = await _uploadToCloudinary(track.mp3File!, 'tracks');
-        await ticker.cancel();
-        if (fileUrl == null) throw Exception('Cloudinary returned no URL');
-        _updateTrack(track.id,
-                (t) => t.copyWith(progress: 100, status: 'success', fileUrl: fileUrl));
+        final req = http.MultipartRequest('POST', Uri.parse(_cloudinaryUrl));
+        req.fields['upload_preset'] = _cloudinaryPreset;
+        req.fields['folder'] = 'covers';
+        req.files.add(await http.MultipartFile.fromPath('file', file.path));
+        final streamed = await req.send();
+        final body = await streamed.stream.bytesToString();
+        final json = jsonDecode(body) as Map<String, dynamic>;
+        if (streamed.statusCode >= 200 &&
+            streamed.statusCode < 300 &&
+            json['secure_url'] is String) {
+          return json['secure_url'] as String;
+        }
+        last = (json['error']?['message'] ?? 'Upload failed.').toString();
+      } on SocketException {
+        last = 'Network error during upload.';
       } catch (e) {
-        anyError = true;
-        _updateTrack(track.id, (t) => t.copyWith(
-          status:   'error',
-          errorMsg: 'Upload failed. Check connection and retry.',
-          progress: 0,
-        ));
+        last = 'Upload failed — invalid response.';
       }
+      final retryable =
+          RegExp('preset must be specified|network', caseSensitive: false)
+              .hasMatch(last);
+      if (!retryable || attempt == 3) break;
+      await Future.delayed(Duration(milliseconds: 800 * attempt));
+    }
+    throw Exception(_friendlyUploadError(last));
+  }
+
+  // R2 (audio) — private bucket, signed upload link comes from our backend.
+  Future<String> _uploadWavToR2(File file, void Function(int) onProgress) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) throw Exception('Please sign in again.');
+    final token = await user.getIdToken();
+    final size = await file.length();
+
+    final res = await http.post(
+      Uri.parse('$_backendUrl/api/audio/upload-url'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+      body: jsonEncode({'contentType': 'audio/wav', 'size': size}),
+    );
+    Map<String, dynamic> data = {};
+    try {
+      data = jsonDecode(res.body) as Map<String, dynamic>;
+    } catch (_) {}
+    if (res.statusCode < 200 || res.statusCode >= 300 || data['success'] != true) {
+      throw Exception(data['message'] ?? 'Could not start the upload.');
     }
 
-    setState(() => _uploading = false);
+    final client = HttpClient();
+    try {
+      final req = await client.putUrl(Uri.parse(data['uploadUrl'] as String));
+      req.headers.set(HttpHeaders.contentTypeHeader, 'audio/wav');
+      req.contentLength = size;
+      var sent = 0;
+      await for (final chunk in file.openRead()) {
+        req.add(chunk);
+        sent += chunk.length;
+        onProgress(((sent / size) * 100).round());
+        await req.flush();
+      }
+      final resp = await req.close();
+      await resp.drain();
+      if (resp.statusCode < 200 || resp.statusCode >= 300) {
+        throw Exception('Upload was refused (HTTP ${resp.statusCode}).');
+      }
+    } on SocketException {
+      throw Exception('Network error during upload.');
+    } finally {
+      client.close();
+    }
+    return data['key'] as String;
+  }
 
-    if (!anyError) {
-      setState(() => _allDone = true);
-      await Future.delayed(const Duration(milliseconds: 1800));
-      // Each track now carries its FULL artists array (name, type,
-      // spotifyUrl, appleUrl) — this is what Release Info reads to
-      // build its read-only summary, and there can only ever be one
-      // Main artist in this set since only _tracks[0] was ever allowed
-      // to tag one.
-      if (mounted) {
+  void _setUp(String id, String name, String status, int pct) {
+    if (!mounted) return;
+    setState(() => _up[id] = _UpRow(name, status, pct));
+  }
+
+  Future<void> _uploadAll() async {
+    if (_uploading || _allDone) return;
+    setState(() => _globalError = '');
+    if (!_validateAll()) return;
+
+    setState(() {
+      _uploading = true;
+      _up.clear();
+    });
+
+    try {
+      if (_coverUrl == null) {
+        _setUp('cover', 'Cover art', 'uploading', 0);
+        try {
+          _coverUrl = await _uploadCover(_coverFile!);
+        } catch (e) {
+          _setUp('cover', 'Cover art', 'error', 0);
+          rethrow;
+        }
+      }
+      _setUp('cover', 'Cover art', 'done', 100);
+
+      var anyError = false;
+      for (final t in List<TrackModel>.of(_tracks)) {
+        if (t.status == 'success') continue;
+        final title = t.titleCtrl.text.trim();
+        final label = title.isEmpty ? 'Track' : title;
+        setState(() {
+          t.status = 'uploading';
+          t.progress = 0;
+          t.errorMsg = '';
+        });
+        _setUp(t.id, label, 'uploading', 0);
+        try {
+          t.fileKey = await _uploadWavToR2(t.wavFile!, (p) {
+            if (!mounted || p == t.progress.round()) return;
+            setState(() {
+              t.progress = p.toDouble();
+              _up[t.id] = _UpRow(label, 'uploading', p);
+            });
+          });
+          if (!mounted) return;
+          setState(() {
+            t.status = 'success';
+            t.progress = 100;
+          });
+          _setUp(t.id, label, 'done', 100);
+        } catch (e) {
+          anyError = true;
+          if (!mounted) return;
+          setState(() {
+            t.status = 'error';
+            t.errorMsg = _msg(e).isEmpty
+                ? 'Upload failed. Check connection and retry.'
+                : _msg(e);
+          });
+          _setUp(t.id, label, 'error', 0);
+        }
+      }
+
+      if (!mounted) return;
+      setState(() => _uploading = false);
+
+      if (!anyError) {
+        setState(() => _allDone = true);
+        await Future.delayed(const Duration(milliseconds: 1800));
+        if (!mounted) return;
         Navigator.pushReplacementNamed(
           context,
           '/release-info',
           arguments: {
             'paymentReference': _paymentReference,
-            'coverUrl': coverUrl,
+            'coverUrl': _coverUrl,
             'audioFiles': _tracks
-                .where((t) => t.fileUrl != null && t.fileUrl!.isNotEmpty)
+                .where((t) => t.fileKey != null)
                 .map((t) => {
-                      'title': t.releaseTitle,
+                      'title': t.titleCtrl.text.trim(),
                       'artists': t.artists.map((a) => a.toMap()).toList(),
-                      'url': t.fileUrl,
+                      'key': t.fileKey,
+                      'url': 'r2:${t.fileKey}',
                     })
                 .toList(),
           },
         );
+      } else {
+        setState(() =>
+            _globalError = 'Some tracks failed. Check errors and retry.');
       }
-    } else {
-      setState(() =>
-      _globalError = 'Some tracks failed. Check errors and retry.');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _uploading = false;
+        _globalError = _msg(e).isEmpty
+            ? 'Upload failed. Please try again.'
+            : _msg(e);
+      });
     }
   }
 
-  String _fmtBytes(int bytes) {
-    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
-    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
-  }
-
-  int get _completedCount =>
-      _tracks.where((t) => t.status == 'success').length;
-
-  // ════════════════════════════════════════════════════════════════
+  // ════════════════════════════════════════════════════════════════════
   //  BUILD
-  // ════════════════════════════════════════════════════════════════
+  // ════════════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
-    final top    = MediaQuery.of(context).padding.top;
-    final bottom = MediaQuery.of(context).padding.bottom;
+    final mq = MediaQuery.of(context);
+    final top = mq.padding.top;
+    final bottom = mq.padding.bottom;
+    final keyboardOpen = mq.viewInsets.bottom > 0;
 
-    return Scaffold(
-      backgroundColor: _black,
-      body: FadeTransition(
-        opacity: _entranceFade,
-        child: SlideTransition(
-          position: _entranceSlide,
-          child: Column(
-            children: [
-              _buildTopBar(top),
-              Expanded(
-                child: SingleChildScrollView(
-                  physics: const BouncingScrollPhysics(),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _buildCoverSection(),
-                      _buildCoverWarning(),
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(22, 20, 22, 0),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(children: [
-                              Expanded(child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text('TRACKLIST',
-                                      style: _t(18, FontWeight.w400,
-                                          _greyDark, ls: 2)),
-                                  Text('$_completedCount/${_tracks.length} ready',
-                                      style: _body(12, FontWeight.w600, _grey)),
-                                ],
-                              )),
-                            ]),
-                            const SizedBox(height: 14),
-                            ..._tracks.asMap().entries.map(
-                                    (e) => _buildTrackRow(e.value, e.key)),
-                            if (!_uploading && !_allDone) ...[
-                              const SizedBox(height: 4),
-                              _AddTrackButton(onTap: _addTrack),
-                              const SizedBox(height: 24),
-                            ],
-                            if (_uploading) ...[
-                              _buildUploadProgress(),
-                              const SizedBox(height: 20),
-                            ],
-                            if (_allDone) ...[
-                              _buildSuccessBanner(),
-                              const SizedBox(height: 20),
-                            ],
-                            if (_globalError.isNotEmpty) ...[
-                              _buildErrorBanner(_globalError),
-                              const SizedBox(height: 16),
-                            ],
-                            if (!_allDone)
-                              _SubmitButton(
-                                uploading:      _uploading,
-                                trackCount:     _tracks.length,
-                                completedCount: _completedCount,
-                                onTap:          _uploadAll,
-                              ),
-                            const SizedBox(height: 12),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                const Icon(Icons.lock_outline_rounded,
-                                    color: _greyDark, size: 11),
-                                const SizedBox(width: 5),
-                                Text('Secured · Powered by Cloudinary',
-                                    style: _body(
-                                        11, FontWeight.w500, _greyDark)),
-                              ],
-                            ),
-                            SizedBox(height: bottom + 32),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
+    return PopScope(
+      canPop: !_uploading,
+      child: Scaffold(
+        backgroundColor: _C.bg,
+        body: Stack(children: [
+          Positioned.fill(
+            child: SingleChildScrollView(
+              controller: _scroll,
+              physics: const BouncingScrollPhysics(),
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+              padding: EdgeInsets.fromLTRB(16, top + 56, 16, 130 + bottom),
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 640),
+                  child: _content(),
                 ),
+              ),
+            ),
+          ),
+          Positioned(top: 0, left: 0, right: 0, child: _topBar(top)),
+          if (!keyboardOpen)
+            Positioned(bottom: 0, left: 0, right: 0, child: _dock(bottom)),
+        ]),
+      ),
+    );
+  }
+
+  Widget _content() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _hero(),
+        _cover(),
+        if (_coverError != null)
+          _ferr(_coverError!,
+              center: true, pad: const EdgeInsets.fromLTRB(16, 12, 16, 0)),
+        _sh('Cover rules'),
+        _rulesFold(),
+        _sh('Tracklist', trailing: '$_completed of ${_tracks.length} ready'),
+        for (var i = 0; i < _tracks.length; i++) _trackCard(_tracks[i], i),
+        if (!_uploading && !_allDone) _addTrackButton(),
+        if (_up.isNotEmpty) ..._uploadPanel(),
+        if (_allDone) _successBanner(),
+        if (_globalError.isNotEmpty) _globalErrBox(),
+      ],
+    );
+  }
+
+  // ── TOP BAR ────────────────────────────────────────────────────────
+  Widget _topBar(double top) {
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+        child: Container(
+          height: 56 + top,
+          color: _C.bar,
+          padding: EdgeInsets.fromLTRB(16, top, 16, 0),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              _Tap(
+                onTap: _uploading ? null : () => Navigator.maybePop(context),
+                scale: 0.92,
+                child: Container(
+                  width: 36,
+                  height: 36,
+                  decoration: const BoxDecoration(
+                      color: _C.fill, shape: BoxShape.circle),
+                  child: const Icon(Icons.arrow_back_ios_new_rounded,
+                      size: 15, color: _C.t1),
+                ),
+              ),
+              Text('Upload release', style: _ts(17, FontWeight.w600, _C.t1)),
+              SizedBox(
+                width: 36,
+                child: Text('1 of 3',
+                    textAlign: TextAlign.right,
+                    style: _ts(13, FontWeight.w400, _C.t2)),
               ),
             ],
           ),
@@ -541,1275 +1018,939 @@ class _UploadScreenState extends State<UploadScreen>
     );
   }
 
-  // ── TOP BAR (Secure badge removed) ──────────────────────────────
-  Widget _buildTopBar(double top) {
-    return Container(
-      padding: EdgeInsets.only(top: top),
-      color: _black,
-      child: Container(
-        height: 64,
-        decoration: const BoxDecoration(
-            border: Border(bottom: BorderSide(color: _white10))),
-        padding: const EdgeInsets.symmetric(horizontal: 22),
-        child: Row(children: [
-          GestureDetector(
-            onTap: () => Navigator.pop(context),
-            child: Container(
-              width: 38, height: 38,
-              decoration: BoxDecoration(
-                color: _white06,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: _white10),
-              ),
-              child: const Icon(Icons.arrow_back_ios_new_rounded,
-                  color: _white, size: 16),
-            ),
-          ),
-          const SizedBox(width: 14),
-          Text('UPLOAD RELEASE',
-              style: _t(20, FontWeight.w400, _white, ls: 1.5)),
-        ]),
-      ),
-    );
-  }
-
-  // ── COVER ART COMPLIANCE WARNING ────────────────────────────────
-  Widget _buildCoverWarning() {
-    return Container(
-      margin: const EdgeInsets.fromLTRB(22, 20, 22, 0),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: _amberDim,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _amberBorder),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Icon(Icons.warning_amber_rounded, color: _amber, size: 16),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('COVER ART REQUIREMENTS',
-                    style: _t(13, FontWeight.w400, _amber, ls: 1.2)),
-                const SizedBox(height: 6),
-                Text(
-                  '•  The artist name and release title on your cover art must exactly match what you enter as your metadata below.\n'
-                  '•  No third-party logos — streaming platform logos (Spotify, Apple Music, YouTube, etc.), social media handles, or website URLs.\n'
-                  '•  Artwork that doesn\'t match your metadata, or includes any of the above, will be rejected during review.',
-                  style: _body(11.5, FontWeight.w500, _white70, h: 1.6),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ── COVER SECTION ────────────────────────────────────────────────
-  Widget _buildCoverSection() {
-    return GestureDetector(
-      onTap: _pickCover,
-      child: Container(
-        width: double.infinity, height: 320,
-        color: _black1,
-        child: Stack(fit: StackFit.expand, children: [
-          if (_coverFile != null)
-            Image.file(_coverFile!, fit: BoxFit.cover)
-          else
-            Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-              Container(
-                width: 72, height: 72,
-                decoration: BoxDecoration(
-                  color: _black3,
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(color: _white10),
-                ),
-                child: const Icon(Icons.image_outlined,
-                    color: _greyDark, size: 32),
-              ),
-              const SizedBox(height: 16),
-              Text('TAP TO ADD COVER ART',
-                  style: _t(18, FontWeight.w400, _grey, ls: 1)),
-              const SizedBox(height: 6),
-              Text('3000×3000 px · JPG or PNG',
-                  style: _body(12, FontWeight.w500, _greyDark)),
-            ]),
-          if (_coverFile != null)
-            Container(
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end:   Alignment.bottomCenter,
-                  colors: [Colors.transparent, Color(0xCC000000)],
-                  stops:  [0.5, 1.0],
-                ),
-              ),
-            ),
-          if (_coverFile != null)
-            Positioned(
-              bottom: 16, left: 16, right: 16,
-              child: Row(children: [
-                _pillTag(Icons.check_circle_outline_rounded,
-                    'Cover art set', _green),
-                const Spacer(),
-                _pillTag(Icons.edit_outlined, 'Change', _white70),
-              ]),
-            ),
-          Positioned(
-            top: 16, right: 16,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-              decoration: BoxDecoration(
-                color: _black.withValues(alpha: 0.7),
-                borderRadius: BorderRadius.circular(99),
-                border: Border.all(color: _white10),
-              ),
-              child: Text('REQUIRED',
-                  style: _body(9, FontWeight.w800,
-                      _coverFile != null ? _green : _grey, ls: 1.2)),
-            ),
-          ),
-          if (_coverError != null)
-            Positioned(
-              bottom: 60, left: 16,
-              child: Container(
-                padding:
-                const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                decoration: BoxDecoration(
-                  color: _redDim,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: _redBorder),
-                ),
-                child: Text(_coverError!,
-                    style: _body(11, FontWeight.w600, _red)),
-              ),
-            ),
-        ]),
-      ),
-    );
-  }
-
-  Widget _pillTag(IconData icon, String label, Color color) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: _black.withValues(alpha: 0.6),
-        borderRadius: BorderRadius.circular(99),
-        border: Border.all(color: _white20),
-      ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(icon, color: color, size: 12),
-        const SizedBox(width: 5),
-        Text(label, style: _body(11, FontWeight.w600, color)),
-      ]),
-    );
-  }
-
-  // ── ADD / EDIT ARTIST DIALOG ────────────────────────────────────
-  // isFirstTrack: only Track 1 may tag an artist as Main — the Main
-  // pill is hidden entirely for every other track. trackHasMain: used
-  // only to pick a sensible default type for a brand-new entry.
-  Future<ArtistEntry?> _showArtistDialog({
-    ArtistEntry? existing,
-    required bool isFirstTrack,
-    required bool trackHasMain,
-  }) {
-    final nameCtrl    = TextEditingController(text: existing?.name ?? '');
-    final spotifyCtrl = TextEditingController(text: existing?.spotifyUrl ?? '');
-    final appleCtrl   = TextEditingController(text: existing?.appleUrl ?? '');
-    String type = existing?.type ??
-        ((isFirstTrack && !trackHasMain) ? 'main' : 'featured');
-    if (!isFirstTrack && type == 'main') type = 'featured';
-    String? nameError;
-
-    return showDialog<ArtistEntry>(
-      context: context,
-      barrierColor: Colors.black.withValues(alpha: 0.82),
-      builder: (ctx) {
-        return StatefulBuilder(
-          builder: (ctx, setDialogState) {
-            return Dialog(
-              backgroundColor: const Color(0xFF0F0F14),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(18),
-                  side: const BorderSide(color: _white20)),
-              insetPadding: const EdgeInsets.all(20),
-              child: SingleChildScrollView(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(22, 26, 22, 22),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(existing == null ? 'ADD TRACK ARTIST' : 'EDIT TRACK ARTIST',
-                          style: _t(18, FontWeight.w400, _white, ls: 1)),
-                      const SizedBox(height: 16),
-                      Row(children: [
-                        Text('ARTIST NAME',
-                            style: _t(13, FontWeight.w400, _greyDark, ls: 1.5)),
-                        const SizedBox(width: 4),
-                        Container(
-                            width: 5, height: 5,
-                            decoration: const BoxDecoration(
-                                color: _white40, shape: BoxShape.circle)),
-                      ]),
-                      const SizedBox(height: 6),
-                      TextField(
-                        controller: nameCtrl,
-                        autofocus: true,
-                        style: _body(13, FontWeight.w600, _white),
-                        decoration: InputDecoration(
-                          hintText: 'e.g. Wizkid',
-                          hintStyle: _body(13, FontWeight.w400, _greyDark),
-                          filled: true, fillColor: _black3,
-                          contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 13, vertical: 11),
-                          border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(10),
-                              borderSide: const BorderSide(color: _white10)),
-                          enabledBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(10),
-                              borderSide: BorderSide(
-                                  color: nameError != null ? _redBorder : _white10)),
-                          focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(10),
-                              borderSide: const BorderSide(color: _white40)),
-                        ),
-                      ),
-                      if (nameError != null) ...[
-                        const SizedBox(height: 5),
-                        Text(nameError!, style: _body(10, FontWeight.w600, _red)),
-                      ],
-                      const SizedBox(height: 14),
-                      Text('ARTIST TYPE',
-                          style: _t(13, FontWeight.w400, _greyDark, ls: 1.5)),
-                      const SizedBox(height: 6),
-                      Wrap(spacing: 8, runSpacing: 8, children: [
-                        if (isFirstTrack)
-                          _typePill('main', type, (v) => setDialogState(() => type = v)),
-                        _typePill('featured', type, (v) => setDialogState(() => type = v)),
-                        _typePill('secondary', type, (v) => setDialogState(() => type = v)),
-                      ]),
-                      if (!isFirstTrack) ...[
-                        const SizedBox(height: 8),
-                        Text(
-                          'Main artist is set on Track 1 — this track can only have Featured or Secondary artists.',
-                          style: _body(10, FontWeight.w600, _greyDark, h: 1.5),
-                        ),
-                      ],
-                      const SizedBox(height: 14),
-                      Text('SPOTIFY PROFILE URL',
-                          style: _t(13, FontWeight.w400, _greyDark, ls: 1.5)),
-                      const SizedBox(height: 6),
-                      _urlField(spotifyCtrl, _spotifyIconUrl, 'Leave blank if none'),
-                      const SizedBox(height: 12),
-                      Text('APPLE MUSIC PROFILE URL',
-                          style: _t(13, FontWeight.w400, _greyDark, ls: 1.5)),
-                      const SizedBox(height: 6),
-                      _urlField(appleCtrl, _appleMusicIconUrl, 'Leave blank if none'),
-                      const SizedBox(height: 20),
-                      Row(children: [
-                        Expanded(child: GestureDetector(
-                          onTap: () {
-                            final name = nameCtrl.text.trim();
-                            if (name.isEmpty) {
-                              setDialogState(() => nameError = 'Required');
-                              return;
-                            }
-                            var chosenType = type;
-                            if (!isFirstTrack && chosenType == 'main') {
-                              chosenType = 'featured';
-                            }
-                            Navigator.pop(ctx, ArtistEntry(
-                              name: name,
-                              type: chosenType,
-                              spotifyUrl: spotifyCtrl.text.trim(),
-                              appleUrl: appleCtrl.text.trim(),
-                            ));
-                          },
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(vertical: 13),
-                            decoration: BoxDecoration(
-                                color: _white, borderRadius: BorderRadius.circular(999)),
-                            alignment: Alignment.center,
-                            child: Text('SAVE ARTIST',
-                                style: _t(13, FontWeight.w400, _black, ls: 1)),
-                          ),
-                        )),
-                        const SizedBox(width: 10),
-                        Expanded(child: GestureDetector(
-                          onTap: () => Navigator.pop(ctx, null),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(vertical: 13),
-                            decoration: BoxDecoration(
-                                border: Border.all(color: _white20),
-                                borderRadius: BorderRadius.circular(999)),
-                            alignment: Alignment.center,
-                            child: Text('CANCEL',
-                                style: _t(13, FontWeight.w400, _grey, ls: 1)),
-                          ),
-                        )),
-                      ]),
-                    ],
-                  ),
-                ),
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
-  Widget _typePill(String value, String current, ValueChanged<String> onTap) {
-    final selected = current == value;
-    final label = value == 'main' ? 'Main' : value == 'featured' ? 'Featured' : 'Secondary';
-    return GestureDetector(
-      onTap: () => onTap(value),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        decoration: BoxDecoration(
-          color: selected ? _white : Colors.transparent,
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: selected ? _white : _white20),
-        ),
-        child: Text(label, style: _body(12, FontWeight.w700, selected ? _black : _grey)),
-      ),
-    );
-  }
-
-  Widget _urlField(TextEditingController ctrl, String iconUrl, String hint) {
-    return Container(
-      decoration: BoxDecoration(
-          color: _black3,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: _white10)),
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      child: Row(children: [
-        _MiniIcon(url: iconUrl),
-        const SizedBox(width: 8),
-        Expanded(
-          child: TextField(
-            controller: ctrl,
-            style: _body(13, FontWeight.w600, _white),
-            decoration: InputDecoration(
-              hintText: hint,
-              hintStyle: _body(13, FontWeight.w400, _greyDark),
-              isDense: true, border: InputBorder.none,
-              contentPadding: const EdgeInsets.symmetric(vertical: 11),
-            ),
-          ),
-        ),
-      ]),
-    );
-  }
-
-  // ── TRACK ARTISTS SECTION (chip list + Add Artist button) ──────
-  Widget _artistChipsSection(TrackModel track, int index) {
-    final isFirstTrack = index == 0;
-    final locked = _uploading || track.status == 'success';
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(children: [
-          Text('TRACK ARTISTS',
-              style: _t(13, FontWeight.w400, _greyDark, ls: 1.5)),
-          const SizedBox(width: 4),
-          Container(
-              width: 5, height: 5,
-              decoration: const BoxDecoration(color: _white40, shape: BoxShape.circle)),
-        ]),
-        if (!isFirstTrack) ...[
-          const SizedBox(height: 6),
-          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const Icon(Icons.info_outline_rounded, color: _greyDark, size: 12),
-            const SizedBox(width: 5),
-            Expanded(child: Text(
-              'Main artist is set on Track 1. Add Featured or Secondary artists here.',
-              style: _body(10, FontWeight.w600, _greyDark, h: 1.5),
-            )),
-          ]),
-        ],
-        const SizedBox(height: 8),
-        ...track.artists.asMap().entries.map(
-                (e) => _artistChip(track, e.key, e.value, isFirstTrack, locked)),
-        if (!locked)
-          GestureDetector(
-            onTap: () async {
-              final trackHasMain = track.artists.any((a) => a.type == 'main');
-              final result = await _showArtistDialog(
-                  isFirstTrack: isFirstTrack, trackHasMain: trackHasMain);
-              if (result != null) {
-                setState(() {
-                  track.artists.add(result);
-                  track.errors.remove('artists');
-                  _normalizeArtistTypes();
-                });
-              }
-            },
-            child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(vertical: 11),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: _white20),
-              ),
-              child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                const Icon(Icons.add_rounded, color: _grey, size: 12),
-                const SizedBox(width: 6),
-                Text('ADD ARTIST', style: _t(12, FontWeight.w400, _grey, ls: 1.2)),
-              ]),
-            ),
-          ),
-        if (track.errors['artists'] != null) ...[
-          const SizedBox(height: 6),
-          Row(children: [
-            const Icon(Icons.error_outline_rounded, color: _red, size: 11),
-            const SizedBox(width: 4),
-            Expanded(child: Text(track.errors['artists']!,
-                style: _body(10, FontWeight.w600, _red))),
-          ]),
-        ],
-      ],
-    );
-  }
-
-  Widget _artistChip(TrackModel track, int idx, ArtistEntry a, bool isFirstTrack, bool locked) {
-    final typeLabel = a.type == 'main' ? 'Main' : a.type == 'featured' ? 'Featured' : 'Secondary';
-    final isMain = a.type == 'main';
-    return Container(
-      margin: const EdgeInsets.only(bottom: 6),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-      decoration: BoxDecoration(
-        color: _black3,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: isMain ? _greenBorder : _white10),
-      ),
-      child: Row(children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-          decoration: BoxDecoration(
-            color: isMain ? _greenDim : _white06,
-            borderRadius: BorderRadius.circular(6),
-            border: isMain ? Border.all(color: _greenBorder) : null,
-          ),
-          child: Text(typeLabel.toUpperCase(),
-              style: _body(9, FontWeight.w800, isMain ? _green : _grey)),
-        ),
-        const SizedBox(width: 8),
-        Expanded(child: Text(a.name,
-            overflow: TextOverflow.ellipsis,
-            style: _body(13, FontWeight.w700, _white))),
-        _linkIcon(a.spotifyUrl, _spotifyIconUrl),
-        _linkIcon(a.appleUrl, _appleMusicIconUrl),
-        if (!locked) ...[
-          const SizedBox(width: 6),
-          GestureDetector(
-            onTap: () async {
-              final trackHasMain = track.artists.any((x) => x.type == 'main');
-              final result = await _showArtistDialog(
-                  existing: a, isFirstTrack: isFirstTrack, trackHasMain: trackHasMain);
-              if (result != null) {
-                setState(() {
-                  track.artists[idx] = result;
-                  _normalizeArtistTypes();
-                });
-              }
-            },
-            child: Container(
-              width: 24, height: 24,
-              decoration: BoxDecoration(
-                  color: _white06,
-                  borderRadius: BorderRadius.circular(7),
-                  border: Border.all(color: _white10)),
-              child: const Icon(Icons.edit_outlined, color: _grey, size: 11),
-            ),
-          ),
-          const SizedBox(width: 6),
-          GestureDetector(
-            onTap: () => setState(() => track.artists.removeAt(idx)),
-            child: Container(
-              width: 24, height: 24,
-              decoration: BoxDecoration(
-                  color: _redDim,
-                  borderRadius: BorderRadius.circular(7),
-                  border: Border.all(color: _redBorder)),
-              child: const Icon(Icons.close_rounded, color: _red, size: 10),
-            ),
-          ),
-        ],
-      ]),
-    );
-  }
-
-  Widget _linkIcon(String url, String iconUrl) {
-    final icon = SizedBox(width: 13, height: 13, child: _MiniIcon(url: iconUrl));
-    if (url.isEmpty) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 3),
-        child: Opacity(opacity: 0.28, child: icon),
-      );
-    }
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 3),
-      child: GestureDetector(onTap: () => _openUrl(url), child: icon),
-    );
-  }
-
-  // ── TRACK ROW ────────────────────────────────────────────────────
-  Widget _buildTrackRow(TrackModel track, int index) {
-    final isExpanded  = _expanded.contains(track.id);
-    final isDone      = track.status == 'success';
-    final hasError    = track.errors.isNotEmpty || track.errorMsg.isNotEmpty;
-    final isUploading = track.status == 'uploading';
-
-    ArtistEntry? mainArtist;
-    for (final a in track.artists) {
-      if (a.type == 'main') { mainArtist = a; break; }
-    }
-
-    final displayName = track.releaseTitle.isNotEmpty
-        ? track.releaseTitle
-        : (mainArtist != null ? mainArtist.name : 'Track ${index + 1}');
-    final hasName = track.releaseTitle.isNotEmpty || mainArtist != null;
-
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 200),
-      margin: const EdgeInsets.only(bottom: 10),
-      decoration: BoxDecoration(
-        color: _black2,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: isDone
-              ? _greenBorder
-              : hasError
-              ? _redBorder
-              : isExpanded
-              ? _white20
-              : _white10,
-        ),
-      ),
-      child: Column(children: [
-        GestureDetector(
-          onTap: () => _toggleExpand(track.id),
+  // ── HERO ───────────────────────────────────────────────────────────
+  Widget _hero() {
+    Widget seg(bool on) => Expanded(
           child: Container(
-            color: Colors.transparent,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            child: Row(children: [
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                width: 32, height: 32,
-                decoration: BoxDecoration(
-                  color: isDone
-                      ? _greenDim
-                      : hasError
-                      ? _redDim
-                      : _white06,
-                  borderRadius: BorderRadius.circular(9),
-                  border: Border.all(
-                      color: isDone
-                          ? _greenBorder
-                          : hasError
-                          ? _redBorder
-                          : _white10),
-                ),
-                child: Center(
-                  child: isDone
-                      ? const Icon(Icons.check_rounded,
-                      color: _green, size: 16)
-                      : Text(
-                    (index + 1).toString().padLeft(2, '0'),
-                    style: _body(11, FontWeight.w800,
-                        hasError ? _red : _white70),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      displayName,
-                      style: _body(14, FontWeight.w700, hasName ? _white : _greyDark),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    if (track.mp3FileName != null)
-                      Text(track.mp3FileName!,
-                          style: _body(11, FontWeight.w500, _grey),
-                          overflow: TextOverflow.ellipsis)
-                    else
-                      Text(
-                        isUploading
-                            ? 'Uploading ${track.progress.toInt()}%…'
-                            : 'Tap to add details',
-                        style: _body(11, FontWeight.w500,
-                            isUploading ? _white70 : _greyDark),
-                      ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              if (_tracks.length > 1 && !_uploading && !isDone)
-                GestureDetector(
-                  onTap: () => _removeTrack(track.id),
-                  child: Container(
-                    width: 28, height: 28,
-                    decoration: BoxDecoration(
-                      color: _redDim,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: _redBorder),
-                    ),
-                    child: const Icon(Icons.close_rounded,
-                        color: _red, size: 13),
-                  ),
-                ),
-              const SizedBox(width: 8),
-              if (isUploading)
-                _PulsingDot()
-              else
-                Container(
-                  width: 7, height: 7,
-                  decoration: BoxDecoration(
-                    color: isDone
-                        ? _green
-                        : hasError
-                        ? _red
-                        : _white10,
-                    shape: BoxShape.circle,
-                  ),
-                ),
-              const SizedBox(width: 8),
-              AnimatedRotation(
-                turns: isExpanded ? 0.5 : 0,
-                duration: const Duration(milliseconds: 200),
-                child: const Icon(Icons.keyboard_arrow_down_rounded,
-                    color: _greyDark, size: 20),
-              ),
-            ]),
-          ),
-        ),
-
-        if (isUploading)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text('Uploading',
-                        style: _body(10, FontWeight.w600, _grey, ls: 0.5)),
-                    Text('${track.progress.toInt()}%',
-                        style: _body(10, FontWeight.w700, _white70)),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(99),
-                  child: LinearProgressIndicator(
-                    value:           track.progress / 100,
-                    backgroundColor: _white06,
-                    valueColor:
-                    const AlwaysStoppedAnimation<Color>(_white),
-                    minHeight: 3,
-                  ),
-                ),
-              ],
+            height: 4,
+            decoration: BoxDecoration(
+              color: on ? _C.yellow : _C.fill,
+              borderRadius: BorderRadius.circular(2),
             ),
           ),
-
-        if (isExpanded) ...[
-          Container(height: 1, color: _white10),
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _InputField(
-                  label:       'Track Title',
-                  required:    true,
-                  placeholder: 'e.g. Abundance',
-                  value:       track.releaseTitle,
-                  error:       track.errors['releaseTitle'],
-                  enabled:     !_uploading && !isDone,
-                  onChanged:   (v) => _updateTrack(
-                      track.id, (t) => t.copyWith(releaseTitle: v)),
-                ),
-                const SizedBox(height: 14),
-                _artistChipsSection(track, index),
-                const SizedBox(height: 14),
-                _Mp3Zone(
-                  fileName: track.mp3FileName,
-                  fileSize: track.mp3File != null
-                      ? _fmtBytes(track.mp3File!.lengthSync())
-                      : null,
-                  error:   track.errors['mp3'],
-                  enabled: !_uploading && !isDone,
-                  onTap:   () => _pickMp3(track.id),
-                ),
-                if (track.errorMsg.isNotEmpty) ...[
-                  const SizedBox(height: 12),
-                  _buildErrorBanner(track.errorMsg),
-                ],
-                if (isDone) ...[
-                  const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: _greenDim,
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: _greenBorder),
-                    ),
-                    child: Row(children: [
-                      const Icon(Icons.check_circle_outline_rounded,
-                          color: _green, size: 16),
-                      const SizedBox(width: 8),
-                      Text('Track uploaded successfully',
-                          style: _body(13, FontWeight.w600, _green)),
-                    ]),
-                  ),
-                ],
-                if (!isDone) ...[
-                  const SizedBox(height: 14),
-                  GestureDetector(
-                    onTap: () => _toggleExpand(track.id),
-                    child: Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      decoration: BoxDecoration(
-                        color: _white06,
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: _white10),
-                      ),
-                      child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(Icons.check_rounded,
-                                color: _grey, size: 14),
-                            const SizedBox(width: 7),
-                            Text('Done — Collapse',
-                                style: _body(12, FontWeight.w700, _grey)),
-                          ]),
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ],
-      ]),
-    );
-  }
-
-  Widget _buildUploadProgress() {
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: _black2,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _white10),
-      ),
+        );
+    Widget name(String s, bool on) => Expanded(
+          child: Text(s,
+              style: _ts(12, FontWeight.w500, on ? _C.t1 : _C.t3)),
+        );
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 14, 4, 6),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text('UPLOADING YOUR RELEASE…',
-            style: _t(20, FontWeight.w400, _white, ls: 1)),
-        const SizedBox(height: 4),
-        Text("Please don't close this page",
-            style: _body(12, FontWeight.w500, _grey)),
-        const SizedBox(height: 16),
-        ..._tracks.map((t) {
-          final dot = t.status == 'success'
-              ? _green
-              : t.status == 'error'
-              ? _red
-              : t.status == 'uploading'
-              ? _white70
-              : _greyDark;
-          final label = t.status == 'success'
-              ? '✓ Done'
-              : t.status == 'error'
-              ? '✗ Error'
-              : t.status == 'uploading'
-              ? '${t.progress.toInt()}%'
-              : 'Waiting';
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Row(children: [
-              Container(
-                  width: 7, height: 7,
-                  decoration:
-                  BoxDecoration(color: dot, shape: BoxShape.circle)),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  t.releaseTitle.isNotEmpty ? t.releaseTitle : 'Track',
-                  style: _body(13, FontWeight.w600, _white70),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              Text(label, style: _body(12, FontWeight.w700, dot)),
-            ]),
-          );
-        }),
-      ]),
-    );
-  }
-
-  Widget _buildSuccessBanner() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: _greenDim,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: _greenBorder),
-      ),
-      child: Row(children: [
-        const Icon(Icons.check_circle_outline_rounded,
-            color: _green, size: 22),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('ALL TRACKS UPLOADED!',
-                    style: _t(18, FontWeight.w400, _green, ls: 1)),
-                const SizedBox(height: 2),
-                Text('Redirecting to next step…',
-                    style: _body(12, FontWeight.w500, _green)),
-              ]),
-        ),
-      ]),
-    );
-  }
-
-  Widget _buildErrorBanner(String msg) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: _redDim,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: _redBorder),
-      ),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Icon(Icons.warning_amber_rounded, color: _red, size: 16),
-        const SizedBox(width: 8),
-        Expanded(
-            child: Text(msg,
-                style: _body(12, FontWeight.w600, _red, h: 1.5))),
-      ]),
-    );
-  }
-}
-
-// ── MINI BRAND ICON — small SVG icon with a safe fallback ─────────────
-class _MiniIcon extends StatelessWidget {
-  final String url;
-  const _MiniIcon({required this.url});
-
-  @override
-  Widget build(BuildContext context) {
-    return Image.network(
-      url,
-      width: 13, height: 13,
-      errorBuilder: (_, __, ___) =>
-          const Icon(Icons.music_note_rounded, size: 12, color: _grey),
-    );
-  }
-}
-
-// ── INPUT FIELD ───────────────────────────────────────────────────────
-class _InputField extends StatelessWidget {
-  final String label, placeholder, value;
-  final bool required, enabled;
-  final String? error;
-  final ValueChanged<String> onChanged;
-
-  const _InputField({
-    required this.label,
-    required this.required,
-    required this.placeholder,
-    required this.value,
-    required this.onChanged,
-    this.error,
-    this.enabled = true,
-  });
-
-  TextStyle _body(double s, FontWeight w, Color c) =>
-      GoogleFonts.nunito(fontSize: s, fontWeight: w, color: c);
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(children: [
-        Text(label.toUpperCase(),
-            style: GoogleFonts.bebasNeue(
-                color: _greyDark,
-                fontSize: 13,
-                fontWeight: FontWeight.w400,
-                letterSpacing: 1.5)),
-        if (required) ...[
-          const SizedBox(width: 4),
-          Container(
-              width: 5, height: 5,
-              decoration: const BoxDecoration(
-                  color: _white40, shape: BoxShape.circle)),
-        ],
-      ]),
-      const SizedBox(height: 6),
-      TextFormField(
-        initialValue: value,
-        enabled:      enabled,
-        onChanged:    onChanged,
-        style:        _body(13, FontWeight.w600, _white),
-        decoration: InputDecoration(
-          hintText:  placeholder,
-          hintStyle: _body(13, FontWeight.w400, _greyDark),
-          filled:    true,
-          fillColor: _black3,
-          contentPadding:
-          const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
-          border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: const BorderSide(color: _white10)),
-          enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(
-                  color: error != null ? _redBorder : _white10)),
-          focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: const BorderSide(color: _white40)),
-          disabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: const BorderSide(color: _white06)),
-        ),
-      ),
-      if (error != null) ...[
-        const SizedBox(height: 5),
+        Text('Upload files',
+            style: _ts(34, FontWeight.w700, _C.t1, ls: -1.36, h: 1.1)),
+        const SizedBox(height: 6),
+        Text('Add your cover art and tracks.',
+            style: _ts(17, FontWeight.w400, _C.t2)),
+        const SizedBox(height: 20),
         Row(children: [
-          const Icon(Icons.error_outline_rounded, color: _red, size: 11),
-          const SizedBox(width: 4),
-          Text(error!, style: _body(10, FontWeight.w600, _red)),
+          seg(true),
+          const SizedBox(width: 6),
+          seg(false),
+          const SizedBox(width: 6),
+          seg(false),
         ]),
-      ],
+        const SizedBox(height: 8),
+        Row(children: [
+          name('Files', true),
+          const SizedBox(width: 6),
+          name('Info', false),
+          const SizedBox(width: 6),
+          name('Stores', false),
+        ]),
+      ]),
+    );
+  }
+
+  // ── COVER ──────────────────────────────────────────────────────────
+  Widget _cover() {
+    final has = _coverFile != null;
+    return Padding(
+      padding: const EdgeInsets.only(top: 26),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 300),
+          child: AspectRatio(
+            aspectRatio: 1,
+            child: _Tap(
+              onTap: _uploading ? null : _pickCover,
+              scale: 0.98,
+              child: Container(
+                decoration: BoxDecoration(
+                  color: _C.s1,
+                  borderRadius: BorderRadius.circular(22),
+                  border: Border.all(
+                      color: const Color(0x14FFFFFF), width: 0.5),
+                  boxShadow: const [
+                    BoxShadow(
+                        color: Color(0x80000000),
+                        blurRadius: 50,
+                        offset: Offset(0, 18)),
+                  ],
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: Stack(fit: StackFit.expand, children: [
+                  if (has)
+                    Image.file(_coverFile!, fit: BoxFit.cover, cacheWidth: 900)
+                  else
+                    Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Container(
+                            width: 44,
+                            height: 44,
+                            decoration: const BoxDecoration(
+                                color: _C.yellow, shape: BoxShape.circle),
+                            child: const Icon(Icons.add_rounded,
+                                size: 22, color: Colors.black),
+                          ),
+                          const SizedBox(height: 10),
+                          Text('Add cover art',
+                              style: _ts(17, FontWeight.w600, _C.t1)),
+                          const SizedBox(height: 4),
+                          Text('4000 × 4000 px, JPG',
+                              style: _ts(13, FontWeight.w400, _C.t2)),
+                        ],
+                      ),
+                    ),
+                  Positioned(
+                    top: 12,
+                    right: 12,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: const Color(0x8C000000),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(has ? 'Added' : 'Required',
+                          style: _ts(12, FontWeight.w600,
+                              has ? _C.green : _C.yellow)),
+                    ),
+                  ),
+                  if (has)
+                    Positioned(
+                      bottom: 12,
+                      left: 0,
+                      right: 0,
+                      child: Center(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 7),
+                          decoration: BoxDecoration(
+                            color: const Color(0xB31C1C1E),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Text('Change',
+                              style: _ts(14, FontWeight.w600, _C.t1)),
+                        ),
+                      ),
+                    ),
+                ]),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ── COVER RULES FOLD ───────────────────────────────────────────────
+  Widget _rulesFold() {
+    Widget rule(String s) => Padding(
+          padding: const EdgeInsets.only(top: 10),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Padding(
+              padding: const EdgeInsets.only(top: 7),
+              child: Container(
+                  width: 5,
+                  height: 5,
+                  decoration: const BoxDecoration(
+                      color: _C.yellow, shape: BoxShape.circle)),
+            ),
+            const SizedBox(width: 11),
+            Expanded(
+              child: Text(s, style: _ts(14, FontWeight.w400, _C.t2, h: 1.45)),
+            ),
+          ]),
+        );
+
+    return _group([
+      _Tap(
+        onTap: () => setState(() => _rulesOpen = !_rulesOpen),
+        highlight: true,
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 52),
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(children: [
+            Expanded(
+              child: Text('Before you upload',
+                  style: _ts(16, FontWeight.w400, _C.t1)),
+            ),
+            Text('Read', style: _ts(14, FontWeight.w400, _C.t3)),
+            const SizedBox(width: 4),
+            AnimatedRotation(
+              turns: _rulesOpen ? 0.25 : 0,
+              duration: const Duration(milliseconds: 300),
+              curve: Curves.easeOutCubic,
+              child: const Icon(Icons.chevron_right_rounded,
+                  size: 20, color: _C.t3),
+            ),
+          ]),
+        ),
+      ),
+      AnimatedSize(
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOutCubic,
+        alignment: Alignment.topCenter,
+        child: _rulesOpen
+            ? Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+                child: Column(children: [
+                  rule(
+                      'The artist name and release title on your cover must exactly match what you enter in the next step.'),
+                  rule(
+                      'No third-party logos, such as Spotify, Apple Music or YouTube, and no social handles or website URLs.'),
+                  rule(
+                      "Artwork that doesn't match or includes any of these is rejected during review."),
+                ]),
+              )
+            : const SizedBox(width: double.infinity),
+      ),
     ]);
   }
-}
 
-// ── MP3 ZONE ─────────────────────────────────────────────────────────
-class _Mp3Zone extends StatelessWidget {
-  final String? fileName, fileSize, error;
-  final bool enabled;
-  final VoidCallback onTap;
+  // ── TRACK CARD ─────────────────────────────────────────────────────
+  Widget _trackCard(TrackModel t, int i) {
+    final first = i == 0;
+    final open = _expanded.contains(t.id);
+    final done = t.status == 'success';
+    final busy = t.status == 'uploading';
+    final hasErr =
+        t.errors.values.any((e) => e.isNotEmpty) || t.errorMsg.isNotEmpty;
+    final locked = _uploading || done;
 
-  const _Mp3Zone({
-    this.fileName, this.fileSize, this.error,
-    this.enabled = true, required this.onTap,
-  });
+    ArtistEntry? main;
+    for (final a in t.artists) {
+      if (a.type == 'main') {
+        main = a;
+        break;
+      }
+    }
+    final title = t.titleCtrl.text.trim();
+    final display = title.isNotEmpty ? title : (main?.name ?? 'Track ${i + 1}');
+    final hasName = title.isNotEmpty || main != null;
+    final sub = t.wavName ??
+        (busy ? 'Uploading ${t.progress.round()}%…' : 'Tap to add details');
 
-  TextStyle _t(double s, FontWeight w, Color c, {double ls = 0}) =>
-      GoogleFonts.bebasNeue(
-          fontSize: s, fontWeight: w, color: c, letterSpacing: ls);
-  TextStyle _body(double s, FontWeight w, Color c) =>
-      GoogleFonts.nunito(fontSize: s, fontWeight: w, color: c);
+    final numColor = done ? _C.green : (hasErr ? _C.rose : _C.t1);
+    final numBg = done ? _C.green16 : (hasErr ? const Color(0x29FF453A) : _C.fill);
 
-  @override
-  Widget build(BuildContext context) {
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(children: [
-        Text('AUDIO FILE',
-            style: _t(13, FontWeight.w400, _greyDark, ls: 1.5)),
-        const SizedBox(width: 4),
-        Container(
-            width: 5, height: 5,
-            decoration: const BoxDecoration(
-                color: _white40, shape: BoxShape.circle)),
-        const Spacer(),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-          decoration: BoxDecoration(
-            color: _amberDim,
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: _amberBorder),
+    final header = _Tap(
+      onTap: () => _toggle(t.id),
+      child: Container(
+        constraints: const BoxConstraints(minHeight: 64),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        child: Row(children: [
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(color: numBg, shape: BoxShape.circle),
+            alignment: Alignment.center,
+            child: done
+                ? const Icon(Icons.check_rounded, size: 17, color: _C.green)
+                : Text('${i + 1}',
+                    style: _ts(13, FontWeight.w600, numColor)),
           ),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            const Icon(Icons.music_note_rounded, color: _amber, size: 10),
-            const SizedBox(width: 4),
-            Text('MP3 ONLY', style: _t(10, FontWeight.w400, _amber, ls: 1)),
-          ]),
-        ),
-      ]),
-      const SizedBox(height: 6),
-      GestureDetector(
-        onTap: enabled ? onTap : null,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          width: double.infinity,
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            color: _black3,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: error != null
-                  ? _redBorder
-                  : fileName != null
-                  ? _white20
-                  : _white10,
-              width: error != null ? 1.5 : 1,
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(display,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: _ts(16, FontWeight.w500, hasName ? _C.t1 : _C.t3)),
+              const SizedBox(height: 2),
+              Text(sub,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: _ts(13, FontWeight.w400, busy ? _C.yellow : _C.t2)),
+            ]),
+          ),
+          if (_tracks.length > 1 && !locked) ...[
+            const SizedBox(width: 8),
+            _roundBtn(Icons.close_rounded, () => _removeTrack(t)),
+          ],
+          const SizedBox(width: 8),
+          AnimatedRotation(
+            turns: open ? 0.25 : 0,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOutCubic,
+            child: const Icon(Icons.chevron_right_rounded,
+                size: 20, color: _C.t3),
+          ),
+        ]),
+      ),
+    );
+
+    final body = <Widget>[];
+    if (open) {
+      body.add(const _Sep());
+
+      // Title row
+      final titleBad = t.errors.containsKey('title');
+      body.add(Container(
+        color: titleBad ? _C.rose12 : Colors.transparent,
+        constraints: const BoxConstraints(minHeight: 52),
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Row(children: [
+          SizedBox(
+            width: 96,
+            child: Text('Title',
+                style: _ts(16, FontWeight.w400, titleBad ? _C.rose : _C.t1)),
+          ),
+          Expanded(
+            child: _bareField(
+              c: t.titleCtrl,
+              hint: 'e.g. Abundance',
+              enabled: !locked,
+              onChanged: (_) => setState(() => t.errors.remove('title')),
             ),
           ),
-          child: fileName != null
-              ? Row(children: [
-            Container(
-              width: 40, height: 40,
-              decoration: BoxDecoration(
-                color: _black4,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: _white10),
+        ]),
+      ));
+
+      // Artists
+      body.add(Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+        child: Text('ARTISTS',
+            style: _ts(13, FontWeight.w500, _C.t2, ls: 0.52)),
+      ));
+      if (!first) {
+        body.add(Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+          child: Text('Main artist is set on Track 1. Add Featured artists here.',
+              style: _ts(13, FontWeight.w400, _C.t2, h: 1.4)),
+        ));
+      }
+      for (var ai = 0; ai < t.artists.length; ai++) {
+        body.add(const _Sep());
+        body.add(_artistRow(t, ai, first, locked));
+      }
+      if (!locked) {
+        if (t.artists.isNotEmpty) body.add(const _Sep());
+        body.add(_Tap(
+          onTap: () => _addArtist(t, first),
+          highlight: true,
+          child: Container(
+            constraints: const BoxConstraints(minHeight: 50),
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(children: [
+              Container(
+                width: 22,
+                height: 22,
+                decoration: const BoxDecoration(
+                    color: _C.yellow, shape: BoxShape.circle),
+                child: const Icon(Icons.add_rounded,
+                    size: 14, color: Colors.black),
               ),
-              child: const Icon(Icons.headphones_rounded,
-                  color: _white70, size: 18),
+              const SizedBox(width: 10),
+              Text('Add artist', style: _ts(16, FontWeight.w500, _C.yellow)),
+            ]),
+          ),
+        ));
+      }
+      if (t.errors['artists'] != null) body.add(_ferr(t.errors['artists']!));
+
+      // Audio zone
+      final wavBad = t.errors.containsKey('wav');
+      body.add(const _Sep());
+      body.add(_Tap(
+        onTap: locked ? null : () => _pickWav(t),
+        highlight: true,
+        child: Container(
+          color: wavBad ? _C.rose12 : Colors.transparent,
+          constraints: const BoxConstraints(minHeight: 64),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          child: Row(children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                  color: _C.s2, borderRadius: BorderRadius.circular(10)),
+              child: Icon(Icons.music_note_rounded,
+                  size: 20, color: t.wavName != null ? _C.yellow : _C.t2),
             ),
             const SizedBox(width: 12),
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(fileName!,
-                      style: _body(13, FontWeight.w700, _white),
-                      overflow: TextOverflow.ellipsis),
-                  if (fileSize != null)
-                    Text(fileSize!,
-                        style: _body(11, FontWeight.w500, _grey)),
-                ],
-              ),
+              child: t.wavName != null
+                  ? Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(t.wavName!,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: _ts(16, FontWeight.w500, _C.t1)),
+                        const SizedBox(height: 2),
+                        Text(_fmtBytes(t.wavSize),
+                            style: _ts(13, FontWeight.w400, _C.t2)),
+                      ],
+                    )
+                  : Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Choose WAV',
+                            style: _ts(16, FontWeight.w500, _C.yellow)),
+                        const SizedBox(height: 2),
+                        Text('WAV, 16-bit+, 44.1 kHz+, stereo',
+                            style: _ts(13, FontWeight.w400, _C.t2)),
+                      ],
+                    ),
             ),
-            const Icon(Icons.swap_horiz_rounded,
-                color: _greyDark, size: 16),
-          ])
-              : Column(children: [
-            Container(
-              width: 52, height: 52,
-              decoration: BoxDecoration(
-                color: _black4,
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: _white10),
-              ),
-              child: const Icon(Icons.audio_file_rounded,
-                  color: _greyDark, size: 24),
-            ),
-            const SizedBox(height: 12),
-            Text('TAP TO SELECT MP3',
-                style: _t(16, FontWeight.w400, _grey, ls: 1)),
-            const SizedBox(height: 4),
-            Text('Only .mp3 files are accepted · max 50 MB',
-                style: _body(11, FontWeight.w500, _greyDark)),
-            const SizedBox(height: 10),
-            Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-              _FormatPill(label: 'MP3 ✓', accepted: true),
-              const SizedBox(width: 6),
-              _FormatPill(label: 'WAV ✗', accepted: false),
-              const SizedBox(width: 6),
-              _FormatPill(label: 'Images ✗', accepted: false),
-              const SizedBox(width: 6),
-              _FormatPill(label: 'Docs ✗', accepted: false),
-            ]),
+            if (t.wavName != null && !locked)
+              Text('Replace', style: _ts(14, FontWeight.w500, _C.blue)),
           ]),
         ),
-      ),
-      if (error != null) ...[
-        const SizedBox(height: 5),
-        Row(children: [
-          const Icon(Icons.error_outline_rounded, color: _red, size: 11),
-          const SizedBox(width: 4),
-          Expanded(
-              child: Text(error!,
-                  style: _body(10, FontWeight.w600, _red))),
-        ]),
-      ],
-    ]);
-  }
-}
+      ));
+      if (t.errors['wav'] != null) body.add(_ferr(t.errors['wav']!));
 
-// ── FORMAT PILL ───────────────────────────────────────────────────────
-class _FormatPill extends StatelessWidget {
-  final String label;
-  final bool accepted;
-  const _FormatPill({required this.label, required this.accepted});
-  @override
-  Widget build(BuildContext context) {
-    final c = accepted ? _green : _greyDark;
+      if (t.errorMsg.isNotEmpty) body.add(_tnote(t.errorMsg, ok: false));
+      if (done) body.add(_tnote('Track uploaded', ok: true));
+
+      if (!done) {
+        body.add(const _Sep());
+        body.add(_Tap(
+          onTap: () => _toggle(t.id),
+          highlight: true,
+          child: Container(
+            height: 50,
+            alignment: Alignment.center,
+            child: Text('Done', style: _ts(16, FontWeight.w500, _C.blue)),
+          ),
+        ));
+      }
+    }
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
-        color: accepted ? _greenDim : Colors.transparent,
-        borderRadius: BorderRadius.circular(5),
-        border: Border.all(color: accepted ? _greenBorder : _greyDark),
+        color: _C.s1,
+        borderRadius: BorderRadius.circular(16),
+        border: hasErr ? Border.all(color: _C.rose, width: 1.5) : null,
       ),
-      child: Text(label,
-          style: GoogleFonts.nunito(
-              color: c, fontSize: 9, fontWeight: FontWeight.w700)),
+      clipBehavior: Clip.antiAlias,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        header,
+        if (busy)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(2),
+              child: LinearProgressIndicator(
+                value: (t.progress / 100).clamp(0.0, 1.0),
+                minHeight: 4,
+                backgroundColor: _C.fill,
+                valueColor: const AlwaysStoppedAnimation<Color>(_C.yellow),
+              ),
+            ),
+          ),
+        AnimatedSize(
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOutCubic,
+          alignment: Alignment.topCenter,
+          child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch, children: body),
+        ),
+      ]),
     );
   }
-}
 
-// ── ADD TRACK BUTTON ──────────────────────────────────────────────────
-class _AddTrackButton extends StatefulWidget {
-  final VoidCallback onTap;
-  const _AddTrackButton({required this.onTap});
-  @override
-  State<_AddTrackButton> createState() => _AddTrackButtonState();
-}
+  Widget _artistRow(TrackModel t, int idx, bool first, bool locked) {
+    final a = t.artists[idx];
+    final isMain = a.type == 'main';
 
-class _AddTrackButtonState extends State<_AddTrackButton> {
-  bool _pressed = false;
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTapDown:   (_) => setState(() => _pressed = true),
-      onTapUp:     (_) {
-        setState(() => _pressed = false);
-        widget.onTap();
-      },
-      onTapCancel: () => setState(() => _pressed = false),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 120),
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(vertical: 14),
-        decoration: BoxDecoration(
-          color: _pressed ? _white06 : Colors.transparent,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: _pressed ? _white20 : _white10),
+    Widget link(bool spotify, String url) {
+      final glyph = _Brand(
+          spotify: spotify, size: 14, opacity: url.isEmpty ? 0.25 : 1);
+      if (url.isEmpty) return glyph;
+      return GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => _openUrl(url),
+        child: glyph,
+      );
+    }
+
+    return Container(
+      constraints: const BoxConstraints(minHeight: 52),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Row(children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+          decoration: BoxDecoration(
+            color: isMain ? _C.green16 : _C.fill,
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: Text(isMain ? 'Main' : 'Featured',
+              style: _ts(12, FontWeight.w600, isMain ? _C.green : _C.t2)),
         ),
-        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-          const Icon(Icons.add_rounded, color: _grey, size: 16),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(a.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: _ts(16, FontWeight.w500, _C.t1)),
+        ),
+        const SizedBox(width: 10),
+        link(true, a.spotifyUrl),
+        const SizedBox(width: 8),
+        link(false, a.appleUrl),
+        if (!locked) ...[
+          const SizedBox(width: 10),
+          _roundBtn(Icons.edit_outlined, () => _editArtist(t, idx, first)),
           const SizedBox(width: 8),
-          Text('ADD ANOTHER TRACK',
-              style: GoogleFonts.bebasNeue(
-                  color: _grey,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w400,
-                  letterSpacing: 1.5)),
+          _roundBtn(Icons.close_rounded, () {
+            setState(() => t.artists.removeAt(idx));
+          }),
+        ],
+      ]),
+    );
+  }
+
+  Widget _addTrackButton() {
+    return _Tap(
+      onTap: _addTrack,
+      scale: 0.98,
+      child: Container(
+        constraints: const BoxConstraints(minHeight: 52),
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        decoration: BoxDecoration(
+            color: _C.s1, borderRadius: BorderRadius.circular(16)),
+        child: Row(children: [
+          Container(
+            width: 22,
+            height: 22,
+            decoration:
+                const BoxDecoration(color: _C.yellow, shape: BoxShape.circle),
+            child: const Icon(Icons.add_rounded, size: 14, color: Colors.black),
+          ),
+          const SizedBox(width: 10),
+          Text('Add another track',
+              style: _ts(16, FontWeight.w500, _C.yellow)),
         ]),
       ),
     );
   }
+
+  // ── UPLOAD PANEL / BANNERS ─────────────────────────────────────────
+  List<Widget> _uploadPanel() {
+    final rows = _up.values.map((r) {
+      final color = r.status == 'done'
+          ? _C.green
+          : r.status == 'error'
+              ? _C.rose
+              : _C.t2;
+      final label = r.status == 'done'
+          ? 'Done'
+          : r.status == 'error'
+              ? 'Failed'
+              : '${r.pct}%';
+      final dot = r.status == 'uploading'
+          ? const _PulseDot()
+          : Container(
+              width: 8,
+              height: 8,
+              decoration: BoxDecoration(
+                  color: r.status == 'done' ? _C.green : _C.rose,
+                  shape: BoxShape.circle),
+            );
+      return Container(
+        constraints: const BoxConstraints(minHeight: 50),
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Row(children: [
+          dot,
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(r.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: _ts(16, FontWeight.w400, _C.t1)),
+          ),
+          Text(label, style: _ts(14, FontWeight.w500, color)),
+        ]),
+      );
+    }).toList();
+
+    return [
+      _sh('Uploading'),
+      _group(rows),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+        child: Text('Please keep this page open until it finishes.',
+            style: _ts(13, FontWeight.w400, _C.t2, h: 1.4)),
+      ),
+    ];
+  }
+
+  Widget _successBanner() {
+    return Container(
+      margin: const EdgeInsets.only(top: 20),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        color: _C.green14,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(children: [
+        const Icon(Icons.check_circle_outline_rounded,
+            size: 22, color: _C.green),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('All tracks uploaded',
+                style: _ts(16, FontWeight.w600, _C.green)),
+            const SizedBox(height: 1),
+            Text('Taking you to the next step…',
+                style: _ts(13, FontWeight.w400, _C.green)),
+          ]),
+        ),
+      ]),
+    );
+  }
+
+  Widget _globalErrBox() {
+    return Container(
+      margin: const EdgeInsets.only(top: 20),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: _C.rose14,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Padding(
+          padding: EdgeInsets.only(top: 1),
+          child: Icon(Icons.warning_amber_rounded, size: 17, color: _C.rose),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(_globalError,
+              style: _ts(14, FontWeight.w500, _C.rose, h: 1.35)),
+        ),
+      ]),
+    );
+  }
+
+  // ── BOTTOM DOCK ────────────────────────────────────────────────────
+  Widget _dock(double bottom) {
+    final n = _tracks.length;
+    final disabled = _uploading || _allDone;
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+        child: Container(
+          padding: EdgeInsets.fromLTRB(16, 12, 16, 12 + bottom),
+          decoration: const BoxDecoration(
+            color: _C.bar,
+            border: Border(top: BorderSide(color: _C.sep, width: 0.5)),
+          ),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 640),
+              child: _Tap(
+                onTap: disabled ? null : _uploadAll,
+                scale: 0.98,
+                child: AnimatedOpacity(
+                  opacity: disabled ? 0.4 : 1,
+                  duration: const Duration(milliseconds: 200),
+                  child: Container(
+                    height: 52,
+                    decoration: BoxDecoration(
+                      color: _C.yellow,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        if (_uploading)
+                          const SizedBox(
+                            width: 17,
+                            height: 17,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.5,
+                              color: Colors.black,
+                              backgroundColor: Color(0x33000000),
+                            ),
+                          )
+                        else
+                          const Icon(Icons.file_upload_outlined,
+                              size: 19, color: Colors.black),
+                        const SizedBox(width: 8),
+                        Text('Upload $n track${n > 1 ? 's' : ''}',
+                            style: _ts(17, FontWeight.w600, Colors.black)),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
-// ── SUBMIT BUTTON ─────────────────────────────────────────────────────
-class _SubmitButton extends StatefulWidget {
-  final bool uploading;
-  final int trackCount, completedCount;
-  final VoidCallback onTap;
-  const _SubmitButton({
-    required this.uploading,
-    required this.trackCount,
-    required this.completedCount,
-    required this.onTap,
+// ════════════════════════════════════════════════════════════════════
+//  ADD / EDIT ARTIST SHEET
+// ════════════════════════════════════════════════════════════════════
+class _ArtistSheet extends StatefulWidget {
+  final ArtistEntry? existing;
+  final bool first;
+  final bool hasMain;
+  const _ArtistSheet({
+    required this.existing,
+    required this.first,
+    required this.hasMain,
   });
   @override
-  State<_SubmitButton> createState() => _SubmitButtonState();
+  State<_ArtistSheet> createState() => _ArtistSheetState();
 }
 
-class _SubmitButtonState extends State<_SubmitButton> {
-  bool _pressed = false;
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTapDown:   widget.uploading
-          ? null
-          : (_) => setState(() => _pressed = true),
-      onTapUp:     widget.uploading
-          ? null
-          : (_) {
-        setState(() => _pressed = false);
-        widget.onTap();
-      },
-      onTapCancel: () => setState(() => _pressed = false),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 120),
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(vertical: 17),
-        decoration: BoxDecoration(
-          color: widget.uploading
-              ? _black3
-              : _pressed
-              ? const Color(0xFFE0E0E0)
-              : _white,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-              color: widget.uploading ? _white10 : _white),
-        ),
-        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-          if (widget.uploading) ...[
-            const SizedBox(
-              width: 16, height: 16,
-              child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  valueColor: AlwaysStoppedAnimation<Color>(_grey)),
-            ),
-            const SizedBox(width: 10),
-            Text(
-              'Uploading ${widget.completedCount}/${widget.trackCount}…',
-              style: GoogleFonts.nunito(
-                  color: _grey,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700),
-            ),
-          ] else ...[
-            const Icon(Icons.upload_rounded, color: _black, size: 18),
-            const SizedBox(width: 9),
-            Text(
-              'SUBMIT ${widget.trackCount} TRACK'
-                  '${widget.trackCount > 1 ? 'S' : ''} TO 444MUSIC',
-              style: GoogleFonts.bebasNeue(
-                  color: _black,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w400,
-                  letterSpacing: 1.2),
-            ),
-          ],
-        ]),
-      ),
-    );
-  }
-}
+class _ArtistSheetState extends State<_ArtistSheet> {
+  late final TextEditingController _name =
+      TextEditingController(text: widget.existing?.name ?? '');
+  late final TextEditingController _spotify =
+      TextEditingController(text: widget.existing?.spotifyUrl ?? '');
+  late final TextEditingController _apple =
+      TextEditingController(text: widget.existing?.appleUrl ?? '');
+  late String _type;
+  bool _invalid = false;
+  String? _err;
 
-// ── PULSING DOT ───────────────────────────────────────────────────────
-class _PulsingDot extends StatefulWidget {
-  @override
-  State<_PulsingDot> createState() => _PulsingDotState();
-}
-
-class _PulsingDotState extends State<_PulsingDot>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _ctrl;
-  late Animation<double>   _anim;
   @override
   void initState() {
     super.initState();
-    _ctrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 900))
-      ..repeat(reverse: true);
-    _anim = Tween<double>(begin: 0.3, end: 1.0).animate(_ctrl);
+    _type = widget.existing?.type ??
+        ((widget.first && !widget.hasMain) ? 'main' : 'featured');
+    if (!widget.first && _type == 'main') _type = 'featured';
+    if (_type == 'secondary') _type = 'featured';
   }
+
   @override
   void dispose() {
-    _ctrl.dispose();
+    _name.dispose();
+    _spotify.dispose();
+    _apple.dispose();
     super.dispose();
   }
+
+  void _save() {
+    final name = _name.text.trim();
+    if (name.isEmpty) {
+      setState(() {
+        _invalid = true;
+        _err = null;
+      });
+      return;
+    }
+    final bad = _badNameChars(name);
+    if (bad.isNotEmpty) {
+      setState(() {
+        _invalid = true;
+        _err = _nameMsg(name, bad);
+      });
+      return;
+    }
+    var type = _type;
+    if (!widget.first && type == 'main') type = 'featured';
+    Navigator.pop(
+      context,
+      ArtistEntry(
+        name: name,
+        type: type,
+        spotifyUrl: _spotify.text.trim(),
+        appleUrl: _apple.text.trim(),
+      ),
+    );
+  }
+
+  Widget _pill(String value, String label) {
+    final sel = _type == value;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => setState(() => _type = value),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 220),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: sel ? _C.s3 : Colors.transparent,
+          borderRadius: BorderRadius.circular(7),
+          boxShadow: sel
+              ? const [
+                  BoxShadow(
+                      color: Color(0x4D000000),
+                      blurRadius: 6,
+                      offset: Offset(0, 2))
+                ]
+              : null,
+        ),
+        child: Text(label, style: _ts(14, FontWeight.w500, _C.t1)),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return FadeTransition(
-      opacity: _anim,
-      child: Container(
-          width: 7, height: 7,
-          decoration: const BoxDecoration(
-              color: _white70, shape: BoxShape.circle)),
+    final mq = MediaQuery.of(context);
+    return Padding(
+      padding: EdgeInsets.only(bottom: mq.viewInsets.bottom),
+      child: ClipRRect(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
+          child: Container(
+            color: const Color(0xF71C1C1E),
+            padding: EdgeInsets.fromLTRB(
+                16, 0, 16, 24 + (mq.viewInsets.bottom > 0 ? 0 : mq.padding.bottom)),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  SizedBox(
+                    height: 56,
+                    child: Row(children: [
+                      Expanded(
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: _Tap(
+                            onTap: () => Navigator.pop(context),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              child: Text('Cancel',
+                                  style: _ts(17, FontWeight.w400, _C.blue)),
+                            ),
+                          ),
+                        ),
+                      ),
+                      Text(widget.existing == null ? 'Add artist' : 'Edit artist',
+                          style: _ts(17, FontWeight.w600, _C.t1)),
+                      Expanded(
+                        child: Align(
+                          alignment: Alignment.centerRight,
+                          child: _Tap(
+                            onTap: _save,
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              child: Text('Save',
+                                  style: _ts(17, FontWeight.w600, _C.yellow)),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ]),
+                  ),
+                  _group(color: _C.s2, [
+                    Container(
+                      color: _invalid ? _C.rose12 : Colors.transparent,
+                      constraints: const BoxConstraints(minHeight: 52),
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Row(children: [
+                        SizedBox(
+                          width: 70,
+                          child: Text('Name',
+                              style: _ts(16, FontWeight.w400,
+                                  _invalid ? _C.rose : _C.t1)),
+                        ),
+                        Expanded(
+                          child: _bareField(
+                            c: _name,
+                            hint: 'e.g. Wizkid',
+                            autofocus: true,
+                            onChanged: (_) {
+                              if (_invalid || _err != null) {
+                                setState(() {
+                                  _invalid = false;
+                                  _err = null;
+                                });
+                              }
+                            },
+                          ),
+                        ),
+                      ]),
+                    ),
+                    Container(
+                      constraints: const BoxConstraints(minHeight: 52),
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Row(children: [
+                        SizedBox(
+                          width: 70,
+                          child: Text('Type',
+                              style: _ts(16, FontWeight.w400, _C.t1)),
+                        ),
+                        const Spacer(),
+                        Container(
+                          padding: const EdgeInsets.all(2),
+                          decoration: BoxDecoration(
+                            color: _C.fill,
+                            borderRadius: BorderRadius.circular(9),
+                          ),
+                          child: Row(mainAxisSize: MainAxisSize.min, children: [
+                            if (widget.first) _pill('main', 'Main'),
+                            _pill('featured', 'Featured'),
+                          ]),
+                        ),
+                      ]),
+                    ),
+                  ]),
+                  if (_err != null)
+                    _ferr(_err!,
+                        pad: const EdgeInsets.fromLTRB(16, 8, 16, 0)),
+                  if (!widget.first)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                      child: Text(
+                          'Main artist is set on Track 1. This track can only have Featured artists.',
+                          style: _ts(13, FontWeight.w400, _C.t2, h: 1.4)),
+                    ),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 22),
+                    child: _sh('Profiles', trailing: 'Optional'),
+                  ),
+                  _group(color: _C.s2, [
+                    Container(
+                      constraints: const BoxConstraints(minHeight: 52),
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Row(children: [
+                        const _Brand(spotify: true, size: 18),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: _bareField(
+                              c: _spotify,
+                              hint: 'Spotify profile URL',
+                              type: TextInputType.url),
+                        ),
+                      ]),
+                    ),
+                    Container(
+                      constraints: const BoxConstraints(minHeight: 52),
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Row(children: [
+                        const _Brand(spotify: false, size: 18),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: _bareField(
+                              c: _apple,
+                              hint: 'Apple Music profile URL',
+                              type: TextInputType.url),
+                        ),
+                      ]),
+                    ),
+                  ]),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
