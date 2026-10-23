@@ -169,7 +169,7 @@ class _SplashScreenState extends State<SplashScreen>
 
   late AnimationController _dotCtrl;
 
-  static const _bgRed = Color(0xFFD90429);
+  static const _bgRed = Color(0xFFFDEB0D);
 
   @override
   void initState() {
