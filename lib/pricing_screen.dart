@@ -1,18 +1,22 @@
-//  444MUSIC — Pricing Screen
-//  Theme rebuilt to mirror pricing.html EXACTLY:
-//   - deep near-black page background (#020202 scale)
-//   - "Single" plan rendered as the WHITE featured card (like the web's
-//     .price-card.featured), with black text, black popular badge,
-//     light-grey store chips, and an inverted (black) solid button
-//   - Plan Comparison table rendered as a WHITE panel with the same
-//     light-grey header row as the web table, instead of a dark table
-//   - Header copy/pill matched to the web's plain h1 + p (no extra pill)
-//  Backend calls, routes, and button/payment flow are UNCHANGED.
 // ═══════════════════════════════════════════════════════════════════
-import 'dart:ui';
+//  444MUSIC — Pricing Screen
+//  Rebuilt to mirror pricing.html: iOS-style grouped surfaces, large
+//  title, white featured "Single" card, yellow compare panel and a
+//  yellow closing banner. No promo.
+//  Backend calls, routes and the payment flow are UNCHANGED.
+// ═══════════════════════════════════════════════════════════════════
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart'
+    show
+        CupertinoActionSheet,
+        CupertinoActionSheetAction,
+        CupertinoActivityIndicator,
+        CupertinoTheme,
+        CupertinoThemeData,
+        showCupertinoModalPopup;
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -22,56 +26,33 @@ import 'package:http/http.dart' as http;
 import 'payment_success_screen.dart';
 import 'home_screen.dart';
 
-// ─── PALETTE — matched 1:1 to the :root vars in pricing.html ────────
-const _black      = Color(0xFF020202); // --black
-const _black1     = Color(0xFF060606); // --black-1
-const _black2     = Color(0xFF0A0A0A); // --black-2
-const _black3     = Color(0xFF0E0E0E); // --black-3
-const _black4     = Color(0xFF131313); // --black-4
-const _white      = Color(0xFFFFFFFF);
-const _white90    = Color(0xE6FFFFFF);
-const _white70    = Color(0xB3FFFFFF);
-const _white40    = Color(0x66FFFFFF);
-const _white20    = Color(0x33FFFFFF);
-const _white10    = Color(0x1AFFFFFF);
-const _white06    = Color(0x0FFFFFFF);
-const _grey       = Color(0xFF888888);
-const _greyLight  = Color(0xFFAAAAAA);
-const _greyDark   = Color(0xFF444444);
-const _green      = Color(0xFF22C55E);
-const _greenDim   = Color(0x1F22C55E); // rgba(34,197,94,0.12)
-const _greenBorder= Color(0x3322C55E); // rgba(34,197,94,0.2)
-const _rose       = Color(0xFFEF4444); // --rose
+// ─── PALETTE — same tokens as the :root vars in pricing.html ────────
+const _bg = Color(0xFF000000);
+const _s1 = Color(0xFF1C1C1E);
+const _fill = Color(0x3D787880); // rgba(120,120,128,.24)
+const _sep = Color(0x8C545458); // rgba(84,84,88,.55)
+const _label = Color(0xFFFFFFFF);
+const _label2 = Color(0x99EBEBF5); // rgba(235,235,245,.60)
+const _label3 = Color(0x4DEBEBF5); // rgba(235,235,245,.30)
+const _blue = Color(0xFF0A84FF);
+const _yellow = Color(0xFFFDEB0D);
+const _green = Color(0xFF30D158);
 
-// ── Featured-card ("white section") palette — sampled from the web's
-// .price-card.featured overrides, which pull from the home page's
-// light-section treatment. Used ONLY for the Single (popular) card and
-// the Plan Comparison table, exactly like the web page. ──────────────
-const _paperBlack      = Color(0xFF0A0A0A); // #0a0a0a — headings on white
-const _paperBody       = Color(0xFF55555A); // #55555a — plan-desc on white
-const _paperMuted      = Color(0xFF6B6B6B); // #6b6b6b — price-usd on white
-const _paperFaint      = Color(0xFF8A8A8A); // #8a8a8a — price-period / table th
-const _paperFeature    = Color(0xFF4A4A4A); // #4a4a4a — feature-list li on white
-const _paperChipBg     = Color(0xFFF2F2F2); // store-chip bg on white
-const _paperChipText   = Color(0xFF555555); // store-chip text on white
-const _paperDivider    = Color(0x1A000000); // rgba(0,0,0,0.10)
-const _paperTableHead  = Color(0xFFF4F4F4); // compare-table th bg
-const _paperTableLine  = Color(0x0F000000); // rgba(0,0,0,0.06) row divider
-const _paperTableBorder= Color(0x14000000); // rgba(0,0,0,0.08)
-const _paperErrorBg    = Color(0x14EF4444); // rgba(239,68,68,0.08)
-const _paperErrorBorder= Color(0x59EF4444); // rgba(239,68,68,0.35)
-const _paperErrorText  = Color(0xFFC62828);
+// White featured card
+const _ink = Color(0xFF1D1D1F);
+const _inkSub = Color(0xFF6E6E73);
+const _inkSub2 = Color(0xFF8E8E93);
+const _inkLine = Color(0x1A000000);
+
+// iOS spring-like curve, same as --ease on the web
+const _ease = Cubic(0.32, 0.72, 0, 1);
 
 // ─── BACKEND CONFIG — UNCHANGED ───────────────────────────────────────
 const _backendBase = 'https://four44music-broadcast-backend.onrender.com';
-const _successMarker = 'www.444musicdistro.com/payment-success';
 
 // ─── CURRENCY DISPLAY — cosmetic only, never affects the amount sent
-// to Paystack. plan.amountGHS is always the source of truth for payment;
-// these rates only change what's rendered on the card. Static snapshot
-// rates as of mid-2026 — refresh periodically, or swap for a live FX
-// API later if you want this to stay accurate automatically. Keep this
-// in sync with the same map on the web pricing.html if you update either. ──
+// to Paystack. plan.amountGHS is always the source of truth for payment.
+// Keep these rates in sync with CURRENCY_RATES in pricing.html. ──────
 class _CurrencyInfo {
   final String symbol;
   final double rate; // GHC → this currency
@@ -79,15 +60,16 @@ class _CurrencyInfo {
 }
 
 const Map<String, _CurrencyInfo> _currencyRates = {
-  'GHS': _CurrencyInfo(symbol: 'GHC',  rate: 1),
-  'NGN': _CurrencyInfo(symbol: '₦',    rate: 131),
-  'USD': _CurrencyInfo(symbol: '\$',   rate: 0.0873),
-  'EUR': _CurrencyInfo(symbol: '€',    rate: 0.0803),
-  'GBP': _CurrencyInfo(symbol: '£',    rate: 0.0690),
-  'ZAR': _CurrencyInfo(symbol: 'R',    rate: 1.615),
-  'KES': _CurrencyInfo(symbol: 'KSh',  rate: 11.26),
+  'GHS': _CurrencyInfo(symbol: 'GHC', rate: 1),
+  'NGN': _CurrencyInfo(symbol: '₦', rate: 131),
+  'USD': _CurrencyInfo(symbol: '\$', rate: 0.0873),
+  'EUR': _CurrencyInfo(symbol: '€', rate: 0.0803),
+  'GBP': _CurrencyInfo(symbol: '£', rate: 0.0690),
+  'ZAR': _CurrencyInfo(symbol: 'R', rate: 1.615),
+  'KES': _CurrencyInfo(symbol: 'KSh', rate: 11.26),
   'CAD': _CurrencyInfo(symbol: 'CA\$', rate: 0.1187),
-  'XOF': _CurrencyInfo(symbol: 'CFA',  rate: 52.6),
+  'XOF': _CurrencyInfo(symbol: 'CFA', rate: 52.6),
+  'OTHER': _CurrencyInfo(symbol: '\$', rate: 0.0873),
 };
 
 const List<Map<String, String>> _currencyOptions = [
@@ -100,174 +82,144 @@ const List<Map<String, String>> _currencyOptions = [
   {'code': 'KES', 'label': '🇰🇪 Kenya — KES'},
   {'code': 'CAD', 'label': '🇨🇦 Canada — CAD'},
   {'code': 'XOF', 'label': '🌍 West Africa (CFA) — XOF'},
+  {'code': 'OTHER', 'label': '🌐 Other — USD'},
 ];
 
-String _formatConvertedAmount(double baseGhc, String currencyCode) {
-  final info = _currencyRates[currencyCode] ?? _currencyRates['GHS']!;
-  final converted = baseGhc * info.rate;
-  final decimals = currencyCode == 'XOF' ? 0 : 2;
-  return converted.toStringAsFixed(decimals);
+String _currencyLabel(String code) => _currencyOptions
+    .firstWhere((o) => o['code'] == code, orElse: () => _currencyOptions.first)['label']!;
+
+String _fmt(double v, int decimals) {
+  final s = v.toStringAsFixed(decimals);
+  final parts = s.split('.');
+  final whole = parts[0].replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => ',');
+  return parts.length > 1 ? '$whole.${parts[1]}' : whole;
 }
 
-// ─── FONT HELPERS ────────────────────────────────────────────────────
-TextStyle _outfit(double size, FontWeight weight, Color color,
-    {double ls = 0, double h = 1.4}) =>
-    GoogleFonts.outfit(
+String _amountIn(double ghs, String code) {
+  if (ghs == 0) return '0';
+  final info = _currencyRates[code] ?? _currencyRates['USD']!;
+  return _fmt(ghs * info.rate, code == 'XOF' ? 0 : 2);
+}
+
+String _subLabel(double ghs, String code) {
+  if (code == 'GHS') {
+    return ghs == 0 ? '/ \$0' : '/ \$${_fmt(ghs * _currencyRates['USD']!.rate, 2)}';
+  }
+  return ghs == 0 ? '/ GHC 0' : '/ GHC ${_fmt(ghs, 2)}';
+}
+
+// ─── TEXT STYLE — Inter is the closest match to SF on every device ───
+TextStyle _ts(double size, FontWeight weight, Color color,
+        {double ls = 0, double h = 1.3, bool tabular = false}) =>
+    GoogleFonts.inter(
       fontSize: size,
       fontWeight: weight,
       color: color,
       letterSpacing: ls,
       height: h,
+      fontFeatures: tabular ? const [FontFeature.tabularFigures()] : null,
     );
 
-TextStyle _mono(double size, FontWeight weight, Color color,
-    {double ls = 0}) =>
-    GoogleFonts.dmMono(
-      fontSize: size,
-      fontWeight: weight,
-      color: color,
-      letterSpacing: ls,
+Widget _pad(Widget child) => Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 560),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: child,
+        ),
+      ),
     );
 
 // ─── PLAN DATA ────────────────────────────────────────────────────────
+enum _BtnStyle { outline, solid }
+
 class _Plan {
-  final String badge, badgeIcon, planName, desc, price, usdPrice, period, btnLabel, btnRoute;
+  final String key, name, desc, period, btnLabel, route;
   final double amountGHS;
-  final bool isFeatured;
-  final PlanStyle style;
-  final List<_Feature> features;
-  final List<_StoreChip> stores;
-  final String? saveBadge;
+  final bool featured;
+  final String? badge;
+  final _BtnStyle style;
+  final List<String> features;
 
   const _Plan({
-    required this.badge,
-    required this.badgeIcon,
-    required this.planName,
+    required this.key,
+    required this.name,
     required this.desc,
-    required this.price,
-    required this.usdPrice,
     required this.period,
     required this.btnLabel,
-    required this.btnRoute,
+    required this.route,
     required this.amountGHS,
+    required this.style,
     required this.features,
-    required this.stores,
-    this.isFeatured = false,
-    this.style = PlanStyle.outline,
-    this.saveBadge,
+    this.featured = false,
+    this.badge,
   });
 }
 
-enum PlanStyle { outline, solid, green }
-
-class _Feature {
-  final String text;
-  final bool included;
-  const _Feature(this.text, {this.included = true});
-}
-
-class _StoreChip {
-  final IconData icon;
-  final String label;
-  const _StoreChip(this.icon, this.label);
-}
-
-final _plans = [
+const _plans = [
   _Plan(
-    badge: 'Starter',
-    badgeIcon: 'seedling',
-    planName: 'Release as Draft',
-    desc: 'Upload now, settle fees after your release starts earning.',
-    price: '0',
-    usdPrice: '0',
+    key: 'draft',
+    name: 'Release as Draft',
+    desc: 'Upload now and settle the fee once your release starts earning.',
     period: 'No upfront payment',
-    btnLabel: 'Get Started Free',
-    btnRoute: '/agreement',
+    btnLabel: 'Get started free',
+    route: '/agreement',
     amountGHS: 0,
-    style: PlanStyle.outline,
+    style: _BtnStyle.outline,
     features: [
-      const _Feature('Upload unlimited songs as draft'),
-      const _Feature('100+ digital store distribution'),
-      const _Feature('Free ISRC & UPC barcode'),
-      const _Feature('Keep 100% of royalties'),
-      const _Feature('Artist dashboard access'),
-      const _Feature('Basic streaming analytics'),
-      const _Feature('Cover art design', included: false),
-      const _Feature('Priority delivery', included: false),
-    ],
-    stores: const [
-      _StoreChip(Icons.music_note_rounded, 'Spotify'),
-      _StoreChip(Icons.apple_rounded, 'Apple'),
-      _StoreChip(Icons.play_circle_filled_rounded, 'YouTube'),
-      _StoreChip(Icons.music_video_rounded, 'TikTok'),
+      'Unlimited draft uploads',
+      '100+ digital stores',
+      'Free ISRC & UPC',
+      'Keep 100% of royalties',
+      'Artist dashboard & basic analytics',
     ],
   ),
-  // ── "Single" — this is the web's WHITE FEATURED card. isFeatured:true
-  // is what flips _PlanCard / _Badge / _FeatureRow / _StoreChipWidget /
-  // _PlanButton over to the light "paper" palette, exactly matching
-  // .price-card.featured on pricing.html. ──────────────────────────────
   _Plan(
-    badge: 'Most Popular',
-    badgeIcon: 'fire',
-    planName: 'Single',
-    desc: 'Drop a track professionally with fast global delivery and store cover art.',
-    price: '39.99',
-    usdPrice: '3.49',
+    key: 'single',
+    name: 'Single',
+    desc: 'Drop a track with fast global delivery and cover art review.',
     period: 'One-time per release',
-    btnLabel: 'Release Single',
-    btnRoute: '',
+    btnLabel: 'Release single',
+    route: '',
     amountGHS: 39.99,
-    isFeatured: true,
-    style: PlanStyle.solid,
+    featured: true,
+    badge: 'Most popular',
+    style: _BtnStyle.solid,
     features: [
-      const _Feature('1 single release (1–2 tracks)'),
-      const _Feature('Spotify, Apple Music, TikTok & 100+ stores'),
-      const _Feature('Free ISRC & UPC barcode'),
-      const _Feature('Keep 100% of royalties'),
-      const _Feature('Fast 5–7 day delivery'),
-      const _Feature('Cover art review & upload'),
-      const _Feature('Streaming analytics dashboard'),
-      const _Feature('Metadata & credits management'),
-    ],
-    stores: const [
-      _StoreChip(Icons.music_note_rounded, 'Spotify'),
-      _StoreChip(Icons.apple_rounded, 'Apple'),
-      _StoreChip(Icons.play_circle_filled_rounded, 'YouTube'),
-      _StoreChip(Icons.shopping_bag_rounded, 'Amazon'),
+      '1 single release (1–2 tracks)',
+      'Spotify, Apple Music, TikTok & 100+ stores',
+      'Free ISRC & UPC',
+      'Keep 100% of royalties',
+      '5–7 day delivery',
+      'Cover art review & analytics',
     ],
   ),
   _Plan(
-    badge: 'Pro',
-    badgeIcon: 'layers',
-    planName: 'EP / Album',
-    desc: 'Full project distribution with advanced reporting and priority support.',
-    price: '69.99',
-    usdPrice: '6.11',
+    key: 'ep',
+    name: 'EP / Album',
+    desc: 'A full project with advanced reporting and priority support.',
     period: 'One-time per project',
-    btnLabel: 'Release Project',
-    btnRoute: '',
+    btnLabel: 'Release project',
+    route: '',
     amountGHS: 69.99,
-    style: PlanStyle.outline,
+    style: _BtnStyle.outline,
     features: [
-      const _Feature('Up to 20 tracks per project'),
-      const _Feature('Global distribution to 100+ stores'),
-      const _Feature('Free ISRC for each track + UPC'),
-      const _Feature('Keep 100% of royalties'),
-      const _Feature('Priority 3–5 day delivery'),
-      const _Feature('Full royalty breakdown reports'),
-      const _Feature('Artist dashboard with insights'),
-      const _Feature('Priority email support'),
-    ],
-    stores: const [
-      _StoreChip(Icons.music_note_rounded, 'Spotify'),
-      _StoreChip(Icons.apple_rounded, 'Apple'),
-      _StoreChip(Icons.play_circle_filled_rounded, 'YouTube'),
-      _StoreChip(Icons.headphones_rounded, 'Tidal'),
+      'Up to 20 tracks',
+      '100+ stores worldwide',
+      'Free ISRC for every track + UPC',
+      'Keep 100% of royalties',
+      'Priority 3–5 day delivery',
+      'Full royalty reports & priority support',
     ],
   ),
 ];
 
 // ─── FAQ DATA ─────────────────────────────────────────────────────────
+class _FAQ {
+  final String q, a;
+  const _FAQ({required this.q, required this.a});
+}
+
 const _faqs = [
   _FAQ(
     q: 'When do I pay for the Release as Draft plan?',
@@ -286,15 +238,10 @@ const _faqs = [
     a: 'Yes. You can choose a different plan for each new release from your dashboard. Your existing releases remain active regardless of which plan you pick next.',
   ),
   _FAQ(
-    q: 'What currency will I actually be charged in?',
-    a: 'All payments are processed in Ghanaian Cedis (GHC) through Paystack. The currency dropdown above just shows you an approximate equivalent in your local currency so you know roughly what to expect before checkout.',
+    q: 'What currency will I be charged in?',
+    a: 'All payments are processed in Ghanaian Cedis (GHC) through Paystack. The currency menu at the top only shows an approximate equivalent in your local currency so you know roughly what to expect before checkout.',
   ),
 ];
-
-class _FAQ {
-  final String q, a;
-  const _FAQ({required this.q, required this.a});
-}
 
 // ════════════════════════════════════════════════════════════════════
 //  PRICING SCREEN
@@ -308,18 +255,13 @@ class PricingScreen extends StatefulWidget {
   State<PricingScreen> createState() => _PricingScreenState();
 }
 
-class _PricingScreenState extends State<PricingScreen>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _entranceCtrl;
-  late Animation<double> _entranceFade;
-  late Animation<Offset> _entranceSlide;
-
-  final Set<int> _openFaqs = {};
+class _PricingScreenState extends State<PricingScreen> {
+  int? _openFaq;
 
   bool _checkingResume = true;
   String? _resumeReference;
 
-  // ── Currency preview — display only, defaults to Ghana ──
+  // Display only, defaults to Ghana
   String _selectedCurrency = 'GHS';
 
   @override
@@ -327,29 +269,15 @@ class _PricingScreenState extends State<PricingScreen>
     super.initState();
     SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle.light.copyWith(
       statusBarColor: Colors.transparent,
-      systemNavigationBarColor: _black,
+      systemNavigationBarColor: _bg,
     ));
-    _entranceCtrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 700));
-    _entranceFade =
-        CurvedAnimation(parent: _entranceCtrl, curve: Curves.easeOut);
-    _entranceSlide =
-        Tween<Offset>(begin: const Offset(0, 0.05), end: Offset.zero).animate(
-            CurvedAnimation(parent: _entranceCtrl, curve: Curves.easeOutCubic));
-    _entranceCtrl.forward();
     _checkForUnclaimedPayment();
-  }
-
-  @override
-  void dispose() {
-    _entranceCtrl.dispose();
-    super.dispose();
   }
 
   Future<void> _checkForUnclaimedPayment() async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) {
-      setState(() => _checkingResume = false);
+      if (mounted) setState(() => _checkingResume = false);
       return;
     }
 
@@ -360,16 +288,14 @@ class _PricingScreenState extends State<PricingScreen>
           .where('paid', isEqualTo: true)
           .where('claimed', isEqualTo: false)
           .limit(1)
-          .get();
+          .get()
+          .timeout(const Duration(seconds: 8));
 
-      if (query.docs.isNotEmpty && mounted) {
-        setState(() {
-          _resumeReference = query.docs.first.id;
-          _checkingResume = false;
-        });
-      } else if (mounted) {
-        setState(() => _checkingResume = false);
-      }
+      if (!mounted) return;
+      setState(() {
+        if (query.docs.isNotEmpty) _resumeReference = query.docs.first.id;
+        _checkingResume = false;
+      });
     } catch (err) {
       if (mounted) setState(() => _checkingResume = false);
     }
@@ -386,17 +312,18 @@ class _PricingScreenState extends State<PricingScreen>
     );
   }
 
-  // ── Payment logic UNCHANGED — always uses plan.amountGHS regardless
-  // of what currency is currently being previewed on screen. ──
+  // Payment logic UNCHANGED — always uses plan.amountGHS regardless of
+  // what currency is currently being previewed on screen.
   Future<void> _handlePlanTap(_Plan plan) async {
     if (plan.amountGHS == 0) {
-      Navigator.pushNamed(context, plan.btnRoute);
+      Navigator.pushNamed(context, plan.route);
       return;
     }
 
     final email = FirebaseAuth.instance.currentUser?.email ?? '';
     final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
-    final tempReference = '${uid.isEmpty ? 'guest' : uid}_${DateTime.now().millisecondsSinceEpoch}';
+    final tempReference =
+        '${uid.isEmpty ? 'guest' : uid}_${DateTime.now().millisecondsSinceEpoch}';
 
     Navigator.push(
       context,
@@ -408,514 +335,423 @@ class _PricingScreenState extends State<PricingScreen>
           email: email,
           successRouteName: '/upload',
           // Pricing-screen flow: no submission exists yet, so this stays
-          // false. This keeps the mandatory "Continue" lock screen working
-          // exactly as before — nothing in this flow changes.
+          // false and the mandatory "Continue" lock screen keeps working.
           isExistingSubmission: false,
         ),
       ),
     );
   }
 
+  Future<void> _pickCurrency() async {
+    final picked = await showCupertinoModalPopup<String>(
+      context: context,
+      builder: (ctx) => CupertinoTheme(
+        data: const CupertinoThemeData(brightness: Brightness.dark),
+        child: CupertinoActionSheet(
+          title: const Text('View prices in'),
+          message: const Text('Display only. Checkout is always in GHC.'),
+          actions: _currencyOptions
+              .map((o) => CupertinoActionSheetAction(
+                    isDefaultAction: o['code'] == _selectedCurrency,
+                    onPressed: () => Navigator.pop(ctx, o['code']),
+                    child: Text(o['label']!),
+                  ))
+              .toList(),
+          cancelButton: CupertinoActionSheetAction(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+        ),
+      ),
+    );
+    if (picked != null && mounted) setState(() => _selectedCurrency = picked);
+  }
+
   @override
   Widget build(BuildContext context) {
     final top = MediaQuery.of(context).padding.top;
     final bottom = MediaQuery.of(context).padding.bottom;
-    final hasLockedPayment = !_checkingResume && _resumeReference != null;
+    final locked = !_checkingResume && _resumeReference != null;
 
-    return WillPopScope(
-      // Block the back button while a completed payment is waiting —
-      // forces the user through "Continue" instead of getting stuck
-      // back on a pricing page they can't fully use anyway.
-      onWillPop: () async => !hasLockedPayment,
+    final sections = <Widget>[
+      _pad(_buildHeader()),
+      const SizedBox(height: 40),
+      for (var i = 0; i < _plans.length; i++)
+        _pad(_Reveal(
+          delayMs: i * 80,
+          child: _PlanCard(
+            plan: _plans[i],
+            currencyCode: _selectedCurrency,
+            onTap: () => _handlePlanTap(_plans[i]),
+          ),
+        )),
+      _pad(const _Reveal(child: _ComparePanel())),
+      _pad(_Reveal(child: _buildFaq())),
+      _pad(_Reveal(child: _buildBanner())),
+    ];
+
+    return PopScope(
+      // Block the back button while a completed payment is waiting.
+      canPop: !locked,
       child: Scaffold(
-        backgroundColor: _black,
+        backgroundColor: _bg,
         body: Stack(
           children: [
-            FadeTransition(
-              opacity: _entranceFade,
-              child: SlideTransition(
-                position: _entranceSlide,
-                child: CustomScrollView(
-                  physics: const BouncingScrollPhysics(),
-                  slivers: [
-                    SliverPersistentHeader(
-                      pinned: true,
-                      delegate: _TopBarDelegate(
-                        topPadding: top,
-                        onBack: () => Navigator.pop(context),
-                      ),
-                    ),
-                    SliverToBoxAdapter(child: _buildHeader()),
-                    SliverToBoxAdapter(child: _buildCurrencySelector()),
-                    SliverToBoxAdapter(child: _buildTrustStrip()),
-                    SliverToBoxAdapter(
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 4),
-                        child: Text(
-                          'CHOOSE YOUR PLAN',
-                          style: _outfit(11, FontWeight.w800, _grey, ls: 2),
-                        ),
-                      ),
-                    ),
-                    SliverPadding(
-                      padding: const EdgeInsets.fromLTRB(22, 12, 22, 0),
-                      sliver: SliverList(
-                        delegate: SliverChildBuilderDelegate(
-                              (_, i) => _PlanCard(
-                            plan: _plans[i],
-                            index: i,
-                            currencyCode: _selectedCurrency,
-                            onTap: () => _handlePlanTap(_plans[i]),
-                          ),
-                          childCount: _plans.length,
-                        ),
-                      ),
-                    ),
-                    SliverToBoxAdapter(child: _buildCompareSection()),
-                    SliverToBoxAdapter(child: _buildFaqSection()),
-                    SliverToBoxAdapter(child: _buildBottomBanner()),
-                    SliverToBoxAdapter(child: SizedBox(height: bottom + 30)),
-                  ],
+            CustomScrollView(
+              physics: const BouncingScrollPhysics(),
+              slivers: [
+                SliverPersistentHeader(
+                  pinned: true,
+                  delegate: _TopBarDelegate(
+                    topPadding: top,
+                    onBack: () => Navigator.maybePop(context),
+                  ),
+                ),
+                SliverList(
+                  delegate: SliverChildBuilderDelegate(
+                    (_, i) => sections[i],
+                    childCount: sections.length,
+                  ),
+                ),
+                SliverToBoxAdapter(child: SizedBox(height: bottom + 64)),
+              ],
+            ),
+            // Covers the page until the unclaimed-payment check finishes,
+            // so the lock never flashes in after the prices.
+            if (_checkingResume)
+              Positioned(
+                left: 0,
+                right: 0,
+                top: top + 56,
+                bottom: 0,
+                child: Container(
+                  color: _bg,
+                  alignment: Alignment.center,
+                  child: const CupertinoActivityIndicator(radius: 14, color: _label),
                 ),
               ),
-            ),
-            // ── Blocking payment overlay ──
-            // Appears automatically whenever a paid-but-unclaimed payment
-            // exists. Blurs and blocks the entire pricing page — the only
-            // way past it is tapping Continue, which routes straight into
-            // the release flow. Nothing behind it is reachable.
-            if (hasLockedPayment) _buildPaymentLockOverlay(),
+            if (locked) _buildLockOverlay(),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildPaymentLockOverlay() {
+  // ── Header: large title, subtitle, currency pill ──
+  Widget _buildHeader() {
+    final code = _selectedCurrency;
+    final note = code == 'GHS'
+        ? "You'll be charged the exact GHC amount at checkout."
+        : "Approximate ${code == 'OTHER' ? 'USD' : code} preview. You'll be charged the GHC amount shown next to it.";
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 40),
+      child: Column(
+        children: [
+          Text(
+            'Pricing',
+            textAlign: TextAlign.center,
+            style: _ts(44, FontWeight.w700, _label, ls: -1.9, h: 1.05),
+          ),
+          const SizedBox(height: 14),
+          Text(
+            'Upload once, reach 100+ stores and keep every cent you earn.',
+            textAlign: TextAlign.center,
+            style: _ts(17, FontWeight.w400, _label2, h: 1.4),
+          ),
+          const SizedBox(height: 28),
+          _Pressable(
+            onTap: _pickCurrency,
+            child: Container(
+              height: 38,
+              padding: const EdgeInsets.only(left: 16, right: 12),
+              decoration: BoxDecoration(
+                color: _fill,
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    _currencyLabel(code),
+                    style: _ts(15, FontWeight.w500, _label),
+                  ),
+                  const SizedBox(width: 6),
+                  const Icon(Icons.expand_more_rounded, color: _label2, size: 18),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            note,
+            textAlign: TextAlign.center,
+            style: _ts(13, FontWeight.w400, _label3, h: 1.4),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── FAQ: one grouped iOS list ──
+  Widget _buildFaq() {
+    return Padding(
+      padding: const EdgeInsets.only(top: 64),
+      child: Column(
+        children: [
+          Text(
+            'Questions',
+            textAlign: TextAlign.center,
+            style: _ts(28, FontWeight.w700, _label, ls: -0.9),
+          ),
+          const SizedBox(height: 22),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(18),
+            child: Container(
+              color: _s1,
+              child: Column(
+                children: [
+                  for (var i = 0; i < _faqs.length; i++)
+                    _FaqItem(
+                      faq: _faqs[i],
+                      first: i == 0,
+                      isOpen: _openFaq == i,
+                      onTap: () => setState(() => _openFaq = _openFaq == i ? null : i),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Closing banner: yellow ──
+  Widget _buildBanner() {
+    return Padding(
+      padding: const EdgeInsets.only(top: 64),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
+        decoration: BoxDecoration(
+          color: _yellow,
+          borderRadius: BorderRadius.circular(28),
+        ),
+        child: Column(
+          children: [
+            Text(
+              'Ready to get your music heard?',
+              textAlign: TextAlign.center,
+              style: _ts(30, FontWeight.w700, Colors.black, ls: -1.1, h: 1.12),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              'Join thousands of independent artists distributing with 444Music.',
+              textAlign: TextAlign.center,
+              style: _ts(17, FontWeight.w400, const Color(0xA6000000), h: 1.4),
+            ),
+            const SizedBox(height: 24),
+            Wrap(
+              alignment: WrapAlignment.center,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                _Pressable(
+                  onTap: () => Navigator.pushNamed(context, '/agreement'),
+                  child: Container(
+                    height: 48,
+                    padding: const EdgeInsets.symmetric(horizontal: 28),
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: Colors.black,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      'Start distributing',
+                      style: _ts(17, FontWeight.w600, Colors.white, ls: -0.2),
+                    ),
+                  ),
+                ),
+                _Pressable(
+                  onTap: () => launchUrl(
+                    Uri.parse('https://www.444musicdistro.com/support.html'),
+                    mode: LaunchMode.externalApplication,
+                  ),
+                  child: Container(
+                    height: 48,
+                    padding: const EdgeInsets.symmetric(horizontal: 22),
+                    alignment: Alignment.center,
+                    child: Text(
+                      'Talk to support',
+                      style: _ts(17, FontWeight.w500, Colors.black, ls: -0.2),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Already-paid lock: iOS alert ──
+  Widget _buildLockOverlay() {
     return Positioned.fill(
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: () {}, // absorbs all taps, nothing behind is reachable
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-          child: Container(
-            color: _black.withValues(alpha: 0.85),
-            padding: const EdgeInsets.symmetric(horizontal: 32),
-            child: Center(
-              child: Container(
-                padding: const EdgeInsets.all(28),
-                decoration: BoxDecoration(
-                  color: _black1,
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(color: _greenBorder, width: 1.5),
+        child: ClipRect(
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+            child: Container(
+              color: const Color(0x80000000),
+              alignment: Alignment.center,
+              padding: const EdgeInsets.all(24),
+              child: TweenAnimationBuilder<double>(
+                tween: Tween(begin: 0, end: 1),
+                duration: const Duration(milliseconds: 380),
+                curve: _ease,
+                builder: (_, t, child) => Opacity(
+                  opacity: t.clamp(0.0, 1.0).toDouble(),
+                  child: Transform.scale(scale: 1.12 - 0.12 * t, child: child),
                 ),
+                child: _buildLockCard(),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLockCard() {
+    return SizedBox(
+      width: 280,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          color: const Color(0xF02C2C2E),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 22, 16, 18),
                 child: Column(
-                  mainAxisSize: MainAxisSize.min,
                   children: [
                     Container(
-                      width: 60,
-                      height: 60,
+                      width: 44,
+                      height: 44,
                       decoration: const BoxDecoration(
-                        color: _greenDim,
+                        color: Color(0x2930D158),
                         shape: BoxShape.circle,
                       ),
-                      child: const Icon(Icons.check_circle_rounded,
-                          color: _green, size: 32),
+                      child: const Icon(Icons.check_rounded, color: _green, size: 24),
                     ),
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 12),
                     Text(
-                      'Payment Completed',
+                      'Payment completed',
                       textAlign: TextAlign.center,
-                      style: _outfit(18, FontWeight.w800, _white),
+                      style: _ts(17, FontWeight.w600, _label, ls: -0.3),
                     ),
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 4),
                     Text(
                       "You've already paid for a release. Continue to finish submitting it before starting anything new.",
                       textAlign: TextAlign.center,
-                      style: _outfit(13, FontWeight.w500, _white70, h: 1.5),
-                    ),
-                    const SizedBox(height: 24),
-                    GestureDetector(
-                      onTap: _resumeRelease,
-                      child: Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.symmetric(vertical: 15),
-                        decoration: BoxDecoration(
-                          color: _green,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Text(
-                              'CONTINUE',
-                              style: _outfit(13, FontWeight.w800, _black, ls: 1.2),
-                            ),
-                            const SizedBox(width: 8),
-                            const Icon(Icons.arrow_forward_rounded,
-                                color: _black, size: 16),
-                          ],
-                        ),
-                      ),
+                      style: _ts(13, FontWeight.w400, const Color(0xD9FFFFFF), h: 1.4),
                     ),
                   ],
                 ),
               ),
-            ),
+              Container(height: 0.5, color: _sep),
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: _resumeRelease,
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(vertical: 13),
+                  alignment: Alignment.center,
+                  child: Text(
+                    'Continue',
+                    style: _ts(17, FontWeight.w600, _blue),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
-      ),
-    );
-  }
-
-  // ── Header — matched to pricing.html's plain h1 + p (no extra pill,
-  // no "DISTRIBUTION PLANS" badge — the web page doesn't have one). ──
-  Widget _buildHeader() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(22, 32, 22, 0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Simple, serious\npricing.',
-            style: _outfit(34, FontWeight.w800, _white, h: 1.12, ls: -0.3),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            'Upload once, reach 100+ stores, and keep every cent you earn.',
-            style: _outfit(14, FontWeight.w500, _grey, h: 1.6),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ── CURRENCY SELECTOR — display only, doesn't touch Paystack ──
-  Widget _buildCurrencySelector() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(22, 20, 22, 24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Text(
-                'VIEW PRICES IN',
-                style: _outfit(11, FontWeight.w700, _grey, ls: 0.5),
-              ),
-              const SizedBox(width: 10),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-                decoration: BoxDecoration(
-                  color: _black2,
-                  borderRadius: BorderRadius.circular(99),
-                  border: Border.all(color: _white20),
-                ),
-                child: DropdownButtonHideUnderline(
-                  child: DropdownButton<String>(
-                    value: _selectedCurrency,
-                    dropdownColor: _black2,
-                    isDense: true,
-                    icon: const Icon(Icons.keyboard_arrow_down_rounded,
-                        color: _greyLight, size: 16),
-                    style: _outfit(13, FontWeight.w700, _white),
-                    items: _currencyOptions
-                        .map((opt) => DropdownMenuItem(
-                              value: opt['code'],
-                              child: Text(opt['label']!,
-                                  overflow: TextOverflow.ellipsis),
-                            ))
-                        .toList(),
-                    onChanged: (v) {
-                      if (v != null) setState(() => _selectedCurrency = v);
-                    },
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            _selectedCurrency == 'GHS'
-                ? "You'll be charged the exact GHC amount shown below at checkout."
-                : "Approximate $_selectedCurrency preview — you'll still be charged the exact GHC amount shown next to it at checkout.",
-            style: _outfit(11, FontWeight.w500, _greyDark, h: 1.4),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTrustStrip() {
-    final items = [
-      (Icons.check_circle_rounded, '100% Royalties'),
-      (Icons.store_rounded, '100+ Stores'),
-      (Icons.qr_code_rounded, 'Free ISRC & UPC'),
-      (Icons.cancel_rounded, 'Cancel Anytime'),
-    ];
-    return Container(
-      margin: const EdgeInsets.fromLTRB(22, 0, 22, 28),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      decoration: BoxDecoration(
-        color: _black2,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _white10),
-      ),
-      child: Wrap(
-        spacing: 18,
-        runSpacing: 10,
-        children: items.map((item) {
-          return Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(item.$1, color: _green, size: 12),
-              const SizedBox(width: 6),
-              Text(
-                item.$2,
-                style: _outfit(12, FontWeight.w600, _white70),
-              ),
-            ],
-          );
-        }).toList(),
-      ),
-    );
-  }
-
-  // ── Plan Comparison — rendered as a WHITE panel, matching
-  // .compare-table-wrap on pricing.html (light grey header row, black
-  // text on white, on top of the black page background). ──────────────
-  Widget _buildCompareSection() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(22, 40, 22, 0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Plan Comparison',
-            textAlign: TextAlign.left,
-            style: _outfit(22, FontWeight.w800, _white),
-          ),
-          const SizedBox(height: 18),
-          Container(
-            decoration: BoxDecoration(
-              color: _white,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: _paperTableBorder),
-              boxShadow: [
-                BoxShadow(
-                  color: _black.withValues(alpha: 0.5),
-                  blurRadius: 60,
-                  offset: const Offset(0, 24),
-                ),
-              ],
-            ),
-            clipBehavior: Clip.hardEdge,
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              physics: const BouncingScrollPhysics(),
-              child: _CompareTable(),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildFaqSection() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(22, 36, 22, 0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Frequently Asked Questions',
-            style: _outfit(22, FontWeight.w800, _white),
-          ),
-          const SizedBox(height: 16),
-          ..._faqs.asMap().entries.map((e) {
-            final i = e.key;
-            final faq = e.value;
-            final open = _openFaqs.contains(i);
-            return _FaqItem(
-              faq: faq,
-              isOpen: open,
-              onTap: () => setState(() {
-                if (open) {
-                  _openFaqs.remove(i);
-                } else {
-                  _openFaqs.clear();
-                  _openFaqs.add(i);
-                }
-              }),
-            );
-          }),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildBottomBanner() {
-    return Container(
-      margin: const EdgeInsets.fromLTRB(22, 36, 22, 0),
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        color: _white,
-        borderRadius: BorderRadius.circular(22),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Ready to get your\nmusic heard?',
-                  style: _outfit(20, FontWeight.w800, _paperBlack, h: 1.15),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'Join thousands of independent artists already distributing with 444Music.',
-                  style: _outfit(12, FontWeight.w500, _paperBody, h: 1.5),
-                ),
-                const SizedBox(height: 16),
-                GestureDetector(
-                  onTap: () => Navigator.pushNamed(context, '/upload'),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-                    decoration: BoxDecoration(
-                      color: _paperBlack,
-                      borderRadius: BorderRadius.circular(99),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.rocket_launch_rounded, color: _white, size: 14),
-                        const SizedBox(width: 8),
-                        Text(
-                          'Start Distributing',
-                          style: _outfit(13, FontWeight.w800, _white),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 16),
-          Container(
-            width: 56,
-            height: 56,
-            decoration: const BoxDecoration(color: _paperBlack, shape: BoxShape.circle),
-            child: const Icon(Icons.headphones_rounded, color: _white, size: 22),
-          ),
-        ],
       ),
     );
   }
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  STICKY TOP BAR DELEGATE
+//  SMALL SHARED WIDGETS
 // ════════════════════════════════════════════════════════════════════
-class _TopBarDelegate extends SliverPersistentHeaderDelegate {
-  final double topPadding;
-  final VoidCallback onBack;
 
-  const _TopBarDelegate({required this.topPadding, required this.onBack});
-
-  @override
-  double get minExtent => topPadding + 64;
-  @override
-  double get maxExtent => topPadding + 64;
-
-  @override
-  Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
-    return ClipRect(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-        child: Container(
-          color: _black.withValues(alpha: 0.9),
-          padding: EdgeInsets.only(top: topPadding),
-          child: Container(
-            height: 64,
-            decoration: const BoxDecoration(
-              border: Border(bottom: BorderSide(color: _white10)),
-            ),
-            padding: const EdgeInsets.symmetric(horizontal: 22),
-            child: Row(
-              children: [
-                GestureDetector(
-                  onTap: onBack,
-                  child: Container(
-                    width: 38,
-                    height: 38,
-                    decoration: BoxDecoration(
-                      color: _white06,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: _white10),
-                    ),
-                    child: const Icon(Icons.arrow_back_ios_new_rounded,
-                        color: _white, size: 16),
-                  ),
-                ),
-                const SizedBox(width: 14),
-                Text(
-                  '444Music',
-                  style: _outfit(18, FontWeight.w800, _white),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  @override
-  bool shouldRebuild(covariant _TopBarDelegate oldDelegate) => false;
-}
-
-// ════════════════════════════════════════════════════════════════════
-//  PLAN CARD
-//  isFeatured cards (Single) flip to the light "paper" palette exactly
-//  like .price-card.featured on pricing.html — everything else keeps
-//  the dark card treatment used by the other two plans.
-// ════════════════════════════════════════════════════════════════════
-class _PlanCard extends StatefulWidget {
-  final _Plan plan;
-  final int index;
-  final String currencyCode;
+// Press feedback: scales down slightly, like iOS buttons.
+class _Pressable extends StatefulWidget {
+  final Widget child;
   final VoidCallback onTap;
-
-  const _PlanCard({
-    required this.plan,
-    required this.index,
-    required this.currencyCode,
-    required this.onTap,
-  });
+  final double scale;
+  const _Pressable({required this.child, required this.onTap, this.scale = 0.97});
 
   @override
-  State<_PlanCard> createState() => _PlanCardState();
+  State<_Pressable> createState() => _PressableState();
 }
 
-class _PlanCardState extends State<_PlanCard>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _ctrl;
-  late Animation<double> _fade;
-  late Animation<Offset> _slide;
+class _PressableState extends State<_Pressable> {
+  bool _down = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTapDown: (_) => setState(() => _down = true),
+      onTapUp: (_) {
+        setState(() => _down = false);
+        widget.onTap();
+      },
+      onTapCancel: () => setState(() => _down = false),
+      child: AnimatedScale(
+        scale: _down ? widget.scale : 1,
+        duration: const Duration(milliseconds: 140),
+        curve: _ease,
+        child: widget.child,
+      ),
+    );
+  }
+}
+
+// Fade + rise when a section first appears, like the web's scroll reveal.
+class _Reveal extends StatefulWidget {
+  final Widget child;
+  final int delayMs;
+  const _Reveal({required this.child, this.delayMs = 0});
+
+  @override
+  State<_Reveal> createState() => _RevealState();
+}
+
+class _RevealState extends State<_Reveal>
+    with SingleTickerProviderStateMixin, AutomaticKeepAliveClientMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _fade;
+  late final Animation<Offset> _slide;
+
+  @override
+  bool get wantKeepAlive => true;
 
   @override
   void initState() {
     super.initState();
-    _ctrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 550));
-    _fade = CurvedAnimation(parent: _ctrl, curve: Curves.easeOut);
-    _slide = Tween<Offset>(begin: const Offset(0, 0.12), end: Offset.zero)
-        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic));
-
-    Future.delayed(Duration(milliseconds: 80 + widget.index * 100), () {
+    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 700));
+    final curved = CurvedAnimation(parent: _ctrl, curve: _ease);
+    _fade = curved;
+    _slide = Tween<Offset>(begin: const Offset(0, 0.03), end: Offset.zero).animate(curved);
+    Future.delayed(Duration(milliseconds: widget.delayMs), () {
       if (mounted) _ctrl.forward();
     });
   }
@@ -928,597 +764,445 @@ class _PlanCardState extends State<_PlanCard>
 
   @override
   Widget build(BuildContext context) {
-    final plan = widget.plan;
-    final bool featured = plan.isFeatured;
-
-    // ── Currency preview computation — display only ──
-    final baseGhc = double.tryParse(plan.price) ?? 0;
-    final info = _currencyRates[widget.currencyCode] ?? _currencyRates['GHS']!;
-    final isGhs = widget.currencyCode == 'GHS';
-    final displayCurrencyLabel = info.symbol;
-    final displayAmount = (baseGhc == 0)
-        ? '0'
-        : (isGhs ? plan.price : _formatConvertedAmount(baseGhc, widget.currencyCode));
-    final subLabel = isGhs
-        ? '/ \$${plan.usdPrice}'
-        : (baseGhc == 0 ? '/ GHC 0' : '/ GHC ${plan.price}');
-
-    // ── Theme tokens — dark card vs. white "paper" featured card ──
-    final Color cardBg = featured ? _white : _black1;
-    final Color cardBorder = featured ? _paperTableBorder : _white10;
-    final double cardBorderWidth = featured ? 1.5 : 1;
-    final Color nameColor = featured ? _paperBlack : _white;
-    final Color descColor = featured ? _paperBody : _grey;
-    final Color currencyLabelColor = featured ? const Color(0xA60A0A0A) : _white70;
-    final Color amountColor = featured ? _paperBlack : _white;
-    final Color subLabelColor = featured ? _paperMuted : _grey;
-    final Color periodColor = featured ? _paperFaint : _greyDark;
-    final Color dividerColor = featured ? _paperDivider : _white10;
-    final Color featuresLabelColor = featured ? const Color(0xFF7A7A7A) : _greyDark;
-
+    super.build(context);
     return FadeTransition(
       opacity: _fade,
-      child: SlideTransition(
-        position: _slide,
+      child: SlideTransition(position: _slide, child: widget.child),
+    );
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  STICKY TOP BAR
+// ════════════════════════════════════════════════════════════════════
+class _TopBarDelegate extends SliverPersistentHeaderDelegate {
+  final double topPadding;
+  final VoidCallback onBack;
+
+  const _TopBarDelegate({required this.topPadding, required this.onBack});
+
+  @override
+  double get minExtent => topPadding + 56;
+  @override
+  double get maxExtent => topPadding + 56;
+
+  @override
+  Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
         child: Container(
-          margin: const EdgeInsets.only(bottom: 16),
-          decoration: BoxDecoration(
-            color: cardBg,
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: cardBorder, width: cardBorderWidth),
-            boxShadow: featured
-                ? [
-                    BoxShadow(
-                      color: _black.withValues(alpha: 0.55),
-                      blurRadius: 60,
-                      offset: const Offset(0, 24),
-                    ),
-                  ]
-                : null,
+          padding: EdgeInsets.only(top: topPadding),
+          decoration: const BoxDecoration(
+            color: Color(0xB8000000),
+            border: Border(bottom: BorderSide(color: Color(0x14FFFFFF), width: 0.5)),
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                height: 1,
-                margin: const EdgeInsets.symmetric(horizontal: 0),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: featured
-                        ? [Colors.transparent, _black.withValues(alpha: 0.3), Colors.transparent]
-                        : [Colors.transparent, _white70, Colors.transparent],
-                    stops: const [0.0, 0.5, 1.0],
+          child: SizedBox(
+            height: 56,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                Text('444Music', style: _ts(17, FontWeight.w600, _label)),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: 16),
+                    child: _CircleBack(onTap: onBack),
                   ),
-                  borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
                 ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(22, 24, 22, 24),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _Badge(plan: plan, featured: featured),
-                    const SizedBox(height: 14),
-                    Text(
-                      plan.planName,
-                      style: _outfit(22, FontWeight.w800, nameColor, ls: 0.1),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      plan.desc,
-                      style: _outfit(13, FontWeight.w500, descColor, h: 1.55),
-                    ),
-                    const SizedBox(height: 22),
-                    Wrap(
-                      crossAxisAlignment: WrapCrossAlignment.end,
-                      spacing: 8,
-                      runSpacing: 4,
-                      children: [
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              displayCurrencyLabel,
-                              style: _outfit(15, FontWeight.w700, currencyLabelColor),
-                            ),
-                            const SizedBox(width: 4),
-                            Text(
-                              displayAmount,
-                              style: _mono(40, FontWeight.w500, amountColor),
-                            ),
-                          ],
-                        ),
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
-                          child: Text(
-                            subLabel,
-                            style: _outfit(13, FontWeight.w600, subLabelColor),
-                          ),
-                        ),
-                        if (plan.saveBadge != null)
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 6),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 8, vertical: 3),
-                              decoration: BoxDecoration(
-                                color: _greenDim,
-                                borderRadius: BorderRadius.circular(99),
-                                border: Border.all(color: _greenBorder),
-                              ),
-                              child: Text(
-                                plan.saveBadge!,
-                                style: _outfit(11, FontWeight.w700, _green),
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      plan.period,
-                      style: _outfit(12, FontWeight.w500, periodColor),
-                    ),
-                    const SizedBox(height: 22),
-                    Container(height: 1, color: dividerColor),
-                    const SizedBox(height: 20),
-                    Text(
-                      "WHAT'S INCLUDED",
-                      style: _outfit(10, FontWeight.w800, featuresLabelColor, ls: 1.5),
-                    ),
-                    const SizedBox(height: 12),
-                    ...plan.features.map(
-                      (f) => _FeatureRow(feature: f, featured: featured),
-                    ),
-                    const SizedBox(height: 18),
-                    Wrap(
-                      spacing: 6,
-                      runSpacing: 6,
-                      children: [
-                        ...plan.stores.map(
-                          (s) => _StoreChipWidget(chip: s, featured: featured),
-                        ),
-                        _StoreChipWidget(
-                          chip: const _StoreChip(Icons.add_rounded, '96 more'),
-                          featured: featured,
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 22),
-                    _PlanButton(plan: plan, featured: featured, onTap: widget.onTap),
-                  ],
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
     );
   }
+
+  @override
+  bool shouldRebuild(covariant _TopBarDelegate oldDelegate) =>
+      topPadding != oldDelegate.topPadding;
 }
 
-// ── BADGE ─────────────────────────────────────────────────────────────
-// On a featured (white) card, the "Most Popular" badge inverts to a
-// solid black pill with white text — matching
-// .price-card.featured .plan-badge.popular on pricing.html.
-class _Badge extends StatelessWidget {
-  final _Plan plan;
-  final bool featured;
-  const _Badge({required this.plan, this.featured = false});
+class _CircleBack extends StatelessWidget {
+  final VoidCallback onTap;
+  const _CircleBack({required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    Color bg, textColor, borderColor;
-    IconData icon;
-
-    switch (plan.style) {
-      case PlanStyle.solid:
-        if (featured) {
-          bg = _paperBlack;
-          textColor = _white;
-          borderColor = _paperBlack;
-        } else {
-          bg = _white20;
-          textColor = _white;
-          borderColor = _white40;
-        }
-        icon = Icons.local_fire_department_rounded;
-        break;
-      case PlanStyle.green:
-        bg = _greenDim;
-        textColor = _green;
-        borderColor = _greenBorder;
-        icon = Icons.workspace_premium_rounded;
-        break;
-      case PlanStyle.outline:
-      default:
-        bg = _white06;
-        textColor = _grey;
-        borderColor = _white10;
-        icon = plan.badge == 'Pro'
-            ? Icons.layers_rounded
-            : Icons.eco_rounded;
-    }
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(99),
-        border: Border.all(color: borderColor),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, color: textColor, size: 10),
-          const SizedBox(width: 5),
-          Text(
-            plan.badge.toUpperCase(),
-            style: _outfit(9, FontWeight.w800, textColor, ls: 1.5),
-          ),
-        ],
+    return _Pressable(
+      onTap: onTap,
+      scale: 0.92,
+      child: Container(
+        width: 36,
+        height: 36,
+        decoration: const BoxDecoration(color: _fill, shape: BoxShape.circle),
+        child: const Icon(Icons.arrow_back_ios_new_rounded, color: _label, size: 16),
       ),
     );
   }
 }
 
-// ── FEATURE ROW ───────────────────────────────────────────────────────
-// On a featured (white) card, checks/text go dark — matching
-// .price-card.featured .feature-list li on pricing.html.
-class _FeatureRow extends StatelessWidget {
-  final _Feature feature;
-  final bool featured;
-  const _FeatureRow({required this.feature, this.featured = false});
+// ════════════════════════════════════════════════════════════════════
+//  PLAN CARD — Single is the white featured card, like the web
+// ════════════════════════════════════════════════════════════════════
+class _PlanCard extends StatelessWidget {
+  final _Plan plan;
+  final String currencyCode;
+  final VoidCallback onTap;
+
+  const _PlanCard({
+    required this.plan,
+    required this.currencyCode,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final Color includedColor = featured ? _paperBlack : _white70;
-    final Color excludedColor = featured ? const Color(0xFFBFBFBF) : _greyDark;
-    final Color bubbleColor = featured
-        ? (feature.included ? const Color(0x140A0A0A) : Colors.transparent)
-        : (feature.included ? _white10 : Colors.transparent);
+    final f = plan.featured;
+    final ink = f ? _ink : _label;
+    final sub = f ? _inkSub : _label2;
+    final sub2 = f ? _inkSub2 : _label3;
+    final symbol = (_currencyRates[currencyCode] ?? _currencyRates['USD']!).symbol;
+
+    // Button colours
+    Color btnBg, btnText;
+    if (plan.style == _BtnStyle.solid) {
+      btnBg = f ? Colors.black : Colors.white;
+      btnText = f ? Colors.white : Colors.black;
+    } else {
+      btnBg = _fill;
+      btnText = _label;
+    }
 
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Stack(
         children: [
           Container(
-            width: 18,
-            height: 18,
-            margin: const EdgeInsets.only(top: 1),
+            width: double.infinity,
+            padding: const EdgeInsets.fromLTRB(26, 30, 26, 26),
             decoration: BoxDecoration(
-              color: bubbleColor,
-              shape: BoxShape.circle,
+              color: f ? Colors.white : _s1,
+              borderRadius: BorderRadius.circular(26),
             ),
-            child: Icon(
-              feature.included ? Icons.check_rounded : Icons.close_rounded,
-              color: feature.included ? includedColor : excludedColor,
-              size: 11,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(plan.name, style: _ts(22, FontWeight.w600, ink, ls: -0.4)),
+                const SizedBox(height: 6),
+                Text(plan.desc, style: _ts(15, FontWeight.w400, sub, h: 1.45)),
+                const SizedBox(height: 18),
+                Wrap(
+                  crossAxisAlignment: WrapCrossAlignment.end,
+                  spacing: 6,
+                  children: [
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 7),
+                          child: Text(symbol, style: _ts(20, FontWeight.w600, sub)),
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          _amountIn(plan.amountGHS, currencyCode),
+                          style: _ts(48, FontWeight.w700, ink, ls: -1.9, h: 1, tabular: true),
+                        ),
+                      ],
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: Text(
+                        _subLabel(plan.amountGHS, currencyCode),
+                        style: _ts(14, FontWeight.w400, sub2, tabular: true),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(plan.period, style: _ts(14, FontWeight.w400, sub)),
+                const SizedBox(height: 22),
+                _Pressable(
+                  onTap: onTap,
+                  child: Container(
+                    width: double.infinity,
+                    height: 50,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: btnBg,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      plan.btnLabel,
+                      style: _ts(17, FontWeight.w600, btnText, ls: -0.2),
+                    ),
+                  ),
+                ),
+                Container(
+                  margin: const EdgeInsets.only(top: 24),
+                  padding: const EdgeInsets.only(top: 8),
+                  decoration: BoxDecoration(
+                    border: Border(
+                      top: BorderSide(color: f ? _inkLine : _sep, width: 0.5),
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: plan.features
+                        .map((t) => Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 8),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 2),
+                                    child: Icon(Icons.check_rounded,
+                                        size: 16, color: f ? _ink : _label2),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Text(
+                                      t,
+                                      style: _ts(15, FontWeight.w400, ink, h: 1.35),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ))
+                        .toList(),
+                  ),
+                ),
+              ],
             ),
           ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              feature.text,
-              style: _outfit(13, FontWeight.w600,
-                  feature.included
-                      ? (featured ? _paperFeature : _white70)
-                      : excludedColor,
-                  h: 1.4),
+          if (plan.badge != null)
+            Positioned(
+              top: 22,
+              right: 22,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 4),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0A0A0A),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  plan.badge!,
+                  style: _ts(12, FontWeight.w600, Colors.white),
+                ),
+              ),
             ),
-          ),
         ],
       ),
     );
   }
 }
 
-// ── STORE CHIP ────────────────────────────────────────────────────────
-// On a featured (white) card, chips go light-grey with dark text —
-// matching .price-card.featured .store-chip on pricing.html.
-class _StoreChipWidget extends StatelessWidget {
-  final _StoreChip chip;
-  final bool featured;
-  const _StoreChipWidget({required this.chip, this.featured = false});
-
-  @override
-  Widget build(BuildContext context) {
-    final Color bg = featured ? _paperChipBg : _black3;
-    final Color border = featured ? _paperTableBorder : _white10;
-    final Color iconColor = featured ? _paperChipText : _grey;
-    final Color textColor = featured ? _paperChipText : _grey;
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(99),
-        border: Border.all(color: border),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(chip.icon, color: iconColor, size: 11),
-          const SizedBox(width: 5),
-          Text(
-            chip.label,
-            style: _outfit(11, FontWeight.w600, textColor),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ── PLAN BUTTON ───────────────────────────────────────────────────────
-// On a featured (white) card, the solid button inverts to black-bg /
-// white-text — matching .price-card.featured .plan-btn.solid on
-// pricing.html (the white card's CTA stays dark, not white-on-white).
-class _PlanButtonState extends State<_PlanButton> {
-  bool _pressed = false;
-
-  @override
-  Widget build(BuildContext context) {
-    Color bg, textColor, borderColor;
-    switch (widget.plan.style) {
-      case PlanStyle.solid:
-        if (widget.featured) {
-          bg = _paperBlack;
-          textColor = _white;
-          borderColor = _paperBlack;
-        } else {
-          bg = _white;
-          textColor = _black;
-          borderColor = _white;
-        }
-        break;
-      case PlanStyle.green:
-        bg = Colors.transparent;
-        textColor = _green;
-        borderColor = _greenBorder;
-        break;
-      case PlanStyle.outline:
-      default:
-        if (widget.featured) {
-          bg = Colors.transparent;
-          textColor = _paperBlack;
-          borderColor = _paperTableBorder;
-        } else {
-          bg = Colors.transparent;
-          textColor = _white70;
-          borderColor = _white20;
-        }
-    }
-
-    return GestureDetector(
-      onTapDown: (_) => setState(() => _pressed = true),
-      onTapUp: (_) {
-        setState(() => _pressed = false);
-        widget.onTap();
-      },
-      onTapCancel: () => setState(() => _pressed = false),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 120),
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(vertical: 15),
-        decoration: BoxDecoration(
-          color: _pressed ? bg.withValues(alpha: 0.85) : bg,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: borderColor),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(
-              widget.plan.btnLabel.toUpperCase(),
-              style: _outfit(13, FontWeight.w800, textColor, ls: 1.2),
-            ),
-            const SizedBox(width: 8),
-            Icon(Icons.arrow_forward_rounded, color: textColor, size: 16),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _PlanButton extends StatefulWidget {
-  final _Plan plan;
-  final bool featured;
-  final VoidCallback onTap;
-  const _PlanButton({required this.plan, this.featured = false, required this.onTap});
-
-  @override
-  State<_PlanButton> createState() => _PlanButtonState();
-}
-
 // ════════════════════════════════════════════════════════════════════
-//  COMPARISON TABLE — WHITE panel, matching .compare-table on
-//  pricing.html exactly: light-grey header row (#f4f4f4), grey uppercase
-//  header labels, black bold labels in the highlighted "Single" column,
-//  green check icons, thin hairline row dividers.
+//  COMPARE PANEL — yellow, like .compare-panel on the web
 // ════════════════════════════════════════════════════════════════════
-class _CompareTable extends StatelessWidget {
-  static const _headers = ['Feature', 'Starter', 'Single', 'EP / Album'];
+class _ComparePanel extends StatelessWidget {
+  const _ComparePanel();
+
+  static const _head = ['Feature', 'Starter', 'Single', 'EP / Album'];
   static const _rows = [
-    ['Store Distribution', '100+', '100+', '100+'],
-    ['Royalty Split', '100%', '100%', '100%'],
-    ['Releases', '1', '1 Single', '1 Project'],
+    ['Store distribution', '100+', '100+', '100+'],
+    ['Royalty split', '100%', '100%', '100%'],
+    ['Releases', '1', '1 single', '1 project'],
     ['Free ISRC & UPC', 'yes', 'yes', 'yes'],
     ['Analytics', 'Basic', 'Standard', 'Advanced'],
     ['Support', 'Community', 'Email', 'Priority'],
   ];
 
-  const _CompareTable();
+  @override
+  Widget build(BuildContext context) {
+    const muted = Color(0x8C000000); // rgba(0,0,0,.55)
+    const body = Color(0xB3000000); // rgba(0,0,0,.70)
+    const headLine = Color(0x33000000); // rgba(0,0,0,.20)
+    const rowLine = Color(0x24000000); // rgba(0,0,0,.14)
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(26, 34, 26, 14),
+      decoration: BoxDecoration(
+        color: _yellow,
+        borderRadius: BorderRadius.circular(28),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: Text(
+              'Compare plans',
+              style: _ts(28, FontWeight.w700, Colors.black, ls: -0.9),
+            ),
+          ),
+          const SizedBox(height: 14),
+          LayoutBuilder(
+            builder: (context, c) {
+              final w = c.maxWidth < 440 ? 440.0 : c.maxWidth;
+              return SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                physics: const BouncingScrollPhysics(),
+                child: SizedBox(
+                  width: w,
+                  child: Table(
+                    defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+                    columnWidths: const {
+                      0: FlexColumnWidth(1.6),
+                      1: FlexColumnWidth(1),
+                      2: FlexColumnWidth(1),
+                      3: FlexColumnWidth(1),
+                    },
+                    children: [
+                      TableRow(
+                        decoration: const BoxDecoration(
+                          border: Border(bottom: BorderSide(color: headLine, width: 0.5)),
+                        ),
+                        children: [
+                          for (var i = 0; i < _head.length; i++)
+                            Padding(
+                              padding: EdgeInsets.fromLTRB(i == 0 ? 4 : 8, 12, 8, 12),
+                              child: Text(
+                                _head[i],
+                                textAlign: i == 0 ? TextAlign.left : TextAlign.center,
+                                style: _ts(13, FontWeight.w600,
+                                    i == 2 ? Colors.black : muted),
+                              ),
+                            ),
+                        ],
+                      ),
+                      for (var r = 0; r < _rows.length; r++)
+                        TableRow(
+                          decoration: BoxDecoration(
+                            border: r == _rows.length - 1
+                                ? null
+                                : const Border(
+                                    bottom: BorderSide(color: rowLine, width: 0.5)),
+                          ),
+                          children: [
+                            for (var i = 0; i < _rows[r].length; i++)
+                              Padding(
+                                padding: EdgeInsets.fromLTRB(i == 0 ? 4 : 8, 14, 8, 14),
+                                child: _rows[r][i] == 'yes'
+                                    ? const Center(
+                                        child: Icon(Icons.check_rounded,
+                                            size: 17, color: Colors.black),
+                                      )
+                                    : Text(
+                                        _rows[r][i],
+                                        textAlign:
+                                            i == 0 ? TextAlign.left : TextAlign.center,
+                                        style: _ts(
+                                          15,
+                                          i == 0
+                                              ? FontWeight.w500
+                                              : (i == 2 ? FontWeight.w600 : FontWeight.w400),
+                                          (i == 0 || i == 2) ? Colors.black : body,
+                                        ),
+                                      ),
+                              ),
+                          ],
+                        ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  FAQ ITEM — row inside one grouped list
+// ════════════════════════════════════════════════════════════════════
+class _FaqItem extends StatelessWidget {
+  final _FAQ faq;
+  final bool first;
+  final bool isOpen;
+  final VoidCallback onTap;
+
+  const _FaqItem({
+    required this.faq,
+    required this.first,
+    required this.isOpen,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return Table(
-      columnWidths: const {
-        0: FixedColumnWidth(130),
-        1: FixedColumnWidth(76),
-        2: FixedColumnWidth(76),
-        3: FixedColumnWidth(92),
-      },
+    return Column(
       children: [
-        TableRow(
-          decoration: const BoxDecoration(color: _paperTableHead),
-          children: _headers.asMap().entries.map((e) {
-            final isHighlighted = e.key == 2;
-            return TableCell(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 13),
-                child: Text(
-                  e.value.toUpperCase(),
-                  style: _outfit(10, FontWeight.w800,
-                      isHighlighted ? _paperBlack : _paperFaint, ls: 1.2),
-                  textAlign: e.key == 0 ? TextAlign.left : TextAlign.center,
+        if (!first)
+          Padding(
+            padding: const EdgeInsets.only(left: 18),
+            child: Container(height: 0.5, color: _sep),
+          ),
+        GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    faq.q,
+                    style: _ts(17, FontWeight.w500, _label, ls: -0.2, h: 1.3),
+                  ),
                 ),
-              ),
-            );
-          }).toList(),
-        ),
-        ..._rows.asMap().entries.map((rowEntry) {
-          final isLast = rowEntry.key == _rows.length - 1;
-          final row = rowEntry.value;
-          return TableRow(
-            decoration: BoxDecoration(
-              color: _white,
-              border: isLast
-                  ? null
-                  : const Border(bottom: BorderSide(color: _paperTableLine)),
+                const SizedBox(width: 16),
+                AnimatedRotation(
+                  turns: isOpen ? 0.125 : 0,
+                  duration: const Duration(milliseconds: 350),
+                  curve: _ease,
+                  child: Icon(Icons.add_rounded,
+                      size: 20, color: isOpen ? _label : _label3),
+                ),
+              ],
             ),
-            children: row.asMap().entries.map((e) {
-              final isHighlighted = e.key == 2;
-              final val = e.value;
-              Widget child;
-              if (val == 'yes') {
-                child = const Center(
-                  child: Icon(Icons.check_rounded, color: _green, size: 16),
-                );
-              } else if (val == 'no') {
-                child = const Center(
-                  child: Icon(Icons.close_rounded, color: _paperFaint, size: 16),
-                );
-              } else if (e.key == 0) {
-                child = Text(
-                  val,
-                  style: _outfit(13, FontWeight.w700, _paperBlack),
-                  textAlign: TextAlign.left,
-                  overflow: TextOverflow.ellipsis,
-                );
-              } else {
-                child = Text(
-                  val,
-                  style: _outfit(13,
-                      isHighlighted ? FontWeight.w700 : FontWeight.w600,
-                      isHighlighted ? _paperBlack : _paperFeature),
-                  textAlign: TextAlign.center,
-                  overflow: TextOverflow.ellipsis,
-                );
-              }
-              return TableCell(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
-                  child: child,
-                ),
-              );
-            }).toList(),
-          );
-        }),
+          ),
+        ),
+        AnimatedSize(
+          duration: const Duration(milliseconds: 320),
+          curve: _ease,
+          alignment: Alignment.topCenter,
+          child: isOpen
+              ? Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: Text(
+                      faq.a,
+                      style: _ts(15, FontWeight.w400, _label2, h: 1.5),
+                    ),
+                  ),
+                )
+              : const SizedBox(width: double.infinity),
+        ),
       ],
     );
   }
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  FAQ ITEM
-// ════════════════════════════════════════════════════════════════════
-class _FaqItem extends StatelessWidget {
-  final _FAQ faq;
-  final bool isOpen;
-  final VoidCallback onTap;
-
-  const _FaqItem({required this.faq, required this.isOpen, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: _white10)),
-      ),
-      child: Column(
-        children: [
-          GestureDetector(
-            onTap: onTap,
-            behavior: HitTestBehavior.opaque,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 17),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      faq.q,
-                      style: _outfit(14, FontWeight.w700, _white, h: 1.4),
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  AnimatedRotation(
-                    turns: isOpen ? 0.125 : 0,
-                    duration: const Duration(milliseconds: 250),
-                    curve: Curves.easeOut,
-                    child: Icon(
-                      Icons.add_rounded,
-                      color: isOpen ? _white : _greyDark,
-                      size: 18,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          AnimatedCrossFade(
-            firstChild: const SizedBox(width: double.infinity, height: 0),
-            secondChild: Padding(
-              padding: const EdgeInsets.only(bottom: 17),
-              child: Text(
-                faq.a,
-                style: _outfit(13, FontWeight.w500, _grey, h: 1.65),
-              ),
-            ),
-            crossFadeState:
-            isOpen ? CrossFadeState.showSecond : CrossFadeState.showFirst,
-            duration: const Duration(milliseconds: 280),
-            sizeCurve: Curves.easeOutCubic,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ════════════════════════════════════════════════════════════════════
 //  PAYMENT SCREEN — External Browser (no WebView)
-//  Opens Paystack checkout in the device's real browser instead of an
-//  embedded WebView, and directly verifies payment status against
-//  Paystack's own API rather than depending only on the webhook.
+//  Opens Paystack checkout in the device's real browser and verifies
+//  payment status against the backend.
 //
-//  isExistingSubmission — tells this screen which flow it's serving:
+//  isExistingSubmission:
 //    false (default) = Pricing screen. No submission exists yet.
-//      Behaviour is UNCHANGED from before: "I've completed payment"
-//      always sends the user to HomeScreen, and successful background
-//      verification routes to PaymentSuccessScreen so the user can
-//      finish creating their release.
-//    true = Pay Now on an existing Pending draft (releases_screen.dart).
-//      There is nothing to "continue" — the submission already exists
-//      and gets flipped to Review by the backend directly. So instead
-//      of PaymentSuccessScreen or HomeScreen, this just returns to
-//      wherever the user came from (My Releases), refreshed.
+//      "I've completed payment" goes to HomeScreen; confirmed payment
+//      routes to PaymentSuccessScreen so the user can finish the release.
+//    true = Pay Now on an existing Pending draft (releases screen).
+//      The backend flips the submission to Review directly, so this just
+//      returns to where the user came from.
 //
-//  NOTE: this class's logic is UNCHANGED — only touched to keep it
-//  compiling against the same palette constants above.
+//  Logic is UNCHANGED. Only the look was updated.
 // ════════════════════════════════════════════════════════════════════
 class PaymentWaitingScreen extends StatefulWidget {
   final double amountGHS;
@@ -1582,9 +1266,9 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
           'amountGHS': widget.amountGHS,
           'submissionId': widget.submissionId,
           'uid': widget.uid,
-          // NEW — tells the backend which flow this is, so verify-payment
-          // and the webhook know whether to auto-claim the pendingPayments
-          // doc right away (Pay Now) or leave it for later (Pricing screen).
+          // Tells the backend which flow this is, so verify-payment and
+          // the webhook know whether to auto-claim the pendingPayments
+          // doc right away (Pay Now) or leave it for later (Pricing).
           'isExistingSubmission': widget.isExistingSubmission,
         }),
       );
@@ -1635,9 +1319,8 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
     }
   }
 
-  // Automatic confirmation only — triggered by the app resuming or the
-  // background poll timer. This is NOT called by the "I've completed
-  // payment" button (see _goHome below).
+  // Automatic confirmation only: triggered by the app resuming or the
+  // background poll timer. NOT called by the "I've completed payment" button.
   Future<void> _verifyPayment() async {
     if (_checkingStatus || _paystackReference == null) return;
 
@@ -1653,12 +1336,8 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
         _pollTimer?.cancel();
         if (mounted) {
           if (widget.isExistingSubmission) {
-            // FIXED — Pay Now flow: the submission already exists and the
-            // backend has already flipped it to Review + Paid. There is
-            // nothing to "continue", so just pop back to wherever this
-            // screen was pushed from (My Releases), instead of sending
-            // the user into PaymentSuccessScreen, which is meant for
-            // finishing a brand-new release that doesn't exist yet.
+            // Pay Now flow: the submission already exists and the backend
+            // has already flipped it to Review + Paid, so just go back.
             Navigator.of(context).pop();
           } else {
             Navigator.of(context).pushReplacement(
@@ -1673,28 +1352,18 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
         return;
       }
     } catch (_) {
-      // Silent — this runs in the background. The next automatic poll
-      // will simply try again in 5 seconds.
+      // Silent: runs in the background. The next poll tries again in 5 seconds.
     } finally {
       if (mounted) setState(() => _checkingStatus = false);
     }
   }
 
   // "I've completed payment" button.
-  //
-  // Pricing-screen flow (isExistingSubmission == false): UNCHANGED —
-  // always sends the user to HomeScreen, regardless of payment status.
-  // Automatic confirmation (poll / app-resume) still runs in the
-  // background via the webhook and will route forward on its own if
-  // needed; if the user later taps Upload before that settles, the
-  // existing "Payment Completed" lock screen on Pricing correctly
-  // catches them.
-  //
-  // Pay Now flow (isExistingSubmission == true): pops back to wherever
-  // this screen was pushed from (My Releases) instead of Home, since
-  // there's no new release to walk the user into — Paystack's webhook
-  // updates the submission directly regardless of what screen the app
-  // is on, so it's safe to leave.
+  // Pricing flow: always sends the user to HomeScreen. Background
+  // confirmation still runs through the webhook, and the "Payment
+  // completed" lock on Pricing catches them if they tap Upload early.
+  // Pay Now flow: pops back to My Releases, since the webhook updates
+  // the submission directly.
   void _goHome() {
     _pollTimer?.cancel();
     if (widget.isExistingSubmission) {
@@ -1707,83 +1376,109 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
     }
   }
 
+  Widget _pill(String label, VoidCallback onTap, {bool solid = false}) {
+    return _Pressable(
+      onTap: onTap,
+      child: Container(
+        height: 46,
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: solid ? Colors.white : _fill,
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Text(
+          label,
+          style: _ts(16, FontWeight.w600, solid ? Colors.black : _label, ls: -0.2),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: _black,
-      appBar: AppBar(
-        backgroundColor: _black,
-        title: Text('Complete Payment', style: _outfit(16, FontWeight.w700, _white)),
-        iconTheme: const IconThemeData(color: Colors.white),
-      ),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (_error != null) ...[
-                Text(
-                  _error!,
-                  textAlign: TextAlign.center,
-                  style: _outfit(13, FontWeight.w500, _white70),
-                ),
-                const SizedBox(height: 16),
-                ElevatedButton(
-                  onPressed: () {
-                    setState(() {
-                      _error = null;
-                      _loading = true;
-                    });
-                    _startPayment();
-                  },
-                  child: const Text('Try Again'),
-                ),
-              ] else if (_loading) ...[
-                const CircularProgressIndicator(color: Colors.white),
-                const SizedBox(height: 16),
-                Text(
-                  'Preparing your payment…',
-                  style: _outfit(13, FontWeight.w500, _white70),
-                ),
-              ] else ...[
-                Container(
-                  width: 64,
-                  height: 64,
-                  decoration: const BoxDecoration(color: _white06, shape: BoxShape.circle),
-                  child: const Icon(Icons.open_in_new_rounded, color: _white, size: 28),
-                ),
-                const SizedBox(height: 20),
-                Text(
-                  'Complete your payment in the\nbrowser that just opened',
-                  textAlign: TextAlign.center,
-                  style: _outfit(15, FontWeight.w700, _white, h: 1.4),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  "We'll bring you back here automatically once payment is confirmed. This can take a short moment to settle — no need to close this screen.",
-                  textAlign: TextAlign.center,
-                  style: _outfit(12, FontWeight.w500, _white70, h: 1.5),
-                ),
-                const SizedBox(height: 28),
-                GestureDetector(
-                  onTap: _goHome,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                    decoration: BoxDecoration(
-                      color: _white06,
-                      borderRadius: BorderRadius.circular(99),
-                      border: Border.all(color: _white10),
-                    ),
-                    child: Text(
-                      "I've completed payment",
-                      style: _outfit(13, FontWeight.w700, _white),
+      backgroundColor: _bg,
+      body: SafeArea(
+        child: Column(
+          children: [
+            SizedBox(
+              height: 56,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  Text('Complete payment',
+                      style: _ts(17, FontWeight.w600, _label)),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Padding(
+                      padding: const EdgeInsets.only(left: 16),
+                      child: _CircleBack(onTap: () => Navigator.maybePop(context)),
                     ),
                   ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 32),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (_error != null) ...[
+                        Text(
+                          _error!,
+                          textAlign: TextAlign.center,
+                          style: _ts(15, FontWeight.w400, _label2, h: 1.45),
+                        ),
+                        const SizedBox(height: 20),
+                        _pill('Try again', () {
+                          setState(() {
+                            _error = null;
+                            _loading = true;
+                          });
+                          _startPayment();
+                        }, solid: true),
+                      ] else if (_loading) ...[
+                        const CupertinoActivityIndicator(radius: 14, color: _label),
+                        const SizedBox(height: 16),
+                        Text(
+                          'Preparing your payment…',
+                          style: _ts(15, FontWeight.w400, _label2),
+                        ),
+                      ] else ...[
+                        Container(
+                          width: 64,
+                          height: 64,
+                          decoration: const BoxDecoration(
+                            color: _fill,
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(Icons.open_in_new_rounded,
+                              color: _label, size: 28),
+                        ),
+                        const SizedBox(height: 22),
+                        Text(
+                          'Complete your payment in the browser that just opened',
+                          textAlign: TextAlign.center,
+                          style: _ts(20, FontWeight.w600, _label, ls: -0.4, h: 1.25),
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          "We'll bring you back here automatically once payment is confirmed. This can take a short moment to settle. No need to close this screen.",
+                          textAlign: TextAlign.center,
+                          style: _ts(15, FontWeight.w400, _label2, h: 1.45),
+                        ),
+                        const SizedBox(height: 28),
+                        _pill("I've completed payment", _goHome),
+                      ],
+                    ],
+                  ),
                 ),
-              ],
-            ],
-          ),
+              ),
+            ),
+          ],
         ),
       ),
     );
