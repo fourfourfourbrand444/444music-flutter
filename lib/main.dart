@@ -235,7 +235,7 @@ class _SplashScreenState extends State<SplashScreen>
                   child: const Text(
                     'Distribute. Earn. Grow.',
                     style: TextStyle(
-                      color: Colors.white,
+                      color: Colors.black,
                       fontSize: 14,
                       fontWeight: FontWeight.w500,
                       letterSpacing: 0.6,
