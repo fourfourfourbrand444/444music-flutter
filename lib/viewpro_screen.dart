@@ -1,48 +1,16 @@
 // ═══════════════════════════════════════════════════════════════════
 //  444MUSIC — View Profile Screen (viewpro_screen.dart)
-//  Ported 1:1 from web's viewpro/profile.html: same Firestore reads/
-//  writes (users, posts, comments, likes, followers/following
-//  subcollections) so this screen and web always show identical data.
+//  iOS rebuild. ALL data logic is unchanged from v3: same Firestore
+//  reads/writes, FeedApi calls, follow guard, people cache, counter
+//  self-heal and 2-minute list cache. Only the UI was rebuilt.
 //
-//  Handles BOTH roles the web file does, gated by _isOwn:
-//   - Someone else's profile → Follow button, no edit fields
-//   - Your own profile → "Complete Profile" expandable panel
-//
-//  Reuses UserInfoCache, sendNotification, timeAgo, verifiedTick from
-//  home_screen.dart — single source of truth, not duplicated logic.
-//
-//  v3 — COST + CORRECTNESS PASS
-//   READS
-//   • Followers/Following lists: capped at 50 people (TikTok style),
-//     loaded 15 at a time as you scroll, newest first. Never the
-//     whole subcollection.
-//   • Each follow doc now stores a snapshot of the person's
-//     name/avatar/verified, so a list row costs 1 read, not 2.
-//     (Old docs without the snapshot fall back to UserInfoCache.)
-//   • Opened lists are cached for 2 minutes — reopening is free.
-//   • No more downloading your whole "following" collection on
-//     every profile open. Follow state is checked only for the
-//     people actually on screen (≤30 per query, matches only).
-//   • Following a person no longer re-reads the profile + 60 posts.
-//   • Posts grid: 24 at a time with a Load more button. Posts stat
-//     uses a count() query (1 read per 1000) when there's more.
-//   • Pull-to-refresh throttled to once per 20 seconds.
-//   • Comments stream limit 200 → 50, and the stream is created
-//     ONCE (before, every like/comment tap re-read all comments).
-//   WRITES / ABUSE
-//   • Follow/unfollow is one atomic batch (4 writes succeed or fail
-//     together) — this fixes the drifting Following count.
-//   • Client-side guard against mass follow/unfollow: 1.5s between
-//     actions, 20 actions per 10 min, 30s cooldown per person.
-//   • Likes and comments also use atomic batches now.
-//   FOLLOWING COUNT BUG
-//   • Counters drifted because old follows never touched the counter
-//     and the 4 writes weren't atomic. On YOUR OWN profile the real
-//     counts are checked once per app session with count() queries
-//     (≈1 read per 1000) and the stored counters are corrected.
+//  Own profile → "Edit profile" sheet. Someone else's → Follow button.
+//  Reuses UserInfoCache, sendNotification, timeAgo, verifiedTick,
+//  formatCount and FeedApi from home_screen.dart.
 // ═══════════════════════════════════════════════════════════════════
-import 'dart:ui';
+import 'dart:ui' show ImageFilter;
 import 'dart:math' show min;
+import 'package:flutter/cupertino.dart' show CupertinoActivityIndicator;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -53,24 +21,28 @@ import 'package:flutter_svg/flutter_svg.dart';
 
 import 'home_screen.dart' show UserInfoCache, sendNotification, timeAgo, verifiedTick, formatCount, FeedApi;
 
-// ─── PALETTE (matches home_screen.dart's values) ────────────────────
-const _black    = Color(0xFF000000);
-const _black1   = Color(0xFF0A0A0A);
-const _black2   = Color(0xFF111111);
-const _black3   = Color(0xFF1A1A1A);
-const _black4   = Color(0xFF222222);
-const _white    = Color(0xFFFFFFFF);
-const _white90  = Color(0xE6FFFFFF);
-const _white70  = Color(0xB3FFFFFF);
-const _white40  = Color(0x66FFFFFF);
-const _white20  = Color(0x33FFFFFF);
-const _white10  = Color(0x1AFFFFFF);
-const _white06  = Color(0x0FFFFFFF);
-const _grey     = Color(0xFF888888);
-const _greyDark = Color(0xFF444444);
-const _rose     = Color(0xFFF87171);
-const _blue     = Color(0xFF4DA3FF);
-const _green    = Color(0xFF22C55E);
+// ─── PALETTE (iOS dark, no yellow on this screen) ───────────────────
+const _bg    = Color(0xFF000000);
+const _s1    = Color(0xFF1C1C1E);
+const _s2    = Color(0xFF2C2C2E);
+const _sep   = Color(0x8C545458);
+const _fill  = Color(0x3D787880);
+const _t1    = Color(0xFFFFFFFF);
+const _t2    = Color(0x99EBEBF5);
+const _t3    = Color(0x4DEBEBF5);
+const _blue  = Color(0xFF0A84FF);
+const _rose  = Color(0xFFFF453A);
+const _gray  = Color(0xFF8E8E93);
+const _bar   = Color(0xB8000000);
+
+TextStyle _ts(double s, FontWeight w, Color c, {double? ls, double? h}) =>
+    GoogleFonts.inter(
+      fontSize: s,
+      fontWeight: w,
+      color: c,
+      letterSpacing: ls ?? -s * 0.011,
+      height: h,
+    );
 
 // ─── COST CONTROLS ──────────────────────────────────────────────────
 const _kPeopleMax = 50;   // most people ever shown in a followers/following list
@@ -165,7 +137,7 @@ List<InlineSpan> _hashtagSpans(String text, {required TextStyle base, TextStyle?
   for (final m in regex.allMatches(text)) {
     if (m.start > last) spans.add(TextSpan(text: text.substring(last, m.start), style: base));
     spans.add(TextSpan(text: m.group(1), style: base));
-    spans.add(TextSpan(text: m.group(2), style: tagStyle ?? base.copyWith(color: _blue, fontWeight: FontWeight.w700)));
+    spans.add(TextSpan(text: m.group(2), style: tagStyle ?? base.copyWith(color: _blue, fontWeight: FontWeight.w600)));
     last = m.end;
   }
   if (last < text.length) spans.add(TextSpan(text: text.substring(last), style: base));
@@ -185,6 +157,139 @@ Future<void> _launchUrl(String url) async {
   } catch (_) {}
 }
 
+// ─── SHARED UI PIECES ───────────────────────────────────────────────
+class _Tap extends StatefulWidget {
+  final VoidCallback? onTap;
+  final Widget child;
+  final bool highlight;
+  final double scale;
+  const _Tap({required this.onTap, required this.child, this.highlight = false, this.scale = 1});
+  @override
+  State<_Tap> createState() => _TapState();
+}
+
+class _TapState extends State<_Tap> {
+  bool _down = false;
+  void _set(bool v) {
+    if (_down != v) setState(() => _down = v);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final on = widget.onTap != null;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTapDown: on ? (_) => _set(true) : null,
+      onTapUp: on ? (_) => _set(false) : null,
+      onTapCancel: on ? () => _set(false) : null,
+      onTap: widget.onTap,
+      child: AnimatedScale(
+        scale: (_down && widget.scale != 1) ? widget.scale : 1,
+        duration: const Duration(milliseconds: 160),
+        curve: Curves.easeOutCubic,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          color: (widget.highlight && _down) ? const Color(0x0DFFFFFF) : const Color(0x00000000),
+          child: widget.child,
+        ),
+      ),
+    );
+  }
+}
+
+class _Sep extends StatelessWidget {
+  final double left;
+  const _Sep(this.left);
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: EdgeInsets.only(left: left),
+        child: const SizedBox(height: 0.5, width: double.infinity, child: ColoredBox(color: _sep)),
+      );
+}
+
+Widget _group(List<Widget> rows, {double sepLeft = 16, Color color = _s1}) {
+  final items = <Widget>[];
+  for (var i = 0; i < rows.length; i++) {
+    if (i > 0) items.add(_Sep(sepLeft));
+    items.add(rows[i]);
+  }
+  return Container(
+    decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(16)),
+    clipBehavior: Clip.antiAlias,
+    child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: items),
+  );
+}
+
+Widget _sh(String title) => Padding(
+      padding: const EdgeInsets.fromLTRB(16, 30, 16, 8),
+      child: Text(title.toUpperCase(), style: _ts(13, FontWeight.w500, _t2, ls: 0.52)),
+    );
+
+Widget _grabber() => Center(
+      child: Container(
+        width: 36, height: 5,
+        margin: const EdgeInsets.only(top: 8, bottom: 6),
+        decoration: BoxDecoration(color: _fill, borderRadius: BorderRadius.circular(3)),
+      ),
+    );
+
+Widget _pill(String label, bool blue, VoidCallback onTap, {double h = 30, double fs = 13, bool full = false}) {
+  return _Tap(
+    onTap: onTap,
+    scale: 0.96,
+    child: Container(
+      height: h,
+      width: full ? double.infinity : null,
+      padding: EdgeInsets.symmetric(horizontal: full ? 0 : 16),
+      decoration: BoxDecoration(color: blue ? _blue : _fill, borderRadius: BorderRadius.circular(999)),
+      child: Center(widthFactor: full ? null : 1, child: Text(label, style: _ts(fs, FontWeight.w600, _t1))),
+    ),
+  );
+}
+
+class _Avatar extends StatelessWidget {
+  final String url, name;
+  final double size;
+  const _Avatar({required this.url, required this.name, required this.size});
+  @override
+  Widget build(BuildContext context) {
+    final initial = name.trim().isNotEmpty ? name.trim()[0].toUpperCase() : 'A';
+    return Container(
+      width: size, height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: _s2,
+        border: Border.all(color: const Color(0x1AFFFFFF), width: 0.5),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: url.isNotEmpty
+          ? CachedNetworkImage(imageUrl: url, fit: BoxFit.cover)
+          : Center(child: Text(initial, style: _ts(size * 0.38, FontWeight.w600, _t2))),
+    );
+  }
+}
+
+Widget _bareField({
+  required TextEditingController c,
+  required String hint,
+  TextInputType? type,
+}) =>
+    TextField(
+      controller: c,
+      keyboardType: type,
+      autocorrect: type == null,
+      textAlign: TextAlign.right,
+      cursorColor: _blue,
+      style: _ts(16, FontWeight.w400, _t1),
+      decoration: InputDecoration(
+        isDense: true,
+        border: InputBorder.none,
+        hintText: hint,
+        hintStyle: _ts(16, FontWeight.w400, _t3),
+        contentPadding: const EdgeInsets.symmetric(vertical: 15),
+      ),
+    );
+
 class ViewProScreen extends StatefulWidget {
   final String uid;
   const ViewProScreen({super.key, required this.uid});
@@ -192,7 +297,7 @@ class ViewProScreen extends StatefulWidget {
   State<ViewProScreen> createState() => _ViewProScreenState();
 }
 
-class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateMixin {
+class _ViewProScreenState extends State<ViewProScreen> {
   final _me = FirebaseAuth.instance.currentUser;
   late String _targetUid;
   bool get _isOwn => _targetUid == _me?.uid;
@@ -207,7 +312,6 @@ class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateM
   int _followingCount = 0;
   int _postsCount = 0;
   List<Map<String, dynamic>> _posts = [];
- DocumentSnapshot<Map<String, dynamic>>? _postsCursor;
   int? _postsBefore;
   bool _hasMorePosts = false;
   bool _loadingMorePosts = false;
@@ -220,38 +324,23 @@ class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateM
   final ScrollController _scrollCtrl = ScrollController();
   final GlobalKey _postsSectionKey = GlobalKey();
 
-  bool _sidebarOpen = false;
-  late AnimationController _sidebarCtrl;
-  late Animation<double> _sidebarFade;
-  late Animation<Offset> _sidebarSlide;
-
-  bool _completeOpen = false;
-  late TextEditingController _bioCtrl, _phoneCtrl, _emailCtrl, _countryCtrl, _spotifyCtrl, _appleCtrl, _youtubeCtrl;
-  bool _saving = false;
-  String? _saveStatus;
-  bool _saveError = false;
+  final _bioCtrl = TextEditingController();
+  final _phoneCtrl = TextEditingController();
+  final _emailCtrl = TextEditingController();
+  final _countryCtrl = TextEditingController();
+  final _spotifyCtrl = TextEditingController();
+  final _appleCtrl = TextEditingController();
+  final _youtubeCtrl = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     _targetUid = widget.uid;
-    _sidebarCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 380));
-    _sidebarFade = CurvedAnimation(parent: _sidebarCtrl, curve: Curves.easeOut);
-    _sidebarSlide = Tween<Offset>(begin: const Offset(1, 0), end: Offset.zero)
-        .animate(CurvedAnimation(parent: _sidebarCtrl, curve: Curves.easeOutCubic));
-    _bioCtrl = TextEditingController();
-    _phoneCtrl = TextEditingController();
-    _emailCtrl = TextEditingController();
-    _countryCtrl = TextEditingController();
-    _spotifyCtrl = TextEditingController();
-    _appleCtrl = TextEditingController();
-    _youtubeCtrl = TextEditingController();
     _bootstrap();
   }
 
   @override
   void dispose() {
-    _sidebarCtrl.dispose();
     _scrollCtrl.dispose();
     _bioCtrl.dispose();
     _phoneCtrl.dispose();
@@ -261,6 +350,16 @@ class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateM
     _appleCtrl.dispose();
     _youtubeCtrl.dispose();
     super.dispose();
+  }
+
+  void _fillControllers(Map<String, dynamic> data) {
+    _bioCtrl.text = data['bio'] ?? '';
+    _phoneCtrl.text = data['phone'] ?? '';
+    _emailCtrl.text = data['publicEmail'] ?? '';
+    _countryCtrl.text = data['country'] ?? '';
+    _spotifyCtrl.text = data['spotifyUrl'] ?? '';
+    _appleCtrl.text = data['appleMusicUrl'] ?? '';
+    _youtubeCtrl.text = data['youtubeUrl'] ?? '';
   }
 
   Future<void> _bootstrap() async {
@@ -297,10 +396,9 @@ class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateM
   Future<void> _loadProfile({bool force = false}) async {
     if (!mounted) return;
     if (!force && _lastLoad != null && DateTime.now().difference(_lastLoad!) < const Duration(seconds: 20)) {
-      return;
+      return; // refresh throttle — saves reads on repeated pulls
     }
     _lastLoad = DateTime.now();
-    setState(() => _loading = true);
 
     Map<String, dynamic> data = {};
     try {
@@ -338,93 +436,7 @@ class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateM
       _postsBefore = posts.isNotEmpty ? (posts.last['createdAt'] as num?)?.toInt() : null;
       _hasMorePosts = hasMore;
       _postsCount = postsCount;
-      _bioCtrl.text = data['bio'] ?? '';
-      _phoneCtrl.text = data['phone'] ?? '';
-      _emailCtrl.text = data['publicEmail'] ?? '';
-      _countryCtrl.text = data['country'] ?? '';
-      _spotifyCtrl.text = data['spotifyUrl'] ?? '';
-      _appleCtrl.text = data['appleMusicUrl'] ?? '';
-      _youtubeCtrl.text = data['youtubeUrl'] ?? '';
-      if (_isOwn) _completeOpen = !_hasPublicInfo(data);
-      _loading = false;
-    });
-
-    _healOwnCounts(followersCount, followingCount);
-  }
-
-  Future<void> _loadProfileOld({bool force = false}) async {
-    if (!mounted) return;
-    if (!force && _lastLoad != null && DateTime.now().difference(_lastLoad!) < const Duration(seconds: 20)) {
-      return; // refresh throttle — saves reads on repeated pulls
-    }
-    _lastLoad = DateTime.now();
-    setState(() => _loading = true);
-
-    Map<String, dynamic> data = {};
-    try {
-      final snap = await FirebaseFirestore.instance.collection('users').doc(_targetUid).get();
-      if (snap.exists) data = snap.data()!;
-    } catch (_) {}
-
-    int followersCount = _nonNeg((data['followersCount'] as num?)?.toInt() ?? 0);
-    int followingCount = _nonNeg((data['followingCount'] as num?)?.toInt() ?? 0);
-
-    List<Map<String, dynamic>> posts = [];
-    DocumentSnapshot<Map<String, dynamic>>? cursor;
-    bool hasMore = false;
-    try {
-      final s = await FirebaseFirestore.instance
-          .collection('posts').where('authorUid', isEqualTo: _targetUid)
-          .orderBy('createdAt', descending: true).limit(_kPostsPage).get();
-      posts = s.docs.map((d) => {'id': d.id, ...d.data()}).toList();
-      cursor = s.docs.isNotEmpty ? s.docs.last : null;
-      hasMore = s.docs.length == _kPostsPage;
-    } catch (e) {
-      debugPrint('posts query failed, falling back to unsorted fetch: $e');
-      try {
-        final s2 = await FirebaseFirestore.instance
-            .collection('posts').where('authorUid', isEqualTo: _targetUid).limit(_kPostsPage).get();
-        posts = s2.docs.map((d) => {'id': d.id, ...d.data()}).toList();
-        hasMore = false;
-        posts.sort((a, b) {
-          final ta = (a['createdAt'] is Timestamp) ? (a['createdAt'] as Timestamp).millisecondsSinceEpoch : 0;
-          final tb = (b['createdAt'] is Timestamp) ? (b['createdAt'] as Timestamp).millisecondsSinceEpoch : 0;
-          return tb.compareTo(ta);
-        });
-      } catch (e2) {
-        debugPrint('fallback posts query also failed: $e2');
-      }
-    }
-
-    // Exact posts total only when there are more than one page.
-    int postsCount = posts.length;
-    if (hasMore) {
-      try {
-        final c = await FirebaseFirestore.instance
-            .collection('posts').where('authorUid', isEqualTo: _targetUid).count().get();
-        postsCount = c.count ?? posts.length;
-      } catch (_) {}
-    }
-
-    UserInfoCache.instance.invalidate(_targetUid);
-
-    if (!mounted) return;
-    setState(() {
-      _userData = data;
-      _followersCount = followersCount;
-      _followingCount = followingCount;
-      _posts = posts;
-      _postsCursor = cursor;
-      _hasMorePosts = hasMore;
-      _postsCount = postsCount;
-      _bioCtrl.text = data['bio'] ?? '';
-      _phoneCtrl.text = data['phone'] ?? '';
-      _emailCtrl.text = data['publicEmail'] ?? '';
-      _countryCtrl.text = data['country'] ?? '';
-      _spotifyCtrl.text = data['spotifyUrl'] ?? '';
-      _appleCtrl.text = data['appleMusicUrl'] ?? '';
-      _youtubeCtrl.text = data['youtubeUrl'] ?? '';
-      if (_isOwn) _completeOpen = !_hasPublicInfo(data);
+      _fillControllers(data);
       _loading = false;
     });
 
@@ -458,7 +470,7 @@ class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateM
     }
   }
 
- Future<void> _loadMorePosts() async {
+  Future<void> _loadMorePosts() async {
     if (_loadingMorePosts || !_hasMorePosts || _postsBefore == null) return;
     setState(() => _loadingMorePosts = true);
     try {
@@ -469,26 +481,6 @@ class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateM
         _posts = [..._posts, ...more];
         if (more.isNotEmpty) _postsBefore = (more.last['createdAt'] as num).toInt();
         _hasMorePosts = more.length == _kPostsPage;
-        _loadingMorePosts = false;
-      });
-    } catch (_) {
-      if (mounted) setState(() => _loadingMorePosts = false);
-    }
-  }
-
-  Future<void> _loadMorePostsOld() async {
-    if (_loadingMorePosts || !_hasMorePosts || _postsCursor == null) return;
-    setState(() => _loadingMorePosts = true);
-    try {
-      final s = await FirebaseFirestore.instance
-          .collection('posts').where('authorUid', isEqualTo: _targetUid)
-          .orderBy('createdAt', descending: true)
-          .startAfterDocument(_postsCursor!).limit(_kPostsPage).get();
-      if (!mounted) return;
-      setState(() {
-        _posts = [..._posts, ...s.docs.map((d) => {'id': d.id, ...d.data()})];
-        if (s.docs.isNotEmpty) _postsCursor = s.docs.last;
-        _hasMorePosts = s.docs.length == _kPostsPage;
         _loadingMorePosts = false;
       });
     } catch (_) {
@@ -517,9 +509,11 @@ class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateM
   void _toast(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg, style: GoogleFonts.nunito(color: _white, fontWeight: FontWeight.w700)),
-      backgroundColor: _black3,
+      content: Text(msg, style: _ts(14, FontWeight.w500, _t1)),
+      backgroundColor: _s2,
       behavior: SnackBarBehavior.floating,
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 90),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       duration: const Duration(seconds: 2),
     ));
   }
@@ -597,13 +591,9 @@ class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateM
     }
   }
 
-  Future<void> _saveCompleteProfile() async {
-    if (_me == null) return;
-    setState(() {
-      _saving = true;
-      _saveStatus = 'Saving…';
-      _saveError = false;
-    });
+  /// Saves the edit-profile fields. Returns true on success.
+  Future<bool> _saveCompleteProfile() async {
+    if (_me == null) return false;
     final payload = {
       'bio': _bioCtrl.text.trim(),
       'phone': _phoneCtrl.text.trim(),
@@ -616,40 +606,38 @@ class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateM
     try {
       await FirebaseFirestore.instance.collection('users').doc(_me!.uid).update(payload);
       UserInfoCache.instance.invalidate(_me!.uid);
-      setState(() {
-        _userData = {..._userData, ...payload};
-        _saveStatus = '✓ Saved';
-        _saveError = false;
-      });
-      Future.delayed(const Duration(seconds: 2), () {
-        if (mounted) setState(() => _saveStatus = null);
-      });
+      if (mounted) setState(() => _userData = {..._userData, ...payload});
+      return true;
     } catch (_) {
-      setState(() {
-        _saveStatus = "Couldn't save — try again";
-        _saveError = true;
-      });
-    } finally {
-      if (mounted) setState(() => _saving = false);
+      return false;
     }
   }
 
+  // ── OPENERS ────────────────────────────────────────────────────────
   void _openLightbox() {
     final url = (_userData['profilePic'] ?? '').toString();
     if (url.isEmpty) return;
     showDialog(
       context: context,
       barrierColor: Colors.black,
-      builder: (_) => Stack(children: [
-        Positioned.fill(child: InteractiveViewer(child: Center(child: CachedNetworkImage(imageUrl: url)))),
-        Positioned(
-          top: 40, right: 20,
+      useSafeArea: false,
+      builder: (ctx) => Stack(children: [
+        Positioned.fill(
           child: GestureDetector(
-            onTap: () => Navigator.pop(context),
+            onTap: () => Navigator.pop(ctx),
+            child: InteractiveViewer(child: Center(child: CachedNetworkImage(imageUrl: url))),
+          ),
+        ),
+        Positioned(
+          top: MediaQuery.of(ctx).padding.top + 8,
+          right: 16,
+          child: _Tap(
+            onTap: () => Navigator.pop(ctx),
+            scale: 0.9,
             child: Container(
-              width: 38, height: 38,
-              decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.black54, border: Border.all(color: _white20)),
-              child: const Icon(Icons.close, color: _white, size: 18),
+              width: 36, height: 36,
+              decoration: const BoxDecoration(color: _fill, shape: BoxShape.circle),
+              child: const Icon(Icons.close_rounded, color: _t1, size: 18),
             ),
           ),
         ),
@@ -675,236 +663,274 @@ class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateM
     );
   }
 
+  void _openEdit() {
+    _fillControllers(_userData); // discard any earlier unsaved edits
+    showModalBottomSheet(
+      context: context, isScrollControlled: true, backgroundColor: Colors.transparent,
+      builder: (_) => _EditProfileSheet(
+        bio: _bioCtrl, phone: _phoneCtrl, email: _emailCtrl, country: _countryCtrl,
+        spotify: _spotifyCtrl, apple: _appleCtrl, youtube: _youtubeCtrl,
+        onSave: _saveCompleteProfile,
+      ),
+    );
+  }
+
   void _scrollToPosts() {
     final ctx = _postsSectionKey.currentContext;
     if (ctx == null) return;
-    Scrollable.ensureVisible(
-      ctx,
-      duration: const Duration(milliseconds: 400),
-      curve: Curves.easeOutCubic,
-      alignment: 0,
+    Scrollable.ensureVisible(ctx, duration: const Duration(milliseconds: 400), curve: Curves.easeOutCubic, alignment: 0);
+  }
+
+  void _openMore() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        void go(String route, {bool replace = false}) {
+          Navigator.pop(ctx);
+          if (!mounted) return;
+          if (replace) {
+            Navigator.pushReplacementNamed(context, route);
+          } else {
+            Navigator.pushNamed(context, route);
+          }
+        }
+
+        return Container(
+          decoration: const BoxDecoration(color: _s1, borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
+          padding: EdgeInsets.fromLTRB(16, 0, 16, MediaQuery.of(ctx).padding.bottom + 16),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            _grabber(),
+            const SizedBox(height: 8),
+            _group(color: _s2, sepLeft: 52, [
+              _moreRow(Icons.speed_rounded, 'Dashboard', () => go('/dashboard')),
+              _moreRow(Icons.settings_outlined, 'Settings', () => go('/profile', replace: true)),
+              _moreRow(Icons.build_outlined, 'More tools', () => go('/tools')),
+              _moreRow(Icons.info_outline_rounded, 'About us', () => go('/legal')),
+              _moreRow(Icons.mail_outline_rounded, 'Contact support', () => go('/support')),
+            ]),
+            const SizedBox(height: 12),
+            _group(color: _s2, [
+              _moreRow(Icons.logout_rounded, 'Log out', () async {
+                Navigator.pop(ctx);
+                await FirebaseAuth.instance.signOut();
+                if (mounted) Navigator.pushNamedAndRemoveUntil(context, '/login', (r) => false);
+              }, color: _rose, chevron: false),
+            ]),
+          ]),
+        );
+      },
     );
   }
 
-  void _openSidebar() {
-    setState(() => _sidebarOpen = true);
-    _sidebarCtrl.forward();
+  Widget _moreRow(IconData icon, String label, VoidCallback onTap, {Color color = _t1, bool chevron = true}) {
+    return _Tap(
+      onTap: onTap,
+      highlight: true,
+      child: Container(
+        constraints: const BoxConstraints(minHeight: 52),
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Row(children: [
+          Icon(icon, size: 20, color: color == _t1 ? _gray : color),
+          const SizedBox(width: 14),
+          Expanded(child: Text(label, style: _ts(16, FontWeight.w400, color))),
+          if (chevron) const Icon(Icons.chevron_right_rounded, size: 20, color: _t3),
+        ]),
+      ),
+    );
   }
 
-  void _closeSidebar() {
-    _sidebarCtrl.reverse().then((_) {
-      if (mounted) setState(() => _sidebarOpen = false);
-    });
-  }
-
-  void _navigate(String route) {
-    _closeSidebar();
-    Future.delayed(const Duration(milliseconds: 300), () {
-      if (mounted) Navigator.pushNamed(context, route);
-    });
-  }
-
+  // ═══════════════════════════════════════════════════════════════════
+  //  BUILD
+  // ═══════════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
+    final mq = MediaQuery.of(context);
+    final top = mq.padding.top;
+    final bottom = mq.padding.bottom;
+
     return Scaffold(
-      backgroundColor: _black,
-      extendBody: true,
+      backgroundColor: _bg,
       body: Stack(children: [
-        SafeArea(
-          bottom: false,
-          child: Column(children: [
-            _buildTopBar(),
-            Expanded(
-              child: _loading
-                  ? const Center(child: CircularProgressIndicator(color: _white))
-                  : RefreshIndicator(
-                      color: _white, backgroundColor: _black2,
-                      onRefresh: () => _loadProfile(),
-                      child: SingleChildScrollView(
-                        controller: _scrollCtrl,
-                        physics: const AlwaysScrollableScrollPhysics(),
-                        padding: const EdgeInsets.fromLTRB(14, 6, 14, 110),
-                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          _buildProfileCard(),
+        Positioned.fill(
+          child: _loading
+              ? const Center(child: CupertinoActivityIndicator(radius: 12, color: _t2))
+              : RefreshIndicator(
+                  color: _t1,
+                  backgroundColor: _s2,
+                  edgeOffset: top + 56,
+                  onRefresh: () => _loadProfile(),
+                  child: SingleChildScrollView(
+                    controller: _scrollCtrl,
+                    physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+                    padding: EdgeInsets.fromLTRB(16, top + 64, 16, 100 + bottom),
+                    child: Center(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 640),
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                          _header(),
+                          if (_isOwn && !_hasPublicInfo(_userData)) ...[
+                            const SizedBox(height: 24),
+                            _completePrompt(),
+                          ],
                           if (_hasPublicInfo(_userData)) ...[
-                            const SizedBox(height: 14),
-                            _buildPublicInfoCard(),
+                            const SizedBox(height: 24),
+                            _infoGroup(),
                           ],
-                          if (_isOwn) ...[
-                            const SizedBox(height: 14),
-                            _buildCompleteCard(),
-                          ],
-                          const SizedBox(height: 14),
-                          _buildPostsSection(),
+                          _postsSection(),
                         ]),
                       ),
                     ),
+                  ),
+                ),
+        ),
+        Positioned(top: 0, left: 0, right: 0, child: _topBar(top)),
+        Positioned(bottom: 0, left: 0, right: 0, child: _tabBar(bottom)),
+      ]),
+    );
+  }
+
+  // ── TOP BAR ────────────────────────────────────────────────────────
+  Widget _topBar(double top) {
+    Widget circle(IconData icon, VoidCallback onTap) => _Tap(
+          onTap: onTap,
+          scale: 0.92,
+          child: Container(
+            width: 36, height: 36,
+            decoration: const BoxDecoration(color: _fill, shape: BoxShape.circle),
+            child: Icon(icon, size: icon == Icons.more_horiz_rounded ? 20 : 15, color: _t1),
+          ),
+        );
+
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+        child: Container(
+          height: 56 + top,
+          color: _bar,
+          padding: EdgeInsets.fromLTRB(16, top, 16, 0),
+          child: Row(children: [
+            circle(Icons.arrow_back_ios_new_rounded, () => Navigator.canPop(context)
+                ? Navigator.pop(context)
+                : Navigator.pushReplacementNamed(context, '/home')),
+            Expanded(
+              child: Text(
+                (_userData['name'] ?? 'Profile').toString(),
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: _ts(17, FontWeight.w600, _t1),
+              ),
             ),
+            circle(Icons.more_horiz_rounded, _openMore),
           ]),
         ),
-        Positioned(bottom: 0, left: 0, right: 0, child: _buildBottomNav()),
-        if (_sidebarOpen)
-          GestureDetector(
-            onTap: _closeSidebar,
-            child: FadeTransition(opacity: _sidebarFade, child: Container(color: Colors.black.withOpacity(0.6))),
-          ),
-        if (_sidebarOpen)
-          Positioned(
-            top: 0, right: 0, bottom: 0,
-            child: SlideTransition(position: _sidebarSlide, child: _buildSidebar()),
-          ),
-      ]),
+      ),
     );
   }
 
-  Widget _buildTopBar() {
-    return Container(
-      height: 64,
-      padding: const EdgeInsets.symmetric(horizontal: 18),
-      decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: _white10))),
-      child: Row(children: [
-        GestureDetector(
-          onTap: () => Navigator.canPop(context)
-              ? Navigator.pop(context)
-              : Navigator.pushReplacementNamed(context, '/home'),
-          child: Container(
-            width: 40, height: 40,
-            decoration: BoxDecoration(color: _white06, borderRadius: BorderRadius.circular(10), border: Border.all(color: _white10)),
-            child: const Icon(Icons.arrow_back_rounded, color: _white70, size: 18),
-          ),
-        ),
-        const SizedBox(width: 14),
-        Expanded(
-          child: Text(
-            (_userData['name'] ?? 'Profile').toString(),
-            style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w800, fontSize: 16),
-            maxLines: 1, overflow: TextOverflow.ellipsis,
-          ),
-        ),
-        GestureDetector(
-          onTap: _openSidebar,
-          child: Container(
-            width: 40, height: 40,
-            decoration: BoxDecoration(color: _white06, borderRadius: BorderRadius.circular(10), border: Border.all(color: _white10)),
-            child: const Icon(Icons.menu_rounded, color: _white70, size: 18),
-          ),
-        ),
-      ]),
-    );
-  }
-
-  Widget _buildProfileCard() {
+  // ── HEADER ─────────────────────────────────────────────────────────
+  Widget _header() {
     final name = (_userData['name'] ?? 'Artist').toString();
     final avatar = (_userData['profilePic'] ?? '').toString();
     final verified = _userData['verified'] == true;
     final bio = (_userData['bio'] ?? '').toString();
     final isFollowing = _followingSet.contains(_targetUid);
 
-    return Container(
-      padding: const EdgeInsets.all(22),
-      decoration: BoxDecoration(color: _black2, borderRadius: BorderRadius.circular(22), border: Border.all(color: _white10)),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-          GestureDetector(
-            onTap: _openLightbox,
-            child: Container(
-              width: 90, height: 90,
-              decoration: BoxDecoration(shape: BoxShape.circle, color: _black3, border: Border.all(color: _white20, width: 2)),
-              clipBehavior: Clip.antiAlias,
-              child: avatar.isNotEmpty
-                  ? CachedNetworkImage(imageUrl: avatar, fit: BoxFit.cover)
-                  : Center(
-                      child: Text(
-                        name.trim().isNotEmpty ? name.trim()[0].toUpperCase() : 'A',
-                        style: GoogleFonts.outfit(color: _white70, fontWeight: FontWeight.w800, fontSize: 30),
-                      ),
-                    ),
-            ),
-          ),
-          const SizedBox(width: 20),
-          Expanded(
-            child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
-              _statItem(formatCount(_postsCount), 'Posts', _scrollToPosts),
-              _statItem(formatCount(_followersCount), 'Followers', () => _openPeopleModal('followers')),
-              _statItem(formatCount(_followingCount), 'Following', () => _openPeopleModal('following')),
-            ]),
-          ),
-        ]),
-        Padding(
-          padding: const EdgeInsets.only(top: 18),
-          child: Row(children: [
-            Flexible(child: Text(name, style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w800, fontSize: 20), overflow: TextOverflow.ellipsis)),
-            if (verified) Padding(padding: const EdgeInsets.only(left: 7), child: verifiedTick(size: 15)),
-          ]),
+    return Column(children: [
+      _Tap(
+        onTap: _openLightbox,
+        scale: 0.97,
+        child: _Avatar(url: avatar, name: name, size: 96),
+      ),
+      const SizedBox(height: 14),
+      Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+        Flexible(
+          child: Text(name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: _ts(26, FontWeight.w700, _t1, ls: -0.6)),
         ),
+        if (verified) Padding(padding: const EdgeInsets.only(left: 6), child: verifiedTick(size: 16)),
+      ]),
+      if (bio.isNotEmpty)
         Padding(
           padding: const EdgeInsets.only(top: 8),
-          child: bio.isNotEmpty
-              ? Text(bio, style: GoogleFonts.nunito(color: _white70, fontSize: 13.5, height: 1.55))
-              : (_isOwn
-                  ? TextButton.icon(
-                      onPressed: () => setState(() => _completeOpen = true),
-                      style: TextButton.styleFrom(
-                        padding: EdgeInsets.zero, minimumSize: Size.zero,
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                      icon: const Icon(Icons.add, color: _grey, size: 14),
-                      label: Text('Add a bio', style: GoogleFonts.nunito(color: _grey, fontSize: 12.5, fontWeight: FontWeight.w700)),
-                    )
-                  : const SizedBox.shrink()),
-        ),
+          child: Text(bio, textAlign: TextAlign.center, style: _ts(15, FontWeight.w400, _t2, h: 1.4)),
+        )
+      else if (_isOwn)
         Padding(
-          padding: const EdgeInsets.only(top: 16),
-          child: _isOwn
-              ? SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: () => setState(() => _completeOpen = true),
-                    style: OutlinedButton.styleFrom(
-                      backgroundColor: _white06, side: const BorderSide(color: _white10),
-                      foregroundColor: _white70, padding: const EdgeInsets.symmetric(vertical: 12),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(100)),
-                    ),
-                    icon: const Icon(Icons.edit_outlined, size: 15),
-                    label: Text('Complete Profile', style: GoogleFonts.nunito(fontWeight: FontWeight.w800, fontSize: 13.5)),
-                  ),
-                )
-              : SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: () async {
-                      final msg = await _toggleFollow(_targetUid, {'name': name, 'avatar': avatar, 'verified': verified});
-                      if (msg != null) _toast(msg);
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: isFollowing ? Colors.transparent : _white,
-                      foregroundColor: isFollowing ? _white70 : _black,
-                      side: isFollowing ? const BorderSide(color: _white40) : null,
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(100)),
-                      elevation: 0,
-                    ),
-                    child: Text(isFollowing ? 'Following' : 'Follow', style: GoogleFonts.nunito(fontWeight: FontWeight.w800, fontSize: 13.5)),
-                  ),
-                ),
+          padding: const EdgeInsets.only(top: 6),
+          child: _Tap(
+            onTap: _openEdit,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+              child: Text('Add a bio', style: _ts(15, FontWeight.w400, _blue)),
+            ),
+          ),
         ),
+      const SizedBox(height: 20),
+      _group([
+        Row(children: [
+          _statCell(formatCount(_postsCount), 'Posts', _scrollToPosts),
+          Container(width: 0.5, height: 28, color: _sep),
+          _statCell(formatCount(_followersCount), 'Followers', () => _openPeopleModal('followers')),
+          Container(width: 0.5, height: 28, color: _sep),
+          _statCell(formatCount(_followingCount), 'Following', () => _openPeopleModal('following')),
+        ]),
       ]),
-    );
+      const SizedBox(height: 16),
+      if (_isOwn)
+        _pill('Edit profile', false, _openEdit, h: 46, fs: 16, full: true)
+      else
+        _pill(isFollowing ? 'Following' : 'Follow', !isFollowing, () async {
+          final msg = await _toggleFollow(_targetUid, {'name': name, 'avatar': avatar, 'verified': verified});
+          if (msg != null) _toast(msg);
+        }, h: 46, fs: 16, full: true),
+    ]);
   }
 
-  Widget _statItem(String num, String label, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: Column(children: [
-        Text(num, style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w800, fontSize: 18)),
-        const SizedBox(height: 2),
-        Text(label, style: GoogleFonts.nunito(color: _grey, fontSize: 11, fontWeight: FontWeight.w700)),
-      ]),
-    );
+  Widget _statCell(String num, String label, VoidCallback onTap) => Expanded(
+        child: _Tap(
+          onTap: onTap,
+          highlight: true,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            child: Column(children: [
+              Text(num, style: _ts(20, FontWeight.w700, _t1)),
+              const SizedBox(height: 2),
+              Text(label, style: _ts(13, FontWeight.w400, _t2)),
+            ]),
+          ),
+        ),
+      );
+
+  // ── COMPLETE PROMPT (own profile, no info yet) ─────────────────────
+  Widget _completePrompt() {
+    return _group([
+      _Tap(
+        onTap: _openEdit,
+        highlight: true,
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 64),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          child: Row(children: [
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('Complete your profile', style: _ts(16, FontWeight.w500, _t1)),
+                const SizedBox(height: 2),
+                Text('Add contact info and music links.', style: _ts(13, FontWeight.w400, _t2)),
+              ]),
+            ),
+            const Icon(Icons.chevron_right_rounded, size: 20, color: _t3),
+          ]),
+        ),
+      ),
+    ]);
   }
 
-  Widget _buildPublicInfoCard() {
+  // ── PUBLIC INFO ────────────────────────────────────────────────────
+  Widget _infoGroup() {
     final country = (_userData['country'] ?? '').toString();
     final phone = (_userData['phone'] ?? '').toString();
     final email = (_userData['publicEmail'] ?? '').toString();
@@ -912,28 +938,16 @@ class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateM
     final apple = (_userData['appleMusicUrl'] ?? '').toString();
     final youtube = (_userData['youtubeUrl'] ?? '').toString();
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-      decoration: BoxDecoration(color: _black2, borderRadius: BorderRadius.circular(18), border: Border.all(color: _white10)),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        if (country.isNotEmpty) _infoRow(Icons.location_on_outlined, country),
-        if (phone.isNotEmpty) _infoRow(Icons.phone_outlined, phone, onTap: () => _launchUrlAction('tel:$phone')),
-        if (email.isNotEmpty) _infoRow(Icons.mail_outline_rounded, email, onTap: () => _launchUrlAction('mailto:$email')),
-        if (spotify.isNotEmpty || apple.isNotEmpty || youtube.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(top: 12),
-            child: Container(
-              padding: const EdgeInsets.only(top: 12),
-              decoration: const BoxDecoration(border: Border(top: BorderSide(color: _white10))),
-              child: Wrap(spacing: 10, runSpacing: 10, children: [
-                if (spotify.isNotEmpty) _storeLink('spotify', 'Spotify', '1DB954', spotify),
-                if (apple.isNotEmpty) _storeLink('applemusic', 'Apple Music', 'FC3C44', apple),
-                if (youtube.isNotEmpty) _storeLink('youtubemusic', 'YouTube', 'FF0000', youtube),
-              ]),
-            ),
-          ),
-      ]),
-    );
+    return _group(sepLeft: 52, [
+      if (country.isNotEmpty) _infoRow(const Icon(Icons.location_on_outlined, size: 20, color: _gray), country),
+      if (phone.isNotEmpty)
+        _infoRow(const Icon(Icons.phone_outlined, size: 20, color: _gray), phone, onTap: () => _launchUrlAction('tel:$phone')),
+      if (email.isNotEmpty)
+        _infoRow(const Icon(Icons.mail_outline_rounded, size: 20, color: _gray), email, onTap: () => _launchUrlAction('mailto:$email')),
+      if (spotify.isNotEmpty) _storeRow('spotify', 'Spotify', '1DB954', spotify),
+      if (apple.isNotEmpty) _storeRow('applemusic', 'Apple Music', 'FC3C44', apple),
+      if (youtube.isNotEmpty) _storeRow('youtubemusic', 'YouTube', 'FF0000', youtube),
+    ]);
   }
 
   Future<void> _launchUrlAction(String rawUri) async {
@@ -944,226 +958,89 @@ class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateM
     } catch (_) {}
   }
 
-  Widget _infoRow(IconData icon, String text, {VoidCallback? onTap}) {
-    return GestureDetector(
+  Widget _infoRow(Widget icon, String text, {VoidCallback? onTap}) {
+    return _Tap(
       onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 7),
-        child: Row(children: [
-          Icon(icon, color: _white40, size: 16),
-          const SizedBox(width: 12),
-          Expanded(child: Text(text, style: GoogleFonts.nunito(color: _white90, fontSize: 13.5))),
-        ]),
-      ),
-    );
-  }
-
-  Widget _storeLink(String slug, String label, String hex, String url) {
-    return GestureDetector(
-      onTap: () => _launchUrl(url),
+      highlight: onTap != null,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
-        decoration: BoxDecoration(color: _white06, borderRadius: BorderRadius.circular(100), border: Border.all(color: _white10)),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          SvgPicture.network(
-            'https://cdn.simpleicons.org/$slug/$hex',
-            width: 15, height: 15,
-          ),
-          const SizedBox(width: 8),
-          Text(label, style: GoogleFonts.nunito(color: _white90, fontSize: 12.5, fontWeight: FontWeight.w700)),
+        constraints: const BoxConstraints(minHeight: 50),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        child: Row(children: [
+          SizedBox(width: 22, child: icon),
+          const SizedBox(width: 14),
+          Expanded(child: Text(text, style: _ts(16, FontWeight.w400, onTap != null ? _blue : _t1))),
         ]),
       ),
     );
   }
 
-  Widget _buildCompleteCard() {
-    return Container(
-      decoration: BoxDecoration(color: _black2, borderRadius: BorderRadius.circular(18), border: Border.all(color: _white10)),
-      clipBehavior: Clip.antiAlias,
-      child: Column(children: [
-        GestureDetector(
-          onTap: () => setState(() => _completeOpen = !_completeOpen),
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Row(children: [
-              Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text('Complete your profile', style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w800, fontSize: 14.5)),
-                  const SizedBox(height: 3),
-                  Text('Hidden from the public until you save at least one field',
-                      style: GoogleFonts.nunito(color: _grey, fontSize: 12, fontWeight: FontWeight.w600)),
-                ]),
-              ),
-              AnimatedRotation(
-                turns: _completeOpen ? 0.5 : 0,
-                duration: const Duration(milliseconds: 250),
-                child: const Icon(Icons.keyboard_arrow_down_rounded, color: _grey),
-              ),
-            ]),
+  Widget _storeRow(String slug, String label, String hex, String url) {
+    return _Tap(
+      onTap: () => _launchUrl(url),
+      highlight: true,
+      child: Container(
+        constraints: const BoxConstraints(minHeight: 50),
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Row(children: [
+          SizedBox(
+            width: 22,
+            child: SvgPicture.network('https://cdn.simpleicons.org/$slug/$hex', width: 20, height: 20),
           ),
-        ),
-        AnimatedCrossFade(
-          duration: const Duration(milliseconds: 250),
-          crossFadeState: _completeOpen ? CrossFadeState.showFirst : CrossFadeState.showSecond,
-          firstChild: Padding(
-            padding: const EdgeInsets.fromLTRB(18, 0, 18, 20),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              _field('Bio', _bioCtrl, maxLength: 150, maxLines: 4, hint: 'Tell people about your sound…'),
-              const SizedBox(height: 12),
-              _field('Phone Number', _phoneCtrl, hint: '+233 …', keyboardType: TextInputType.phone),
-              const SizedBox(height: 12),
-              _field('Public Email', _emailCtrl, hint: 'you@example.com', keyboardType: TextInputType.emailAddress),
-              const SizedBox(height: 12),
-              _field('Country', _countryCtrl, hint: 'e.g. Ghana'),
-              const SizedBox(height: 12),
-              _field('Spotify Artist Link', _spotifyCtrl, hint: 'https://open.spotify.com/artist/…', keyboardType: TextInputType.url),
-              const SizedBox(height: 12),
-              _field('Apple Music Link', _appleCtrl, hint: 'https://music.apple.com/artist/…', keyboardType: TextInputType.url),
-              const SizedBox(height: 12),
-              _field('YouTube Link', _youtubeCtrl, hint: 'https://youtube.com/@…', keyboardType: TextInputType.url),
-              const SizedBox(height: 14),
-              Row(children: [
-                ElevatedButton(
-                  onPressed: _saving ? null : _saveCompleteProfile,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _white, foregroundColor: _black,
-                    padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 11),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(100)),
-                    elevation: 0,
-                  ),
-                  child: _saving
-                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: _black))
-                      : Text('Update', style: GoogleFonts.nunito(fontWeight: FontWeight.w800, fontSize: 13)),
-                ),
-                const SizedBox(width: 12),
-                if (_saveStatus != null)
-                  Text(_saveStatus!, style: GoogleFonts.nunito(color: _saveError ? _rose : _green, fontSize: 12, fontWeight: FontWeight.w700)),
-              ]),
-            ]),
-          ),
-          secondChild: const SizedBox(width: double.infinity),
-        ),
-      ]),
+          const SizedBox(width: 14),
+          Expanded(child: Text(label, style: _ts(16, FontWeight.w400, _t1))),
+          const Icon(Icons.chevron_right_rounded, size: 20, color: _t3),
+        ]),
+      ),
     );
   }
 
-  Widget _field(String label, TextEditingController ctrl,
-      {String? hint, int? maxLength, int maxLines = 1, TextInputType? keyboardType}) {
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text(label.toUpperCase(), style: GoogleFonts.nunito(color: _grey, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.4)),
-      const SizedBox(height: 6),
-      TextField(
-        controller: ctrl, maxLength: maxLength, maxLines: maxLines, keyboardType: keyboardType,
-        style: GoogleFonts.nunito(color: _white, fontSize: 13.5),
-        decoration: InputDecoration(
-          filled: true, fillColor: _black3, hintText: hint,
-          hintStyle: GoogleFonts.nunito(color: _greyDark),
-          counterStyle: GoogleFonts.nunito(color: _greyDark, fontSize: 11),
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: _white10)),
-          enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: _white10)),
-          focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: _white40)),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 13, vertical: 10),
-        ),
-      ),
-    ]);
-  }
-
-  Widget _buildPostsSection() {
+  // ── POSTS ──────────────────────────────────────────────────────────
+  Widget _postsSection() {
     return Column(
       key: _postsSectionKey,
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Padding(
-          padding: const EdgeInsets.only(bottom: 12, left: 2),
-          child: Row(children: [
-            const Icon(Icons.grid_view_rounded, color: _grey, size: 13),
-            const SizedBox(width: 8),
-            Text('POSTS', style: GoogleFonts.nunito(color: _grey, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1.5)),
-          ]),
-        ),
+        _sh('Posts'),
         if (_posts.isEmpty)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 40),
             child: Center(
               child: Column(children: [
-                const Icon(Icons.image_outlined, color: _white40, size: 26),
+                const Icon(Icons.image_outlined, color: _t3, size: 28),
                 const SizedBox(height: 10),
-                Text(
-                  _isOwn ? 'No posts yet — share your first one.' : 'No posts yet.',
-                  style: GoogleFonts.nunito(color: _grey, fontWeight: FontWeight.w600, fontSize: 13),
-                ),
+                Text(_isOwn ? 'No posts yet. Share your first one.' : 'No posts yet.',
+                    style: _ts(15, FontWeight.w400, _t2)),
               ]),
             ),
           )
         else ...[
-          GridView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, crossAxisSpacing: 3, mainAxisSpacing: 3),
-            itemCount: _posts.length,
-            itemBuilder: (context, i) {
-              final p = _posts[i];
-              final hasImage = (p['imageUrl'] ?? '').toString().isNotEmpty;
-              final likes = p['likesCount'] ?? 0;
-              final comments = p['commentsCount'] ?? 0;
-              return GestureDetector(
-                onTap: () => _openPostModal(p['id']),
-                child: Stack(fit: StackFit.expand, children: [
-                  Container(
-                    color: _black3,
-                    child: hasImage
-                        ? CachedNetworkImage(imageUrl: p['imageUrl'], fit: BoxFit.cover)
-                        : Container(
-                            padding: const EdgeInsets.all(10),
-                            alignment: Alignment.center,
-                            decoration: const BoxDecoration(
-                              gradient: LinearGradient(colors: [_black4, _black2], begin: Alignment.topLeft, end: Alignment.bottomRight),
-                            ),
-                            child: Text(
-                              (p['text'] ?? '').toString(),
-                              textAlign: TextAlign.center, maxLines: 5, overflow: TextOverflow.ellipsis,
-                              style: GoogleFonts.nunito(color: _white70, fontSize: 11, fontWeight: FontWeight.w600),
-                            ),
-                          ),
-                  ),
-                  if (likes > 0 || comments > 0)
-                    Positioned(
-                      left: 5, bottom: 5,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                        decoration: BoxDecoration(color: Colors.black.withOpacity(0.55), borderRadius: BorderRadius.circular(8)),
-                        child: Row(mainAxisSize: MainAxisSize.min, children: [
-                          const Icon(Icons.favorite_rounded, color: _white, size: 10),
-                          const SizedBox(width: 3),
-                          Text('$likes', style: GoogleFonts.nunito(color: _white, fontSize: 10, fontWeight: FontWeight.w700)),
-                          const SizedBox(width: 8),
-                          const Icon(Icons.mode_comment_rounded, color: _white, size: 10),
-                          const SizedBox(width: 3),
-                          Text('$comments', style: GoogleFonts.nunito(color: _white, fontSize: 10, fontWeight: FontWeight.w700)),
-                        ]),
-                      ),
-                    ),
-                ]),
-              );
-            },
+          ClipRRect(
+            borderRadius: BorderRadius.circular(14),
+            child: GridView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 3, crossAxisSpacing: 2, mainAxisSpacing: 2),
+              itemCount: _posts.length,
+              itemBuilder: (context, i) => _postTile(_posts[i]),
+            ),
           ),
           if (_hasMorePosts)
             Padding(
-              padding: const EdgeInsets.only(top: 14),
+              padding: const EdgeInsets.only(top: 12),
               child: Center(
-                child: OutlinedButton(
-                  onPressed: _loadingMorePosts ? null : _loadMorePosts,
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: _white70,
-                    side: const BorderSide(color: _white20),
-                    padding: const EdgeInsets.symmetric(horizontal: 26, vertical: 11),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(100)),
-                  ),
-                  child: _loadingMorePosts
-                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: _white))
-                      : Text('Load more', style: GoogleFonts.nunito(fontWeight: FontWeight.w800, fontSize: 12.5)),
-                ),
+                child: _loadingMorePosts
+                    ? const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: CupertinoActivityIndicator(radius: 10, color: _t2),
+                      )
+                    : _Tap(
+                        onTap: _loadMorePosts,
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Text('Load more', style: _ts(16, FontWeight.w400, _blue)),
+                        ),
+                      ),
               ),
             ),
         ],
@@ -1171,165 +1048,250 @@ class _ViewProScreenState extends State<ViewProScreen> with TickerProviderStateM
     );
   }
 
-  Widget _buildBottomNav() {
-    final bottom = MediaQuery.of(context).padding.bottom;
-    final items = <(IconData, String, VoidCallback)>[
-      (Icons.home_rounded, 'Home', () => Navigator.pushNamedAndRemoveUntil(context, '/home', (r) => false)),
-      (Icons.bar_chart_rounded, 'Analytics', () => Navigator.pushNamed(context, '/analytics')),
-      (Icons.cloud_upload_rounded, 'Upload', () => Navigator.pushNamed(context, '/upload')),
-      (Icons.account_balance_wallet_rounded, 'Earnings', () => Navigator.pushNamed(context, '/earnings')),
-      (Icons.person_rounded, 'Profile', () {
-        if (!_isOwn) Navigator.pushNamed(context, '/viewpro', arguments: _me?.uid);
-      }),
-    ];
-    return ClipRRect(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
-        child: Container(
-          padding: EdgeInsets.fromLTRB(8, 10, 8, bottom + 10),
-          decoration: const BoxDecoration(color: Color(0xD9000000), border: Border(top: BorderSide(color: _white10))),
-          child: Row(children: items.map((item) {
-            final (icon, label, onTap) = item;
-            final isUpload = label == 'Upload';
-            final isActive = label == 'Profile';
-            if (isUpload) {
-              return Expanded(
-                child: GestureDetector(
-                  onTap: onTap,
-                  child: Center(
-                    child: Container(
-                      width: 52, height: 52,
-                      decoration: BoxDecoration(
-                        color: _white, shape: BoxShape.circle,
-                        boxShadow: [BoxShadow(color: _white.withOpacity(0.2), blurRadius: 16, spreadRadius: 2)],
-                      ),
-                      child: Icon(icon, color: _black, size: 24),
-                    ),
+  Widget _postTile(Map<String, dynamic> p) {
+    final hasImage = (p['imageUrl'] ?? '').toString().isNotEmpty;
+    final likes = p['likesCount'] ?? 0;
+    final comments = p['commentsCount'] ?? 0;
+    return GestureDetector(
+      onTap: () => _openPostModal(p['id'].toString()),
+      child: Stack(fit: StackFit.expand, children: [
+        Container(
+          color: _s1,
+          child: hasImage
+              ? CachedNetworkImage(imageUrl: p['imageUrl'], fit: BoxFit.cover)
+              : Container(
+                  padding: const EdgeInsets.all(10),
+                  alignment: Alignment.center,
+                  child: Text(
+                    (p['text'] ?? '').toString(),
+                    textAlign: TextAlign.center,
+                    maxLines: 5,
+                    overflow: TextOverflow.ellipsis,
+                    style: _ts(11, FontWeight.w500, _t2),
                   ),
                 ),
-              );
-            }
-            return Expanded(
-              child: GestureDetector(
-                onTap: onTap,
-                behavior: HitTestBehavior.opaque,
-                child: Column(mainAxisSize: MainAxisSize.min, children: [
-                  Icon(icon, color: isActive ? _white : _greyDark, size: 24),
-                  const SizedBox(height: 4),
-                  Text(label, style: GoogleFonts.outfit(color: isActive ? _white : _greyDark, fontSize: 10, fontWeight: isActive ? FontWeight.w800 : FontWeight.w500)),
-                ]),
-              ),
-            );
-          }).toList()),
         ),
-      ),
-    );
-  }
-
-  Widget _buildSidebar() {
-    final top = MediaQuery.of(context).padding.top;
-    final bottom = MediaQuery.of(context).padding.bottom;
-    final w = MediaQuery.of(context).size.width * 0.78;
-    return Container(
-      width: w, height: double.infinity, color: _black1,
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Container(
-          padding: EdgeInsets.fromLTRB(24, top + 20, 24, 20),
-          decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: _white10))),
-          child: Row(children: [
-            Text('444Music', style: GoogleFonts.outfit(color: _white, fontSize: 18, fontWeight: FontWeight.w800)),
-            const Spacer(),
-            GestureDetector(
-              onTap: _closeSidebar,
-              child: Container(
-                width: 34, height: 34,
-                decoration: BoxDecoration(borderRadius: BorderRadius.circular(10), border: Border.all(color: _white10)),
-                child: const Icon(Icons.close_rounded, color: _grey, size: 18),
-              ),
-            ),
-          ]),
-        ),
-        Expanded(
-          child: SingleChildScrollView(
-            physics: const BouncingScrollPhysics(),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              _sidebarLabel('Navigation'),
-              _sidebarItem(Icons.home_rounded, 'Home', () {
-                _closeSidebar();
-                Navigator.pushNamedAndRemoveUntil(context, '/home', (r) => false);
-              }),
-              _sidebarItem(Icons.person_rounded, 'Settings', () {
-                _closeSidebar();
-                Navigator.pushReplacementNamed(context, '/profile');
-              }),
-              _sidebarItem(Icons.speed_rounded, 'Dashboard', () => _navigate('/dashboard')),
-              _sidebarItem(Icons.cloud_upload_rounded, 'Upload Release', () => _navigate('/upload')),
-              _sidebarItem(Icons.bar_chart_rounded, 'Analytics', () => _navigate('/analytics')),
-              _sidebarItem(Icons.account_balance_wallet_rounded, 'Earnings', () => _navigate('/earnings')),
-              const _SidebarDividerLocal(),
-              _sidebarLabel('More'),
-              _sidebarItem(Icons.build_rounded, 'More Tools', () => _navigate('/tools')),
-              _sidebarItem(Icons.info_outline_rounded, 'About Us', () => _navigate('/legal')),
-              _sidebarItem(Icons.mail_outline_rounded, 'Contact Support', () => _navigate('/support')),
-              const _SidebarDividerLocal(),
-            ]),
-          ),
-        ),
-        Padding(
-          padding: EdgeInsets.fromLTRB(16, 0, 16, bottom + 16),
-          child: GestureDetector(
-            onTap: () async {
-              await FirebaseAuth.instance.signOut();
-              _closeSidebar();
-              if (context.mounted) Navigator.pushNamedAndRemoveUntil(context, '/login', (r) => false);
-            },
+        if (likes > 0 || comments > 0)
+          Positioned(
+            left: 5, bottom: 5,
             child: Container(
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              decoration: BoxDecoration(
-                color: Colors.red.shade900.withOpacity(0.15),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: Colors.red.shade900.withOpacity(0.25)),
-              ),
-              child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                const Icon(Icons.logout_rounded, color: Color(0xFFFF6B6B), size: 18),
-                const SizedBox(width: 10),
-                Text('Logout', style: GoogleFonts.outfit(color: const Color(0xFFFF6B6B), fontSize: 14, fontWeight: FontWeight.w700)),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+              decoration: BoxDecoration(color: const Color(0x8C000000), borderRadius: BorderRadius.circular(8)),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.favorite_rounded, color: _t1, size: 10),
+                const SizedBox(width: 3),
+                Text('$likes', style: _ts(10, FontWeight.w600, _t1)),
+                const SizedBox(width: 8),
+                const Icon(Icons.mode_comment_rounded, color: _t1, size: 10),
+                const SizedBox(width: 3),
+                Text('$comments', style: _ts(10, FontWeight.w600, _t1)),
               ]),
             ),
           ),
-        ),
       ]),
     );
   }
 
-  Widget _sidebarLabel(String label) => Padding(
-        padding: const EdgeInsets.fromLTRB(24, 4, 24, 8),
-        child: Text(label.toUpperCase(), style: GoogleFonts.outfit(color: _greyDark, fontSize: 9, fontWeight: FontWeight.w800, letterSpacing: 2)),
-      );
-
-  Widget _sidebarItem(IconData icon, String label, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-          child: Row(children: [
-            Icon(icon, color: _grey, size: 18),
-            const SizedBox(width: 14),
-            Text(label, style: GoogleFonts.outfit(color: _grey, fontSize: 14, fontWeight: FontWeight.w600)),
-          ]),
+  // ── TAB BAR ────────────────────────────────────────────────────────
+  Widget _tabBar(double bottom) {
+    final items = <(IconData, String, VoidCallback)>[
+      (Icons.home_rounded, 'Home', () => Navigator.pushNamedAndRemoveUntil(context, '/home', (r) => false)),
+      (Icons.bar_chart_rounded, 'Analytics', () => Navigator.pushNamed(context, '/analytics')),
+      (Icons.cloud_upload_outlined, 'Upload', () => Navigator.pushNamed(context, '/upload')),
+      (Icons.account_balance_wallet_outlined, 'Earnings', () => Navigator.pushNamed(context, '/earnings')),
+      (Icons.person_rounded, 'Profile', () {
+        if (!_isOwn) Navigator.pushNamed(context, '/viewpro', arguments: _me?.uid);
+      }),
+    ];
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+        child: Container(
+          padding: EdgeInsets.fromLTRB(8, 8, 8, bottom + 6),
+          decoration: const BoxDecoration(
+            color: _bar,
+            border: Border(top: BorderSide(color: _sep, width: 0.5)),
+          ),
+          child: Row(
+            children: items.map((item) {
+              final (icon, label, onTap) = item;
+              final active = label == 'Profile' && _isOwn;
+              final c = active ? _t1 : _gray;
+              return Expanded(
+                child: _Tap(
+                  onTap: onTap,
+                  child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(icon, color: c, size: 25),
+                    const SizedBox(height: 3),
+                    Text(label, style: _ts(10, active ? FontWeight.w600 : FontWeight.w500, c, ls: 0)),
+                  ]),
+                ),
+              );
+            }).toList(),
+          ),
         ),
       ),
     );
   }
 }
 
-class _SidebarDividerLocal extends StatelessWidget {
-  const _SidebarDividerLocal();
+// ═══════════════════════════════════════════════════════════════════
+//  EDIT PROFILE SHEET
+// ═══════════════════════════════════════════════════════════════════
+class _EditProfileSheet extends StatefulWidget {
+  final TextEditingController bio, phone, email, country, spotify, apple, youtube;
+  final Future<bool> Function() onSave;
+  const _EditProfileSheet({
+    required this.bio, required this.phone, required this.email, required this.country,
+    required this.spotify, required this.apple, required this.youtube, required this.onSave,
+  });
   @override
-  Widget build(BuildContext context) =>
-      Container(margin: const EdgeInsets.symmetric(horizontal: 24, vertical: 10), height: 1, color: _white10);
+  State<_EditProfileSheet> createState() => _EditProfileSheetState();
+}
+
+class _EditProfileSheetState extends State<_EditProfileSheet> {
+  bool _saving = false;
+  bool _failed = false;
+
+  Future<void> _save() async {
+    if (_saving) return;
+    setState(() {
+      _saving = true;
+      _failed = false;
+    });
+    final ok = await widget.onSave();
+    if (!mounted) return;
+    if (ok) {
+      Navigator.pop(context);
+    } else {
+      setState(() {
+        _saving = false;
+        _failed = true;
+      });
+    }
+  }
+
+  Widget _row(String label, TextEditingController c, String hint, {TextInputType? type, Widget? lead}) {
+    return Container(
+      constraints: const BoxConstraints(minHeight: 52),
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Row(children: [
+        if (lead != null) ...[SizedBox(width: 22, child: lead), const SizedBox(width: 12)],
+        if (label.isNotEmpty) SizedBox(width: 92, child: Text(label, style: _ts(16, FontWeight.w400, _t1))),
+        Expanded(child: _bareField(c: c, hint: hint, type: type)),
+      ]),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final mq = MediaQuery.of(context);
+    return Padding(
+      padding: EdgeInsets.only(bottom: mq.viewInsets.bottom),
+      child: Container(
+        constraints: BoxConstraints(maxHeight: mq.size.height * 0.92),
+        decoration: const BoxDecoration(color: _s1, borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          _grabber(),
+          SizedBox(
+            height: 48,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(children: [
+                Expanded(
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: _Tap(
+                      onTap: () => Navigator.pop(context),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        child: Text('Cancel', style: _ts(17, FontWeight.w400, _blue)),
+                      ),
+                    ),
+                  ),
+                ),
+                Text('Edit profile', style: _ts(17, FontWeight.w600, _t1)),
+                Expanded(
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: _saving
+                        ? const CupertinoActivityIndicator(radius: 9, color: _t2)
+                        : _Tap(
+                            onTap: _save,
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 10),
+                              child: Text('Save', style: _ts(17, FontWeight.w600, _blue)),
+                            ),
+                          ),
+                  ),
+                ),
+              ]),
+            ),
+          ),
+          Flexible(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                _sh('About'),
+                _group(color: _s2, [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: TextField(
+                      controller: widget.bio,
+                      maxLength: 150,
+                      minLines: 3,
+                      maxLines: 5,
+                      cursorColor: _blue,
+                      style: _ts(16, FontWeight.w400, _t1, h: 1.4),
+                      decoration: InputDecoration(
+                        border: InputBorder.none,
+                        hintText: 'Tell people about your sound',
+                        hintStyle: _ts(16, FontWeight.w400, _t3),
+                        counterStyle: _ts(12, FontWeight.w400, _t3),
+                        contentPadding: const EdgeInsets.only(top: 14),
+                      ),
+                    ),
+                  ),
+                ]),
+                _sh('Contact'),
+                _group(color: _s2, [
+                  _row('Phone', widget.phone, '+233 …', type: TextInputType.phone),
+                  _row('Email', widget.email, 'you@example.com', type: TextInputType.emailAddress),
+                  _row('Country', widget.country, 'e.g. Ghana'),
+                ]),
+                _sh('Music links'),
+                _group(color: _s2, [
+                  _row('', widget.spotify, 'Spotify artist link',
+                      type: TextInputType.url,
+                      lead: SvgPicture.network('https://cdn.simpleicons.org/spotify/1DB954', width: 20, height: 20)),
+                  _row('', widget.apple, 'Apple Music link',
+                      type: TextInputType.url,
+                      lead: SvgPicture.network('https://cdn.simpleicons.org/applemusic/FC3C44', width: 20, height: 20)),
+                  _row('', widget.youtube, 'YouTube link',
+                      type: TextInputType.url,
+                      lead: SvgPicture.network('https://cdn.simpleicons.org/youtubemusic/FF0000', width: 20, height: 20)),
+                ]),
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
+                  child: Text('Only filled fields are shown on your public profile.',
+                      style: TextStyle(color: _t2, fontSize: 13, height: 1.4)),
+                ),
+                if (_failed)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                    child: Row(children: [
+                      const Icon(Icons.error_outline_rounded, size: 14, color: _rose),
+                      const SizedBox(width: 6),
+                      Text("Couldn't save. Try again.", style: _ts(13, FontWeight.w500, _rose)),
+                    ]),
+                  ),
+              ]),
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1467,26 +1429,29 @@ class _PeopleModalState extends State<_PeopleModal> {
     return DraggableScrollableSheet(
       initialChildSize: 0.6, minChildSize: 0.35, maxChildSize: 0.92,
       builder: (context, scrollCtrl) => Container(
-        decoration: const BoxDecoration(color: _black1, borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
+        decoration: const BoxDecoration(color: _s1, borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
         child: Column(children: [
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text(widget.kind == 'followers' ? 'Followers' : 'Following',
-                style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w800, fontSize: 16)),
+          _grabber(),
+          SizedBox(
+            height: 44,
+            child: Center(
+              child: Text(widget.kind == 'followers' ? 'Followers' : 'Following',
+                  style: _ts(17, FontWeight.w600, _t1)),
+            ),
           ),
-          const Divider(color: _white10, height: 1),
+          const SizedBox(height: 0.5, width: double.infinity, child: ColoredBox(color: _sep)),
           if (_notice != null)
             Container(
               width: double.infinity,
-              color: _black3,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
-              child: Text(_notice!, style: GoogleFonts.nunito(color: _white70, fontSize: 12.5, fontWeight: FontWeight.w700)),
+              color: _s2,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              child: Text(_notice!, style: _ts(13, FontWeight.w500, _t2)),
             ),
           Expanded(
             child: !_ready
-                ? const Center(child: CircularProgressIndicator(color: _white))
+                ? const Center(child: CupertinoActivityIndicator(radius: 12, color: _t2))
                 : _people.isEmpty
-                    ? Center(child: Text('No ${widget.kind} yet.', style: GoogleFonts.nunito(color: _grey)))
+                    ? Center(child: Text('No ${widget.kind} yet.', style: _ts(15, FontWeight.w400, _t2)))
                     : NotificationListener<ScrollNotification>(
                         onNotification: (n) {
                           if (n.metrics.extentAfter < 250) _loadMore();
@@ -1494,80 +1459,27 @@ class _PeopleModalState extends State<_PeopleModal> {
                         },
                         child: ListView.builder(
                           controller: scrollCtrl,
-                          padding: const EdgeInsets.symmetric(horizontal: 10),
                           itemCount: _people.length + 1,
                           itemBuilder: (context, i) {
                             if (i == _people.length) {
                               if (_loading) {
                                 return const Padding(
                                   padding: EdgeInsets.symmetric(vertical: 18),
-                                  child: Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: _white))),
+                                  child: Center(child: CupertinoActivityIndicator(radius: 10, color: _t2)),
                                 );
                               }
                               if (_people.length >= _kPeopleMax) {
                                 return Padding(
                                   padding: const EdgeInsets.symmetric(vertical: 18),
-                                  child: Center(child: Text('Showing the latest $_kPeopleMax', style: GoogleFonts.nunito(color: _grey, fontSize: 12))),
+                                  child: Center(child: Text('Showing the latest $_kPeopleMax', style: _ts(13, FontWeight.w400, _t2))),
                                 );
                               }
                               return const SizedBox(height: 24);
                             }
-                            final p = _people[i];
-                            final uid = p['uid'] as String;
-                            final isSelf = uid == widget.myUid;
-                            final isFollowing = widget.myFollowing.contains(uid);
-                            final name = (p['name'] ?? 'Artist').toString();
-                            final avatar = (p['avatar'] ?? '').toString();
-                            return ListTile(
-                              contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-                              leading: Container(
-                                width: 44, height: 44,
-                                decoration: BoxDecoration(shape: BoxShape.circle, color: _black3, border: Border.all(color: _white10)),
-                                clipBehavior: Clip.antiAlias,
-                                child: avatar.isNotEmpty
-                                    ? CachedNetworkImage(imageUrl: avatar, fit: BoxFit.cover)
-                                    : Center(
-                                        child: Text(
-                                          name.trim().isNotEmpty ? name.trim()[0].toUpperCase() : 'A',
-                                          style: GoogleFonts.outfit(color: _white70, fontWeight: FontWeight.w800),
-                                        ),
-                                      ),
-                              ),
-                              title: Row(children: [
-                                Flexible(child: Text(name, style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w800, fontSize: 14), overflow: TextOverflow.ellipsis)),
-                                if (p['verified'] == true) Padding(padding: const EdgeInsets.only(left: 5), child: verifiedTick(size: 13)),
-                              ]),
-                              trailing: isSelf
-                                  ? null
-                                  : SizedBox(
-                                      height: 32,
-                                      child: OutlinedButton(
-                                        onPressed: () async {
-                                          final msg = await widget.onToggleFollow(uid, {
-                                            'name': name, 'avatar': avatar, 'verified': p['verified'] == true,
-                                          });
-                                          if (!mounted) return;
-                                          if (msg != null) {
-                                            _showNotice(msg);
-                                          } else {
-                                            setState(() {});
-                                          }
-                                        },
-                                        style: OutlinedButton.styleFrom(
-                                          backgroundColor: isFollowing ? Colors.transparent : _white,
-                                          foregroundColor: isFollowing ? _white70 : _black,
-                                          side: isFollowing ? const BorderSide(color: _white40) : BorderSide.none,
-                                          padding: const EdgeInsets.symmetric(horizontal: 14),
-                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(100)),
-                                        ),
-                                        child: Text(isFollowing ? 'Following' : 'Follow', style: GoogleFonts.nunito(fontWeight: FontWeight.w800, fontSize: 11.5)),
-                                      ),
-                                    ),
-                              onTap: () {
-                                Navigator.pop(context);
-                                Navigator.pushNamed(context, '/viewpro', arguments: uid);
-                              },
-                            );
+                            return Column(children: [
+                              if (i > 0) const _Sep(76),
+                              _personRow(_people[i]),
+                            ]);
                           },
                         ),
                       ),
@@ -1576,13 +1488,55 @@ class _PeopleModalState extends State<_PeopleModal> {
       ),
     );
   }
+
+  Widget _personRow(Map<String, dynamic> p) {
+    final uid = p['uid'] as String;
+    final isSelf = uid == widget.myUid;
+    final isFollowing = widget.myFollowing.contains(uid);
+    final name = (p['name'] ?? 'Artist').toString();
+    final avatar = (p['avatar'] ?? '').toString();
+
+    return _Tap(
+      onTap: () {
+        Navigator.pop(context);
+        Navigator.pushNamed(context, '/viewpro', arguments: uid);
+      },
+      highlight: true,
+      child: Container(
+        constraints: const BoxConstraints(minHeight: 64),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        child: Row(children: [
+          _Avatar(url: avatar, name: name, size: 44),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Row(children: [
+              Flexible(child: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: _ts(16, FontWeight.w500, _t1))),
+              if (p['verified'] == true) Padding(padding: const EdgeInsets.only(left: 5), child: verifiedTick(size: 13)),
+            ]),
+          ),
+          if (!isSelf) ...[
+            const SizedBox(width: 10),
+            _pill(isFollowing ? 'Following' : 'Follow', !isFollowing, () async {
+              final msg = await widget.onToggleFollow(uid, {
+                'name': name, 'avatar': avatar, 'verified': p['verified'] == true,
+              });
+              if (!mounted) return;
+              if (msg != null) {
+                _showNotice(msg);
+              } else {
+                setState(() {});
+              }
+            }),
+          ],
+        ]),
+      ),
+    );
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  POST DETAIL MODAL — flat comments (no reply-threading), matching
-//  web's pm-* section in profile.html exactly.
-//  Cost fixes: comments stream + author future are created ONCE (not
-//  on every rebuild), comments capped at 50, like/comment are atomic.
+//  POST DETAIL MODAL — flat comments (no reply-threading).
+//  Post, likes and comments all go through FeedApi.
 // ═══════════════════════════════════════════════════════════════════
 class _PostDetailModal extends StatefulWidget {
   final String postId, myUid;
@@ -1691,429 +1645,184 @@ class _PostDetailModalState extends State<_PostDetailModal> {
 
   @override
   Widget build(BuildContext context) {
+    final mq = MediaQuery.of(context);
     return DraggableScrollableSheet(
       initialChildSize: 0.8, minChildSize: 0.45, maxChildSize: 0.95,
       builder: (context, scrollCtrl) => Container(
-        decoration: const BoxDecoration(color: _black1, borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
+        decoration: const BoxDecoration(color: _s1, borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
         child: _post == null
-            ? const Center(child: CircularProgressIndicator(color: _white))
+            ? const Center(child: CupertinoActivityIndicator(radius: 12, color: _t2))
             : _post!.isEmpty
-                ? Center(child: Text('Post not found.', style: GoogleFonts.nunito(color: _grey)))
+                ? Center(child: Text('Post not found.', style: _ts(15, FontWeight.w400, _t2)))
                 : Column(children: [
-                    Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Row(children: [
-                        Text('Post', style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w800, fontSize: 16)),
-                        const Spacer(),
-                        GestureDetector(onTap: () => Navigator.pop(context), child: const Icon(Icons.close_rounded, color: _grey)),
-                      ]),
+                    _grabber(),
+                    SizedBox(
+                      height: 44,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Row(children: [
+                          const SizedBox(width: 30),
+                          Expanded(child: Center(child: Text('Post', style: _ts(17, FontWeight.w600, _t1)))),
+                          _Tap(
+                            onTap: () => Navigator.pop(context),
+                            scale: 0.9,
+                            child: Container(
+                              width: 30, height: 30,
+                              decoration: const BoxDecoration(color: _fill, shape: BoxShape.circle),
+                              child: const Icon(Icons.close_rounded, size: 16, color: _t2),
+                            ),
+                          ),
+                        ]),
+                      ),
                     ),
-                    const Divider(color: _white10, height: 1),
+                    const SizedBox(height: 0.5, width: double.infinity, child: ColoredBox(color: _sep)),
                     Expanded(
                       child: ListView(
                         controller: scrollCtrl,
                         padding: const EdgeInsets.all(16),
                         children: [
-                          FutureBuilder<Map<String, dynamic>>(
-                            future: _authorFuture,
-                            builder: (context, snap) {
-                              final info = snap.data ?? {'name': _post!['authorName'] ?? 'Artist', 'avatar': _post!['authorAvatar'] ?? '', 'verified': false};
-                              final ca = _post!['createdAt'];
-                              final created = ca is num ? DateTime.fromMillisecondsSinceEpoch(ca.toInt()) : null;
-                              final name = (info['name'] ?? 'Artist').toString();
-                              return Row(children: [
-                                Container(
-                                  width: 42, height: 42,
-                                  decoration: BoxDecoration(shape: BoxShape.circle, color: _black3, border: Border.all(color: _white10)),
-                                  clipBehavior: Clip.antiAlias,
-                                  child: (info['avatar'] ?? '').toString().isNotEmpty
-                                      ? CachedNetworkImage(imageUrl: info['avatar'], fit: BoxFit.cover)
-                                      : Center(child: Text(name.trim().isNotEmpty ? name.trim()[0].toUpperCase() : 'A', style: GoogleFonts.outfit(color: _white70, fontWeight: FontWeight.w800))),
-                                ),
-                                const SizedBox(width: 12),
-                                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                  Row(children: [
-                                    Text(name, style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w800, fontSize: 14.5)),
-                                    if (info['verified'] == true) Padding(padding: const EdgeInsets.only(left: 4), child: verifiedTick(size: 12)),
-                                  ]),
-                                  Text(timeAgo(created), style: GoogleFonts.nunito(color: _grey, fontSize: 11.5, fontWeight: FontWeight.w600)),
-                                ]),
-                              ]);
-                            },
-                          ),
+                          _authorRow(),
                           if ((_post!['text'] ?? '').toString().isNotEmpty)
                             Padding(
                               padding: const EdgeInsets.only(top: 12),
-                              child: Text.rich(
-                                TextSpan(children: _hashtagSpans(
-                                  (_post!['text'] ?? '').toString(),
-                                  base: GoogleFonts.nunito(color: _white90, fontSize: 14, height: 1.6),
-                                )),
-                              ),
+                              child: Text.rich(TextSpan(children: _hashtagSpans(
+                                (_post!['text'] ?? '').toString(),
+                                base: _ts(16, FontWeight.w400, _t1, h: 1.45),
+                              ))),
                             ),
                           if ((_post!['imageUrl'] ?? '').toString().isNotEmpty)
                             Padding(
                               padding: const EdgeInsets.only(top: 12),
-                              child: ClipRRect(borderRadius: BorderRadius.circular(14), child: CachedNetworkImage(imageUrl: _post!['imageUrl'], fit: BoxFit.cover)),
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(14),
+                                child: CachedNetworkImage(imageUrl: _post!['imageUrl'], fit: BoxFit.cover),
+                              ),
                             ),
                           Padding(
                             padding: const EdgeInsets.only(top: 14),
                             child: Row(children: [
-                              GestureDetector(
+                              _Tap(
                                 onTap: _toggleLike,
+                                scale: 0.94,
                                 child: Row(children: [
-                                  Icon(_liked ? Icons.favorite_rounded : Icons.favorite_border_rounded, color: _liked ? _rose : _grey, size: 18),
+                                  Icon(_liked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+                                      color: _liked ? _rose : _gray, size: 22),
                                   const SizedBox(width: 6),
-                                  Text('${_post!['likesCount'] ?? 0}', style: GoogleFonts.nunito(color: _liked ? _rose : _grey, fontSize: 12.5, fontWeight: FontWeight.w700)),
+                                  Text('${_post!['likesCount'] ?? 0}',
+                                      style: _ts(14, FontWeight.w500, _liked ? _rose : _t2)),
                                 ]),
                               ),
-                              const SizedBox(width: 20),
-                              const Icon(Icons.mode_comment_outlined, color: _grey, size: 18),
+                              const SizedBox(width: 22),
+                              const Icon(Icons.mode_comment_outlined, color: _gray, size: 21),
                               const SizedBox(width: 6),
-                              Text('${_post!['commentsCount'] ?? 0}', style: GoogleFonts.nunito(color: _grey, fontSize: 12.5, fontWeight: FontWeight.w700)),
+                              Text('${_post!['commentsCount'] ?? 0}', style: _ts(14, FontWeight.w500, _t2)),
                             ]),
                           ),
-                          const Padding(padding: EdgeInsets.symmetric(vertical: 12), child: Divider(color: _white10, height: 1)),
+                          const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 14),
+                            child: SizedBox(height: 0.5, child: ColoredBox(color: _sep)),
+                          ),
                           if (_comments == null)
-                            const Center(child: Padding(padding: EdgeInsets.symmetric(vertical: 20), child: CircularProgressIndicator(color: _white)))
-                          else if (_comments!.isEmpty)
-                            Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 8),
-                              child: Text('No comments yet.', style: GoogleFonts.nunito(color: _grey, fontSize: 12.5)),
+                            const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 20),
+                              child: Center(child: CupertinoActivityIndicator(radius: 10, color: _t2)),
                             )
+                          else if (_comments!.isEmpty)
+                            Text('No comments yet.', style: _ts(15, FontWeight.w400, _t2))
                           else
-                            ..._comments!.map((c) {
-                              final cName = (c['authorName'] ?? 'Artist').toString();
-                              return Padding(
-                                padding: const EdgeInsets.only(bottom: 12),
-                                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                  Container(
-                                    width: 28, height: 28,
-                                    decoration: BoxDecoration(shape: BoxShape.circle, color: _black3, border: Border.all(color: _white10)),
-                                    clipBehavior: Clip.antiAlias,
-                                    child: (c['authorAvatar'] ?? '').toString().isNotEmpty
-                                        ? CachedNetworkImage(imageUrl: c['authorAvatar'], fit: BoxFit.cover)
-                                        : Center(child: Text(cName.trim().isNotEmpty ? cName.trim()[0].toUpperCase() : 'A', style: GoogleFonts.outfit(color: _white70, fontWeight: FontWeight.w800, fontSize: 11))),
-                                  ),
-                                  const SizedBox(width: 9),
-                                  Expanded(
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
-                                      decoration: BoxDecoration(color: _black3, borderRadius: BorderRadius.circular(14)),
-                                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                        Text(cName, style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w800, fontSize: 12.5)),
-                                        const SizedBox(height: 2),
-                                        Text.rich(
-                                          TextSpan(children: _hashtagSpans(
-                                            (c['text'] ?? '').toString(),
-                                            base: GoogleFonts.nunito(color: _white70, fontSize: 13),
-                                          )),
-                                        ),
-                                      ]),
-                                    ),
-                                  ),
-                                ]),
-                              );
-                            }),
+                            ..._comments!.map(_commentRow),
                         ],
                       ),
                     ),
-                    SafeArea(
-                      top: false,
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
-                        child: Row(children: [
-                          Expanded(
+                    Padding(
+                      padding: EdgeInsets.fromLTRB(16, 8, 16, 10 + (mq.viewInsets.bottom > 0 ? mq.viewInsets.bottom : mq.padding.bottom)),
+                      child: Row(children: [
+                        Expanded(
+                          child: Container(
+                            decoration: BoxDecoration(color: _fill, borderRadius: BorderRadius.circular(20)),
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
                             child: TextField(
                               controller: _commentCtrl,
-                              style: GoogleFonts.nunito(color: _white, fontSize: 13.5),
+                              cursorColor: _blue,
+                              style: _ts(16, FontWeight.w400, _t1),
                               decoration: InputDecoration(
-                                isDense: true, filled: true, fillColor: _black3,
-                                hintText: 'Write a comment…', hintStyle: GoogleFonts.nunito(color: _grey),
-                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(100), borderSide: BorderSide.none),
-                                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                                isDense: true,
+                                border: InputBorder.none,
+                                hintText: 'Add a comment',
+                                hintStyle: _ts(16, FontWeight.w400, _t3),
+                                contentPadding: const EdgeInsets.symmetric(vertical: 11),
                               ),
                               onSubmitted: (_) => _submitComment(),
                             ),
                           ),
-                          IconButton(icon: const Icon(Icons.send_rounded, color: _white), onPressed: _submitComment),
-                        ]),
-                      ),
+                        ),
+                        const SizedBox(width: 10),
+                        ValueListenableBuilder<TextEditingValue>(
+                          valueListenable: _commentCtrl,
+                          builder: (_, v, __) {
+                            final can = v.text.trim().isNotEmpty && !_sending;
+                            return _Tap(
+                              onTap: can ? _submitComment : null,
+                              scale: 0.9,
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 200),
+                                width: 34, height: 34,
+                                decoration: BoxDecoration(color: can ? _blue : _fill, shape: BoxShape.circle),
+                                child: const Icon(Icons.arrow_upward_rounded, size: 18, color: _t1),
+                              ),
+                            );
+                          },
+                        ),
+                      ]),
                     ),
                   ]),
       ),
     );
   }
-}
 
-class _PostDetailModalStateOld extends State<_PostDetailModal> {
-  Map<String, dynamic>? _post;
-  bool _liked = false;
-  final _commentCtrl = TextEditingController();
-  bool _sending = false;
-  bool _liking = false;
-
-  late final Stream<QuerySnapshot<Map<String, dynamic>>> _commentsStream;
-  Future<Map<String, dynamic>>? _authorFuture;
-
-  @override
-  void initState() {
-    super.initState();
-    _commentsStream = FirebaseFirestore.instance
-        .collection('posts').doc(widget.postId).collection('comments')
-        .orderBy('createdAt').limit(50).snapshots();
-    _load();
+  Widget _authorRow() {
+    return FutureBuilder<Map<String, dynamic>>(
+      future: _authorFuture,
+      builder: (context, snap) {
+        final info = snap.data ?? {'name': _post!['authorName'] ?? 'Artist', 'avatar': _post!['authorAvatar'] ?? '', 'verified': false};
+        final ca = _post!['createdAt'];
+        final created = ca is num ? DateTime.fromMillisecondsSinceEpoch(ca.toInt()) : null;
+        final name = (info['name'] ?? 'Artist').toString();
+        return Row(children: [
+          _Avatar(url: (info['avatar'] ?? '').toString(), name: name, size: 40),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Flexible(child: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: _ts(16, FontWeight.w600, _t1))),
+                if (info['verified'] == true) Padding(padding: const EdgeInsets.only(left: 5), child: verifiedTick(size: 13)),
+              ]),
+              Text(timeAgo(created), style: _ts(13, FontWeight.w400, _t2)),
+            ]),
+          ),
+        ]);
+      },
+    );
   }
 
-  @override
-  void dispose() {
-    _commentCtrl.dispose();
-    super.dispose();
-  }
-
-  Future<void> _load() async {
-    try {
-      final snap = await FirebaseFirestore.instance.collection('posts').doc(widget.postId).get();
-      if (!snap.exists) {
-        if (mounted) setState(() => _post = {});
-        return;
-      }
-      final likeSnap = await FirebaseFirestore.instance.collection('posts').doc(widget.postId).collection('likes').doc(widget.myUid).get();
-      final post = {'id': snap.id, ...snap.data()!};
-      if (mounted) {
-        setState(() {
-          _post = post;
-          _liked = likeSnap.exists;
-          _authorFuture = UserInfoCache.instance.get(post['authorUid']);
-        });
-      }
-    } catch (_) {
-      if (mounted) setState(() => _post = {});
-    }
-  }
-
-  Future<void> _toggleLike() async {
-    if (_post == null || _post!.isEmpty || _liking) return;
-    _liking = true;
-    final wasLiked = _liked;
-    setState(() {
-      _liked = !wasLiked;
-      _post!['likesCount'] = _nonNeg((_post!['likesCount'] ?? 0) + (wasLiked ? -1 : 1));
-    });
-    try {
-      final db = FirebaseFirestore.instance;
-      final likeRef = db.collection('posts').doc(widget.postId).collection('likes').doc(widget.myUid);
-      final postRef = db.collection('posts').doc(widget.postId);
-      final batch = db.batch();
-      if (wasLiked) {
-        batch.delete(likeRef);
-        batch.update(postRef, {'likesCount': FieldValue.increment(-1)});
-      } else {
-        batch.set(likeRef, {'uid': widget.myUid, 'likedAt': FieldValue.serverTimestamp()});
-        batch.update(postRef, {'likesCount': FieldValue.increment(1)});
-      }
-      await batch.commit();
-      if (!wasLiked) {
-        sendNotification(_post!['authorUid'], 'like', postId: widget.postId, postText: _post!['text'], postImage: _post!['imageUrl']);
-      }
-    } catch (_) {
-      if (mounted) {
-        setState(() {
-          _liked = wasLiked;
-          _post!['likesCount'] = _nonNeg((_post!['likesCount'] ?? 0) + (wasLiked ? 1 : -1));
-        });
-      }
-    } finally {
-      _liking = false;
-    }
-  }
-
-  Future<void> _submitComment() async {
-    final text = _commentCtrl.text.trim();
-    if (text.isEmpty || _post == null || _post!.isEmpty || _sending) return;
-    setState(() => _sending = true);
-    _commentCtrl.clear();
-    try {
-      final myInfo = await UserInfoCache.instance.get(widget.myUid);
-      final db = FirebaseFirestore.instance;
-      final postRef = db.collection('posts').doc(widget.postId);
-      final batch = db.batch();
-      batch.set(postRef.collection('comments').doc(), {
-        'authorUid': widget.myUid,
-        'authorName': myInfo['name'],
-        'authorAvatar': myInfo['avatar'],
-        'text': text, 'parentId': null, 'createdAt': FieldValue.serverTimestamp(),
-      });
-      batch.update(postRef, {'commentsCount': FieldValue.increment(1)});
-      await batch.commit();
-      if (mounted) setState(() => _post!['commentsCount'] = (_post!['commentsCount'] ?? 0) + 1);
-      sendNotification(_post!['authorUid'], 'comment', postId: widget.postId, postText: _post!['text'], postImage: _post!['imageUrl'], commentText: text);
-    } finally {
-      if (mounted) setState(() => _sending = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return DraggableScrollableSheet(
-      initialChildSize: 0.8, minChildSize: 0.45, maxChildSize: 0.95,
-      builder: (context, scrollCtrl) => Container(
-        decoration: const BoxDecoration(color: _black1, borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
-        child: _post == null
-            ? const Center(child: CircularProgressIndicator(color: _white))
-            : _post!.isEmpty
-                ? Center(child: Text('Post not found.', style: GoogleFonts.nunito(color: _grey)))
-                : Column(children: [
-                    Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Row(children: [
-                        Text('Post', style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w800, fontSize: 16)),
-                        const Spacer(),
-                        GestureDetector(onTap: () => Navigator.pop(context), child: const Icon(Icons.close_rounded, color: _grey)),
-                      ]),
-                    ),
-                    const Divider(color: _white10, height: 1),
-                    Expanded(
-                      child: ListView(
-                        controller: scrollCtrl,
-                        padding: const EdgeInsets.all(16),
-                        children: [
-                          FutureBuilder<Map<String, dynamic>>(
-                            future: _authorFuture,
-                            builder: (context, snap) {
-                              final info = snap.data ?? {'name': _post!['authorName'] ?? 'Artist', 'avatar': _post!['authorAvatar'] ?? '', 'verified': false};
-                              final created = (_post!['createdAt'] is Timestamp) ? (_post!['createdAt'] as Timestamp).toDate() : null;
-                              final name = (info['name'] ?? 'Artist').toString();
-                              return Row(children: [
-                                Container(
-                                  width: 42, height: 42,
-                                  decoration: BoxDecoration(shape: BoxShape.circle, color: _black3, border: Border.all(color: _white10)),
-                                  clipBehavior: Clip.antiAlias,
-                                  child: (info['avatar'] ?? '').toString().isNotEmpty
-                                      ? CachedNetworkImage(imageUrl: info['avatar'], fit: BoxFit.cover)
-                                      : Center(child: Text(name.trim().isNotEmpty ? name.trim()[0].toUpperCase() : 'A', style: GoogleFonts.outfit(color: _white70, fontWeight: FontWeight.w800))),
-                                ),
-                                const SizedBox(width: 12),
-                                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                  Row(children: [
-                                    Text(name, style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w800, fontSize: 14.5)),
-                                    if (info['verified'] == true) Padding(padding: const EdgeInsets.only(left: 4), child: verifiedTick(size: 12)),
-                                  ]),
-                                  Text(timeAgo(created), style: GoogleFonts.nunito(color: _grey, fontSize: 11.5, fontWeight: FontWeight.w600)),
-                                ]),
-                              ]);
-                            },
-                          ),
-                          if ((_post!['text'] ?? '').toString().isNotEmpty)
-                            Padding(
-                              padding: const EdgeInsets.only(top: 12),
-                              child: Text.rich(
-                                TextSpan(children: _hashtagSpans(
-                                  (_post!['text'] ?? '').toString(),
-                                  base: GoogleFonts.nunito(color: _white90, fontSize: 14, height: 1.6),
-                                )),
-                              ),
-                            ),
-                          if ((_post!['imageUrl'] ?? '').toString().isNotEmpty)
-                            Padding(
-                              padding: const EdgeInsets.only(top: 12),
-                              child: ClipRRect(borderRadius: BorderRadius.circular(14), child: CachedNetworkImage(imageUrl: _post!['imageUrl'], fit: BoxFit.cover)),
-                            ),
-                          Padding(
-                            padding: const EdgeInsets.only(top: 14),
-                            child: Row(children: [
-                              GestureDetector(
-                                onTap: _toggleLike,
-                                child: Row(children: [
-                                  Icon(_liked ? Icons.favorite_rounded : Icons.favorite_border_rounded, color: _liked ? _rose : _grey, size: 18),
-                                  const SizedBox(width: 6),
-                                  Text('${_post!['likesCount'] ?? 0}', style: GoogleFonts.nunito(color: _liked ? _rose : _grey, fontSize: 12.5, fontWeight: FontWeight.w700)),
-                                ]),
-                              ),
-                              const SizedBox(width: 20),
-                              const Icon(Icons.mode_comment_outlined, color: _grey, size: 18),
-                              const SizedBox(width: 6),
-                              Text('${_post!['commentsCount'] ?? 0}', style: GoogleFonts.nunito(color: _grey, fontSize: 12.5, fontWeight: FontWeight.w700)),
-                            ]),
-                          ),
-                          const Padding(padding: EdgeInsets.symmetric(vertical: 12), child: Divider(color: _white10, height: 1)),
-                          StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                            stream: _commentsStream,
-                            builder: (context, snap) {
-                              if (!snap.hasData) {
-                                return const Center(child: Padding(padding: EdgeInsets.symmetric(vertical: 20), child: CircularProgressIndicator(color: _white)));
-                              }
-                              final comments = snap.data!.docs.map((d) => {'id': d.id, ...d.data()}).toList();
-                              if (comments.isEmpty) {
-                                return Padding(
-                                  padding: const EdgeInsets.symmetric(vertical: 8),
-                                  child: Text('No comments yet.', style: GoogleFonts.nunito(color: _grey, fontSize: 12.5)),
-                                );
-                              }
-                              return Column(
-                                children: comments.map((c) {
-                                  final cName = (c['authorName'] ?? 'Artist').toString();
-                                  return Padding(
-                                    padding: const EdgeInsets.only(bottom: 12),
-                                    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                      Container(
-                                        width: 28, height: 28,
-                                        decoration: BoxDecoration(shape: BoxShape.circle, color: _black3, border: Border.all(color: _white10)),
-                                        clipBehavior: Clip.antiAlias,
-                                        child: (c['authorAvatar'] ?? '').toString().isNotEmpty
-                                            ? CachedNetworkImage(imageUrl: c['authorAvatar'], fit: BoxFit.cover)
-                                            : Center(child: Text(cName.trim().isNotEmpty ? cName.trim()[0].toUpperCase() : 'A', style: GoogleFonts.outfit(color: _white70, fontWeight: FontWeight.w800, fontSize: 11))),
-                                      ),
-                                      const SizedBox(width: 9),
-                                      Expanded(
-                                        child: Container(
-                                          padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
-                                          decoration: BoxDecoration(color: _black3, borderRadius: BorderRadius.circular(14)),
-                                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                            Text(cName, style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w800, fontSize: 12.5)),
-                                            const SizedBox(height: 2),
-                                            Text.rich(
-                                              TextSpan(children: _hashtagSpans(
-                                                (c['text'] ?? '').toString(),
-                                                base: GoogleFonts.nunito(color: _white70, fontSize: 13),
-                                              )),
-                                            ),
-                                          ]),
-                                        ),
-                                      ),
-                                    ]),
-                                  );
-                                }).toList(),
-                              );
-                            },
-                          ),
-                        ],
-                      ),
-                    ),
-                    SafeArea(
-                      top: false,
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
-                        child: Row(children: [
-                          Expanded(
-                            child: TextField(
-                              controller: _commentCtrl,
-                              style: GoogleFonts.nunito(color: _white, fontSize: 13.5),
-                              decoration: InputDecoration(
-                                isDense: true, filled: true, fillColor: _black3,
-                                hintText: 'Write a comment…', hintStyle: GoogleFonts.nunito(color: _grey),
-                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(100), borderSide: BorderSide.none),
-                                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                              ),
-                              onSubmitted: (_) => _submitComment(),
-                            ),
-                          ),
-                          IconButton(icon: const Icon(Icons.send_rounded, color: _white), onPressed: _submitComment),
-                        ]),
-                      ),
-                    ),
-                  ]),
-      ),
+  Widget _commentRow(Map<String, dynamic> c) {
+    final cName = (c['authorName'] ?? 'Artist').toString();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        _Avatar(url: (c['authorAvatar'] ?? '').toString(), name: cName, size: 32),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(cName, style: _ts(14, FontWeight.w600, _t1)),
+            const SizedBox(height: 2),
+            Text.rich(TextSpan(children: _hashtagSpans(
+              (c['text'] ?? '').toString(),
+              base: _ts(15, FontWeight.w400, _t2, h: 1.4),
+            ))),
+          ]),
+        ),
+      ]),
     );
   }
 }
