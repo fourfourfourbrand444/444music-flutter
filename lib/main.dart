@@ -204,7 +204,11 @@ class _SplashScreenState extends State<SplashScreen>
       context,
       PageRouteBuilder(
         pageBuilder: (_, __, ___) =>
-            const VersionGate(child: WelcomeScreen()),
+           VersionGate(
+              child: FirebaseAuth.instance.currentUser != null
+                  ? const HomeScreen()
+                  : const WelcomeScreen(),
+            ),
         transitionsBuilder: (_, anim, __, child) =>
             FadeTransition(opacity: anim, child: child),
         transitionDuration: const Duration(milliseconds: 400),
