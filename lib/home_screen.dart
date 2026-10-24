@@ -14,6 +14,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io' as io;
 import 'dart:math';
+import 'package:google_sign_in/google_sign_in.dart';
 import 'dart:ui' show ImageFilter;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -563,7 +564,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       destructive: true,
     );
     if (!ok || !mounted) return;
-    await FirebaseAuth.instance.signOut();
+        await FirebaseAuth.instance.signOut();
+    try { await GoogleSignIn().signOut(); } catch (_) {}
     _closeSidebar();
     if (mounted) Navigator.pushReplacementNamed(context, '/login');
   }
