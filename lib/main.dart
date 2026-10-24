@@ -112,7 +112,8 @@ class _MyAppState extends State<MyApp> {
       ),
       home: const SplashScreen(),
      routes: {
-       '/home':            (_) => const HomeScreen(),
+        '/home':            (_) => const HomeScreen(),
+       '/login':           (_) => const LoginScreen(),
        '/loading':         (_) => const HomeScreen(),
        '/upload':          (_) => const PricingScreen(),
        '/analytics':       (_) => const AnalyticsScreen(),
