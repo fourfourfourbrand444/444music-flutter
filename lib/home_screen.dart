@@ -1,31 +1,11 @@
 // ═══════════════════════════════════════════════════════════════════
-//  444MUSIC — Home Screen v11 (low-cost feed + edge-to-edge posts)
+//  444MUSIC — Home Screen v12 (luxury iOS look, same low-cost feed)
 //
-//  Cost design (about 60-80 reads per app open, fewer on repeat opens):
-//   • Posts load once, 20 at a time (pull to refresh / load more) instead
-//     of a live listener. Both feed tabs share the same loaded pool.
-//   • Liked posts, followed accounts and seen stories are remembered on
-//     the phone (shared_preferences).
-//   • Names / avatars / verified ticks are remembered on the phone for 12
-//     hours and never fetched twice at the same time, so repeat opens
-//     cost almost no author lookups.
-//   • Stories: newest 40 loaded once. Viewer counts use count().
-//   • Notifications: unread = newer than users/{me}.notifSeenAt, counted
-//     with count(). Opening the panel is 1 write.
-//   • Comments load once (60). Story viewers load once per sheet.
-//   • Own user doc is read once, not listened to.
-//   • Tapping Home again refreshes at most once every 45 seconds.
-//
-//  v11 fixes vs v10:
-//   • Loading more posts no longer reshuffles posts you already scrolled
-//     past (new posts are only ever appended; order resets on refresh).
-//   • `dart:ui` import no longer clashes with the Image widget.
-//   • Story viewers sheet no longer re-creates its query on rebuild.
-//   • Pull-to-refresh is no longer dropped while a page is loading.
-//   • New photo posts save their shape (imageAspect) so the feed does not
-//     jump when images load. Older posts keep working.
-//   • Bottom bar uses a solid background instead of a live blur (smoother
-//     scrolling on mid-range phones).
+//  Same logic and Firestore / API usage as v11 (about 60-80 reads per
+//  app open). Only the look changed:
+//   • iOS typography (SF on iOS, Inter elsewhere) instead of Nunito/Outfit
+//   • iOS segmented control, glass sidebar, sheets and alerts
+//   • Logout asks "Log out?" first; back-button quit uses the same alert
 //
 //  Needs: shared_preferences in pubspec.yaml, cloud_firestore with count().
 //  No new Firestore indexes are required.
@@ -34,6 +14,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io' as io;
 import 'dart:math';
+import 'dart:ui' show ImageFilter;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -45,25 +27,41 @@ import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-// ─── PALETTE ────────────────────────────────────────────────────────
-const _black    = Color(0xFF000000);
-const _black1   = Color(0xFF0A0A0A);
-const _black2   = Color(0xFF111111);
-const _black3   = Color(0xFF1A1A1A);
-const _white    = Color(0xFFFFFFFF);
-const _white90  = Color(0xE6FFFFFF);
-const _white70  = Color(0xB3FFFFFF);
-const _white40  = Color(0x66FFFFFF);
-const _white20  = Color(0x33FFFFFF);
-const _white10  = Color(0x1AFFFFFF);
-const _white06  = Color(0x0FFFFFFF);
-const _grey     = Color(0xFF888888);
-const _greyDark = Color(0xFF444444);
-const _blue     = Color(0xFF4DA3FF);
-const _rose     = Color(0xFFF87171);
+// ─── PALETTE (black & white, iOS grays) ─────────────────────────────
+const _black   = Color(0xFF000000);
+const _s1      = Color(0xFF1C1C1E);
+const _s2      = Color(0xFF2C2C2E);
+const _s3      = Color(0xFF636366);
+const _sep     = Color(0x8C545458);
+const _fill    = Color(0x3D787880);
+const _fillSoft = Color(0x29787880);
+const _white   = Color(0xFFFFFFFF);
+const _white90 = Color(0xE6FFFFFF);
+const _white70 = Color(0xB3EBEBF5);
+const _t2      = Color(0x99EBEBF5);
+const _t3      = Color(0x4DEBEBF5);
+const _blue    = Color(0xFF0A84FF);
+const _rose    = Color(0xFFFF453A);
 
 const _pageSize = 20;
 const _apiBase = 'https://api.444musicdistro.com';
+
+// ─── TYPOGRAPHY — SF on iOS, Inter elsewhere ────────────────────────
+bool get _isApple =>
+    defaultTargetPlatform == TargetPlatform.iOS ||
+    defaultTargetPlatform == TargetPlatform.macOS;
+
+TextStyle _ts(double size, FontWeight w, Color c, {double em = -0.01, double? height}) {
+  final base = TextStyle(
+    fontSize: size,
+    fontWeight: w,
+    color: c,
+    letterSpacing: size * em,
+    height: height,
+    decoration: TextDecoration.none,
+  );
+  return _isApple ? base : GoogleFonts.inter(textStyle: base);
+}
 
 // ─── R2 upload (posts, stories) ─────────────────────────────────────
 String _contentType(String name) {
@@ -265,7 +263,7 @@ List<InlineSpan> hashtagSpans(String text, {required TextStyle base}) {
   for (final m in RegExp(r'(^|\s)([#@][a-zA-Z0-9_.]+)').allMatches(text)) {
     if (m.start > last) spans.add(TextSpan(text: text.substring(last, m.start), style: base));
     spans.add(TextSpan(text: m.group(1), style: base));
-    spans.add(TextSpan(text: m.group(2), style: base.copyWith(color: _blue, fontWeight: FontWeight.w700)));
+    spans.add(TextSpan(text: m.group(2), style: base.copyWith(color: _blue, fontWeight: FontWeight.w600)));
     last = m.end;
   }
   if (last < text.length) spans.add(TextSpan(text: text.substring(last), style: base));
@@ -323,6 +321,181 @@ Future<void> sendNotification(String to, String type, {
   } catch (_) {}
 }
 
+// ─── iOS ALERT + ACTION SHEET HELPERS ───────────────────────────────
+class _IosAlert extends StatelessWidget {
+  final String title, message, cancelLabel, confirmLabel;
+  final bool destructive;
+  const _IosAlert({
+    required this.title,
+    required this.message,
+    required this.cancelLabel,
+    required this.confirmLabel,
+    this.destructive = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    Widget action(String label, bool primary, bool result, Color color) => Expanded(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => Navigator.pop(context, result),
+            child: Container(
+              padding: const EdgeInsets.symmetric(vertical: 13),
+              alignment: Alignment.center,
+              child: Text(label, style: _ts(17, primary ? FontWeight.w600 : FontWeight.w400, color, em: -0.02)),
+            ),
+          ),
+        );
+    return Center(
+      child: Material(
+        color: Colors.transparent,
+        child: SizedBox(
+          width: 280,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(16),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
+              child: Container(
+                color: const Color(0xF02C2C2E),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 20, 16, 18),
+                      child: Column(children: [
+                        Text(title, textAlign: TextAlign.center, style: _ts(17, FontWeight.w600, _white, em: -0.02)),
+                        const SizedBox(height: 5),
+                        Text(message,
+                            textAlign: TextAlign.center,
+                            style: _ts(13, FontWeight.w400, const Color(0xD9FFFFFF), height: 1.4)),
+                      ]),
+                    ),
+                    Container(height: 0.5, color: _sep),
+                    Row(children: [
+                      action(cancelLabel, false, false, _blue),
+                      Container(width: 0.5, height: 48, color: _sep),
+                      action(confirmLabel, true, true, destructive ? _rose : _blue),
+                    ]),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+Future<bool> _confirm(
+  BuildContext context, {
+  required String title,
+  required String message,
+  required String cancel,
+  required String ok,
+  bool destructive = false,
+}) async {
+  final r = await showGeneralDialog<bool>(
+    context: context,
+    barrierDismissible: true,
+    barrierLabel: title,
+    barrierColor: Colors.black.withValues(alpha: 0.45),
+    transitionDuration: const Duration(milliseconds: 300),
+    pageBuilder: (ctx, _, __) => _IosAlert(
+      title: title, message: message, cancelLabel: cancel, confirmLabel: ok, destructive: destructive,
+    ),
+    transitionBuilder: (ctx, anim, _, child) {
+      final c = CurvedAnimation(parent: anim, curve: const Cubic(0.32, 0.72, 0, 1));
+      return FadeTransition(
+        opacity: c,
+        child: ScaleTransition(scale: Tween<double>(begin: 1.1, end: 1).animate(c), child: child),
+      );
+    },
+  );
+  return r == true;
+}
+
+class _Act {
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+  const _Act(this.label, this.onTap, {this.color = _blue});
+}
+
+Future<void> _actionSheet(BuildContext context, List<_Act> acts, {String? title}) {
+  return showModalBottomSheet(
+    context: context,
+    backgroundColor: Colors.transparent,
+    barrierColor: Colors.black.withValues(alpha: 0.45),
+    builder: (ctx) => SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              decoration: BoxDecoration(color: const Color(0xF22C2C2E), borderRadius: BorderRadius.circular(14)),
+              clipBehavior: Clip.antiAlias,
+              child: Column(
+                children: [
+                  if (title != null)
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      alignment: Alignment.center,
+                      child: Text(title, style: _ts(13, FontWeight.w600, _t2)),
+                    ),
+                  for (int i = 0; i < acts.length; i++) ...[
+                    if (i > 0 || title != null) Container(height: 0.5, color: _sep),
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () { Navigator.pop(ctx); acts[i].onTap(); },
+                      child: Container(
+                        width: double.infinity,
+                        height: 56,
+                        alignment: Alignment.center,
+                        child: Text(acts[i].label, style: _ts(19, FontWeight.w400, acts[i].color, em: -0.02)),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            GestureDetector(
+              onTap: () => Navigator.pop(ctx),
+              child: Container(
+                width: double.infinity,
+                height: 56,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(color: _s2, borderRadius: BorderRadius.circular(14)),
+                child: Text('Cancel', style: _ts(19, FontWeight.w600, _blue, em: -0.02)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+Widget _grabber() => Container(
+      width: 36, height: 5,
+      decoration: BoxDecoration(color: const Color(0x4DEBEBF5), borderRadius: BorderRadius.circular(3)),
+    );
+
+Widget _sheetHeader(String title) => Column(children: [
+      const SizedBox(height: 8),
+      _grabber(),
+      Padding(padding: const EdgeInsets.symmetric(vertical: 14), child: Text(title, style: _ts(17, FontWeight.w600, _white))),
+      Container(height: 0.5, color: _sep),
+    ]);
+
+const _sheetDecoration = BoxDecoration(
+  color: _s1,
+  borderRadius: BorderRadius.vertical(top: Radius.circular(26)),
+);
+
 // ════════════════════════════════════════════════════════════════════
 //  HOME SCREEN — shell (sidebar + bottom nav)
 // ════════════════════════════════════════════════════════════════════
@@ -346,10 +519,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     super.initState();
     SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle.light.copyWith(
       statusBarColor: Colors.transparent, systemNavigationBarColor: _black));
-    _sidebarCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 380));
+    _sidebarCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 420));
     _sidebarFade = CurvedAnimation(parent: _sidebarCtrl, curve: Curves.easeOut);
     _sidebarSlide = Tween<Offset>(begin: const Offset(1, 0), end: Offset.zero)
-        .animate(CurvedAnimation(parent: _sidebarCtrl, curve: Curves.easeOutCubic));
+        .animate(CurvedAnimation(parent: _sidebarCtrl, curve: const Cubic(0.32, 0.72, 0, 1)));
   }
 
   @override
@@ -369,79 +542,32 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Future<void> _handleBack() async {
     if (_sidebarOpen) { _closeSidebar(); return; }
     if (_navIndex != 0) { setState(() => _navIndex = 0); return; }
-    final quit = await _confirmExit();
+    final quit = await _confirm(
+      context,
+      title: 'Quit 444Music?',
+      message: 'Do you want to quit the app?',
+      cancel: 'No',
+      ok: 'Yes',
+    );
     if (quit && mounted) SystemNavigator.pop();
   }
 
-  Future<bool> _confirmExit() async {
-    Widget btn(String label, bool primary, VoidCallback onTap) => Expanded(
-          child: GestureDetector(
-            onTap: onTap,
-            child: Container(
-              height: 44,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: primary ? _white : _white10,
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: Text(label,
-                  style: GoogleFonts.nunito(
-                    color: primary ? _black : _white,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w800,
-                  )),
-            ),
-          ),
-        );
-
-    final r = await showGeneralDialog<bool>(
-      context: context,
-      barrierDismissible: true,
-      barrierLabel: 'Quit',
-      barrierColor: Colors.black.withOpacity(0.6),
-      transitionDuration: const Duration(milliseconds: 220),
-      pageBuilder: (ctx, _, __) => Center(
-        child: Material(
-          color: Colors.transparent,
-          child: Container(
-            width: 290,
-            padding: const EdgeInsets.fromLTRB(20, 24, 20, 18),
-            decoration: BoxDecoration(
-              color: _black1,
-              borderRadius: BorderRadius.circular(24),
-              border: Border.all(color: _white10),
-            ),
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              Text('Quit 444Music?',
-                  style: GoogleFonts.outfit(
-                      color: _white, fontSize: 18, fontWeight: FontWeight.w700)),
-              const SizedBox(height: 6),
-              Text('Do you want to quit the app?',
-                  textAlign: TextAlign.center,
-                  style: GoogleFonts.nunito(
-                      color: _grey, fontSize: 13.5, fontWeight: FontWeight.w500)),
-              const SizedBox(height: 22),
-              Row(children: [
-                btn('No', false, () => Navigator.pop(ctx, false)),
-                const SizedBox(width: 10),
-                btn('Yes', true, () => Navigator.pop(ctx, true)),
-              ]),
-            ]),
-          ),
-        ),
-      ),
-      transitionBuilder: (ctx, anim, _, child) {
-        final c = CurvedAnimation(parent: anim, curve: Curves.easeOutCubic);
-        return FadeTransition(
-          opacity: c,
-          child: ScaleTransition(
-              scale: Tween<double>(begin: 0.92, end: 1).animate(c), child: child),
-        );
-      },
+  // ── Logout from the sidebar: ask first ──
+  Future<void> _logout() async {
+    final ok = await _confirm(
+      context,
+      title: 'Log out?',
+      message: 'Are you sure you want to log out of your account?',
+      cancel: 'Cancel',
+      ok: 'Log out',
+      destructive: true,
     );
-    return r == true;
+    if (!ok || !mounted) return;
+    await FirebaseAuth.instance.signOut();
+    _closeSidebar();
+    if (mounted) Navigator.pushReplacementNamed(context, '/login');
   }
-  
+
   void _onBottomNavTap(int i) {
     if (i == 0) {
       if (_navIndex == 0) { _feedKey.currentState?.scrollToTopAndRefresh(); } else { setState(() => _navIndex = 0); }
@@ -457,42 +583,48 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Widget build(BuildContext context) {
     // Your own name/avatar were read once by the feed; no extra lookup here.
     final me = _user == null ? null : UserInfoCache.instance.peek(_user!.uid);
-   return PopScope(
+    return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop) _handleBack();
       },
       child: Scaffold(
-      backgroundColor: _black,
-      extendBody: true,
-      body: Stack(children: [
-        IndexedStack(index: _navIndex, children: [
-          _FeedHome(key: _feedKey, currentUser: _user, onMenu: _openSidebar),
-          const _PlaceholderTab(icon: Icons.bar_chart_rounded, label: 'Analytics'),
-          const _PlaceholderTab(icon: Icons.cloud_upload_rounded, label: 'Upload'),
-          const _PlaceholderTab(icon: Icons.account_balance_wallet_rounded, label: 'Earnings'),
-          const _PlaceholderTab(icon: Icons.person_rounded, label: 'Profile'),
-        ]),
-        Positioned(bottom: 0, left: 0, right: 0, child: _BottomNav(current: _navIndex, onTap: _onBottomNavTap)),
-        if (_sidebarOpen)
-          GestureDetector(
-            onTap: _closeSidebar,
-            child: FadeTransition(opacity: _sidebarFade, child: Container(color: Colors.black.withOpacity(0.6))),
-          ),
-        if (_sidebarOpen)
-          Positioned(
-            top: 0, right: 0, bottom: 0,
-            child: SlideTransition(
-              position: _sidebarSlide,
-              child: _SidebarPanel(
-                onClose: _closeSidebar, onNavigate: _navigate,
-                userName: (me?['name'] as String?) ?? _user?.displayName ?? 'Artist',
-                avatarUrl: (me?['avatar'] as String?) ?? _user?.photoURL,
-                userEmail: _user?.email ?? '', uid: _user?.uid,
+        backgroundColor: _black,
+        extendBody: true,
+        body: Stack(children: [
+          IndexedStack(index: _navIndex, children: [
+            _FeedHome(key: _feedKey, currentUser: _user, onMenu: _openSidebar),
+            const _PlaceholderTab(icon: Icons.bar_chart_rounded, label: 'Analytics'),
+            const _PlaceholderTab(icon: Icons.cloud_upload_rounded, label: 'Upload'),
+            const _PlaceholderTab(icon: Icons.account_balance_wallet_rounded, label: 'Earnings'),
+            const _PlaceholderTab(icon: Icons.person_rounded, label: 'Profile'),
+          ]),
+          Positioned(bottom: 0, left: 0, right: 0, child: _BottomNav(current: _navIndex, onTap: _onBottomNavTap)),
+          if (_sidebarOpen)
+            GestureDetector(
+              onTap: _closeSidebar,
+              child: FadeTransition(
+                opacity: _sidebarFade,
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 6, sigmaY: 6),
+                  child: Container(color: Colors.black.withValues(alpha: 0.5)),
+                ),
               ),
             ),
-          ),
-      ]),
+          if (_sidebarOpen)
+            Positioned(
+              top: 0, right: 0, bottom: 0,
+              child: SlideTransition(
+                position: _sidebarSlide,
+                child: _SidebarPanel(
+                  onClose: _closeSidebar, onNavigate: _navigate, onLogout: _logout,
+                  userName: (me?['name'] as String?) ?? _user?.displayName ?? 'Artist',
+                  avatarUrl: (me?['avatar'] as String?) ?? _user?.photoURL,
+                  userEmail: _user?.email ?? '', uid: _user?.uid,
+                ),
+              ),
+            ),
+        ]),
       ),
     );
   }
@@ -527,7 +659,7 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
   // Display order (post ids). Only ever appended to between refreshes, so
   // loading more posts never moves anything you have already scrolled past.
   List<String> _order = [];
- int? _lastPostAt;
+  int? _lastPostAt;
   bool _hasMore = true, _loading = false;
   int _autoPages = 0;
   final Map<String, double> _keys = {};
@@ -646,7 +778,7 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
     }
     _loading = true;
     try {
-           final path = (!reset && _lastPostAt != null)
+      final path = (!reset && _lastPostAt != null)
           ? '/posts?limit=$_pageSize&before=$_lastPostAt'
           : '/posts?limit=$_pageSize';
       final fresh = ((await _Api.get(path)) as List)
@@ -669,7 +801,7 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
         _pool = [..._pool, ...added];
         _order = [..._order, ..._sortedIds(added)];
       }
-           if (fresh.isNotEmpty) _lastPostAt = (fresh.last['createdAt'] as num).toInt();
+      if (fresh.isNotEmpty) _lastPostAt = (fresh.last['createdAt'] as num).toInt();
       _hasMore = fresh.length == _pageSize;
     } catch (_) {
     } finally {
@@ -735,25 +867,10 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
     } catch (_) {}
   }
 
-  Future<void> _loadStoriesOld() async {
-    try {
-      final cutoff = Timestamp.fromDate(DateTime.now().subtract(const Duration(hours: 24)));
-      final snap = await _db.collection('stories').where('createdAt', isGreaterThan: cutoff)
-          .orderBy('createdAt', descending: true).limit(40).get();
-      final map = <String, List<Map<String, dynamic>>>{};
-      for (final d in snap.docs) {
-        final s = <String, dynamic>{'id': d.id, ...d.data()};
-        map.putIfAbsent(s['authorUid'] as String, () => []).add(s);
-      }
-      map.updateAll((k, v) => v.reversed.toList());
-      if (mounted) setState(() => _stories = map);
-    } catch (_) {}
-  }
-
   bool _storySeen(String uid) => (_stories[uid] ?? []).every((s) => _seenStories.contains(s['id']));
 
   // ── Notifications: unread = newer than notifSeenAt ──
- Future<void> _refreshBadge() async {
+  Future<void> _refreshBadge() async {
     if (_user == null) return;
     try {
       final r = await _Api.get('/notifications/count');
@@ -761,21 +878,13 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
     } catch (_) {}
   }
 
-  Future<void> _refreshBadgeOld() async {
-    if (_user == null || _seenAt == null) return;
-    try {
-      final agg = await _db.collection('notifications').doc(_user!.uid).collection('items')
-          .where('createdAt', isGreaterThan: _seenAt).count().get();
-      if (mounted) setState(() => _unread = agg.count ?? 0);
-    } catch (_) {}
-  }
-
   void _openNotifications() {
     final before = _seenAt, now = Timestamp.now();
     setState(() { _unread = 0; _seenAt = now; });
-   // the "seen" marker is kept on the API now
+    // the "seen" marker is kept on the API now
     showModalBottomSheet(
       context: context, isScrollControlled: true, backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.45),
       builder: (_) => _NotificationsSheet(uid: _user!.uid, seenBefore: before),
     );
   }
@@ -880,7 +989,7 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
     }
   }
 
-    Future<void> _toggleLike(Map<String, dynamic> post) async {
+  Future<void> _toggleLike(Map<String, dynamic> post) async {
     final me = _user!.uid, id = post['id'] as String, was = _liked.contains(id);
     int count() => ((post['likesCount'] ?? 0) as num).toInt();
     setState(() {
@@ -904,20 +1013,22 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
       });
     }
   }
+
   Future<void> _deletePost(String id) async {
-     try { await _Api.delete('/posts/$id'); } catch (_) { return; }
+    try { await _Api.delete('/posts/$id'); } catch (_) { return; }
     _pool.removeWhere((p) => p['id'] == id);
     _order.remove(id);
     _recompute();
   }
 
-   Future<void> _editPost(String id, String text) async {
+  Future<void> _editPost(String id, String text) async {
     try { await _Api.patch('/posts/$id', {'text': text}); } catch (_) {}
   }
 
   void _openComments(Map<String, dynamic> post) {
     showModalBottomSheet(
       context: context, isScrollControlled: true, backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.45),
       builder: (_) => _CommentsSheet(
         post: post, myUid: _user!.uid, myName: _myName, myAvatar: _myAvatar,
         onDelta: (d) { if (mounted) setState(() => post['commentsCount'] = max(0, ((post['commentsCount'] ?? 0) as num).toInt() + d)); },
@@ -926,20 +1037,9 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
   }
 
   void _openShare(Map<String, dynamic> post) {
-    showModalBottomSheet(
-      context: context, backgroundColor: _black1,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: ListTile(
-            leading: const Icon(Icons.add_circle_outline_rounded, color: _white),
-            title: Text('Add to your story', style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w600)),
-            onTap: () async { Navigator.pop(ctx); await _addPostToStory(post); },
-          ),
-        ),
-      ),
-    );
+    _actionSheet(context, [
+      _Act('Add to your story', () => _addPostToStory(post)),
+    ], title: 'Share');
   }
 
   Future<void> _addPostToStory(Map<String, dynamic> post) async {
@@ -964,29 +1064,9 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
     _loadStories();
   }
 
-  Future<void> _addPostToStoryOld(Map<String, dynamic> post) async {
-    final from = UserInfoCache.instance.peek(post['authorUid']) ??
-        {'name': post['authorName'] ?? 'Artist', 'avatar': post['authorAvatar'] ?? ''};
-    await _db.collection('stories').add({
-      'authorUid': _user!.uid, 'authorName': _myName, 'authorAvatar': _myAvatar,
-      'type': post['imageUrl'] != null ? 'image' : 'text',
-      'createdAt': FieldValue.serverTimestamp(),
-      'expiresAt': Timestamp.fromDate(DateTime.now().add(const Duration(hours: 24))),
-      'sharedPostId': post['id'], 'sharedFromUid': post['authorUid'],
-      'sharedFromName': from['name'], 'sharedFromAvatar': from['avatar'],
-      if (post['imageUrl'] != null) 'imageUrl': post['imageUrl'],
-      if (post['imageUrl'] == null) 'text': post['text'] ?? '',
-    });
-    if (post['authorUid'] != _user!.uid) {
-      sendNotification(post['authorUid'], 'story_share', postId: post['id'],
-          postText: post['text'], postImage: post['imageUrl'], docId: 'sshare_${post['id']}_${_user!.uid}');
-    }
-    _loadStories();
-  }
-
   Future<void> _openComposer() async {
     final res = await Navigator.push<Map<String, dynamic>>(context,
-        MaterialPageRoute(builder: (_) => _NewPostScreen(myName: _myName, myAvatar: _myAvatar)));
+        MaterialPageRoute(fullscreenDialog: true, builder: (_) => _NewPostScreen(myName: _myName, myAvatar: _myAvatar)));
     if (res != null && mounted) {
       _pool = [res, ..._pool];
       _order = [res['id'] as String, ..._order];
@@ -997,7 +1077,7 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
 
   Future<void> _openStoryComposer() async {
     final ok = await Navigator.push<bool>(context,
-        MaterialPageRoute(builder: (_) => _StoryComposerScreen(myName: _myName, myAvatar: _myAvatar)));
+        MaterialPageRoute(fullscreenDialog: true, builder: (_) => _StoryComposerScreen(myName: _myName, myAvatar: _myAvatar)));
     if (ok == true) _loadStories();
   }
 
@@ -1026,12 +1106,12 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
         child: Column(children: [
           _topBar(),
           AnimatedSize(
-            duration: const Duration(milliseconds: 220), curve: Curves.easeOut,
+            duration: const Duration(milliseconds: 250), curve: const Cubic(0.32, 0.72, 0, 1),
             child: _searchOpen ? _searchField() : const SizedBox(width: double.infinity),
           ),
           _storiesBar(),
           _tabs(),
-          if (_refreshing) const LinearProgressIndicator(minHeight: 1.5, color: _white, backgroundColor: _black3),
+          if (_refreshing) const LinearProgressIndicator(minHeight: 1.5, color: _white, backgroundColor: _s1),
           Expanded(child: _tab == _FeedTab.people ? _peopleList() : _postsList()),
         ]),
       ),
@@ -1042,32 +1122,39 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
   Widget _topBar() {
     Widget icon(IconData i, VoidCallback onTap, {int badge = 0}) => GestureDetector(
           onTap: onTap, behavior: HitTestBehavior.opaque,
-          child: SizedBox(
-            width: 42, height: 42,
-            child: Stack(clipBehavior: Clip.none, alignment: Alignment.center, children: [
-              Icon(i, color: _white, size: 25),
-              if (badge > 0)
-                Positioned(
-                  top: 5, right: 4,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 4.5, vertical: 1),
-                    decoration: BoxDecoration(color: _rose, borderRadius: BorderRadius.circular(20), border: Border.all(color: _black, width: 1.5)),
-                    child: Text(badge > 99 ? '99+' : '$badge', style: GoogleFonts.nunito(color: _white, fontSize: 9, fontWeight: FontWeight.w800)),
-                  ),
+          child: Padding(
+            padding: const EdgeInsets.only(left: 8),
+            child: SizedBox(
+              width: 36, height: 36,
+              child: Stack(clipBehavior: Clip.none, alignment: Alignment.center, children: [
+                Container(
+                  width: 36, height: 36,
+                  decoration: const BoxDecoration(color: _fill, shape: BoxShape.circle),
+                  child: Icon(i, color: _white, size: 19),
                 ),
-            ]),
+                if (badge > 0)
+                  Positioned(
+                    top: -3, right: -4,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                      decoration: BoxDecoration(color: _rose, borderRadius: BorderRadius.circular(20), border: Border.all(color: _black, width: 1.5)),
+                      child: Text(badge > 99 ? '99+' : '$badge', style: _ts(10, FontWeight.w700, _white, em: 0)),
+                    ),
+                  ),
+              ]),
+            ),
           ),
         );
     return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 4, 8, 2),
+      padding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
       child: Row(children: [
-        Text('444Music', style: GoogleFonts.outfit(color: _white, fontSize: 22, fontWeight: FontWeight.w800, letterSpacing: -0.8)),
+        Text('444Music', style: _ts(25, FontWeight.w700, _white, em: -0.04)),
         const Spacer(),
         icon(_searchOpen ? Icons.close_rounded : Icons.search_rounded, () {
           setState(() => _searchOpen = !_searchOpen);
           if (!_searchOpen) { _searchCtrl.clear(); _remote = []; _recompute(); }
         }),
-        icon(Icons.add_box_outlined, _openComposer),
+        icon(Icons.add_rounded, _openComposer),
         icon(Icons.notifications_none_rounded, _openNotifications, badge: _unread),
         icon(Icons.menu_rounded, widget.onMenu),
       ]),
@@ -1078,16 +1165,17 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
         padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
         child: Container(
           height: 40,
-          decoration: BoxDecoration(color: _black3, borderRadius: BorderRadius.circular(12)),
+          decoration: BoxDecoration(color: _fill, borderRadius: BorderRadius.circular(12)),
           child: TextField(
             controller: _searchCtrl, autofocus: true, onChanged: _onSearchChanged,
+            cursorColor: _white,
             textAlignVertical: TextAlignVertical.center,
-            style: GoogleFonts.nunito(color: _white, fontSize: 14),
+            style: _ts(16, FontWeight.w400, _white),
             decoration: InputDecoration(
-              isDense: true, border: InputBorder.none,
-              prefixIcon: const Icon(Icons.search_rounded, color: _grey, size: 19),
+              isDense: true, border: InputBorder.none, enabledBorder: InputBorder.none, focusedBorder: InputBorder.none,
+              prefixIcon: const Icon(Icons.search_rounded, color: _t2, size: 18),
               hintText: _tab == _FeedTab.people ? 'Search people' : 'Search posts and hashtags',
-              hintStyle: GoogleFonts.nunito(color: _grey, fontSize: 14),
+              hintStyle: _ts(16, FontWeight.w400, _t2),
             ),
           ),
         ),
@@ -1105,14 +1193,15 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
       });
     final mine = _stories[uid] ?? [];
     return SizedBox(
-      height: 98,
+      height: 100,
       child: ListView(
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+        physics: const BouncingScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(12, 6, 12, 4),
         children: [
           _StoryBubble(
             label: 'Your story', avatarUrl: _myAvatar, name: _myName,
-            ring: mine.isEmpty ? _white20 : (_storySeen(uid!) ? _greyDark : _white),
+            ring: mine.isEmpty ? _fill : (_storySeen(uid!) ? _t3 : _white),
             addBadge: true,
             onTap: () => mine.isNotEmpty ? _openStoryViewer(uid!) : _openStoryComposer(),
             onAdd: _openStoryComposer,
@@ -1122,7 +1211,7 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
               label: (_stories[a]!.last['authorName'] ?? 'Artist').toString(),
               avatarUrl: (_stories[a]!.last['authorAvatar'] ?? '').toString(),
               name: (_stories[a]!.last['authorName'] ?? 'Artist').toString(),
-              ring: _storySeen(a) ? _greyDark : _white,
+              ring: _storySeen(a) ? _t3 : _white,
               onTap: () => _openStoryViewer(a),
             ),
         ],
@@ -1136,24 +1225,27 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
       return Expanded(
         child: GestureDetector(
           behavior: HitTestBehavior.opaque, onTap: () => _onTab(v),
-          child: Padding(
-            padding: const EdgeInsets.only(top: 10),
-            child: Column(children: [
-              Text(label, style: GoogleFonts.outfit(color: on ? _white : _grey, fontSize: 14, fontWeight: on ? FontWeight.w700 : FontWeight.w500)),
-              const SizedBox(height: 9),
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 220), curve: Curves.easeOut,
-                height: 2, width: on ? 26 : 0,
-                decoration: BoxDecoration(color: _white, borderRadius: BorderRadius.circular(2)),
-              ),
-            ]),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 250), curve: const Cubic(0.32, 0.72, 0, 1),
+            height: 32,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: on ? _s3 : Colors.transparent,
+              borderRadius: BorderRadius.circular(7),
+              boxShadow: on ? [BoxShadow(color: Colors.black.withValues(alpha: 0.3), blurRadius: 6, offset: const Offset(0, 2))] : const [],
+            ),
+            child: Text(label, style: _ts(13.5, FontWeight.w600, on ? _white : _t2)),
           ),
         ),
       );
     }
-    return Container(
-      decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: _white10, width: 0.7))),
-      child: Row(children: [t('For you', _FeedTab.forYou), t('Following', _FeedTab.following), t('People', _FeedTab.people)]),
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 6, 16, 10),
+      child: Container(
+        padding: const EdgeInsets.all(2),
+        decoration: BoxDecoration(color: _fill, borderRadius: BorderRadius.circular(9)),
+        child: Row(children: [t('For you', _FeedTab.forYou), t('Following', _FeedTab.following), t('People', _FeedTab.people)]),
+      ),
     );
   }
 
@@ -1164,7 +1256,7 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
       child: ListView.builder(
         controller: _scroll,
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.only(top: 12, bottom: 120),
+        padding: const EdgeInsets.only(top: 6, bottom: 120),
         itemCount: empty ? 1 : _view.length + 1,
         itemBuilder: (context, i) {
           if (empty) {
@@ -1174,10 +1266,14 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
                 child: !_booted || _loading
                     ? const CircularProgressIndicator(color: _white, strokeWidth: 2)
                     : Column(mainAxisSize: MainAxisSize.min, children: [
-                        const Icon(Icons.photo_library_outlined, color: _white40, size: 34),
-                        const SizedBox(height: 12),
+                        Container(
+                          width: 64, height: 64,
+                          decoration: BoxDecoration(color: _s1, borderRadius: BorderRadius.circular(20)),
+                          child: const Icon(Icons.photo_library_outlined, color: _t2, size: 28),
+                        ),
+                        const SizedBox(height: 14),
                         Text(_tab == _FeedTab.following ? 'Nothing from people you follow yet' : 'No posts yet',
-                            style: GoogleFonts.nunito(color: _grey, fontWeight: FontWeight.w600)),
+                            style: _ts(15, FontWeight.w500, _t2)),
                       ]),
               ),
             );
@@ -1187,8 +1283,8 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
               padding: const EdgeInsets.symmetric(vertical: 26),
               child: Center(
                 child: _hasMore
-                    ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: _white40, strokeWidth: 2))
-                    : Text("You're all caught up", style: GoogleFonts.nunito(color: _greyDark, fontSize: 12.5, fontWeight: FontWeight.w600)),
+                    ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: _t3, strokeWidth: 2))
+                    : Text("You're all caught up", style: _ts(13, FontWeight.w500, _t3)),
               ),
             );
           }
@@ -1216,7 +1312,7 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
       return Center(
         child: _peopleBusy || (_people.isEmpty && _peopleMore)
             ? const CircularProgressIndicator(color: _white, strokeWidth: 2)
-            : Text('No one found', style: GoogleFonts.nunito(color: _grey, fontWeight: FontWeight.w600)),
+            : Text('No one found', style: _ts(15, FontWeight.w500, _t2)),
       );
     }
     final searching = _searchCtrl.text.trim().isNotEmpty;
@@ -1226,16 +1322,16 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
         return false;
       },
       child: ListView.builder(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 120),
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 120),
         itemCount: list.length + (!searching && _peopleMore ? 1 : 0),
         itemBuilder: (context, i) {
           if (i >= list.length) {
             return const Padding(padding: EdgeInsets.symmetric(vertical: 20),
-                child: Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: _white40, strokeWidth: 2))));
+                child: Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: _t3, strokeWidth: 2))));
           }
           final p = list[i];
           return Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
+            padding: const EdgeInsets.symmetric(vertical: 9),
             child: Row(children: [
               Expanded(
                 child: GestureDetector(
@@ -1245,8 +1341,8 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
                     _Avatar(url: p['avatar'], name: p['name'], size: 48),
                     const SizedBox(width: 12),
                     Flexible(child: Text(p['name'], overflow: TextOverflow.ellipsis,
-                        style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w600, fontSize: 15))),
-                    if (p['verified'] == true) Padding(padding: const EdgeInsets.only(left: 4), child: verifiedTick()),
+                        style: _ts(16, FontWeight.w600, _white))),
+                    if (p['verified'] == true) Padding(padding: const EdgeInsets.only(left: 4), child: verifiedTick(size: 15)),
                   ]),
                 ),
               ),
@@ -1259,26 +1355,35 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
   }
 
   Widget _adOverlay() => Positioned.fill(
-        child: Container(
-          color: Colors.black.withOpacity(0.78),
-          child: SafeArea(
-            child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 24),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(22),
-                  child: GestureDetector(
-                    onTap: () => openExternalLink((_ad!['linkUrl'] ?? '').toString()),
-                    child: CachedNetworkImage(imageUrl: _ad!['imageUrl'], fit: BoxFit.cover),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+          child: Container(
+            color: Colors.black.withValues(alpha: 0.72),
+            child: SafeArea(
+              child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(22),
+                    child: GestureDetector(
+                      onTap: () => openExternalLink((_ad!['linkUrl'] ?? '').toString()),
+                      child: CachedNetworkImage(imageUrl: _ad!['imageUrl'], fit: BoxFit.cover),
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 10),
-              TextButton(
-                onPressed: () => setState(() => _adGone = true),
-                child: Text('Dismiss', style: GoogleFonts.nunito(color: _white70, fontWeight: FontWeight.w700)),
-              ),
-            ]),
+                const SizedBox(height: 16),
+                GestureDetector(
+                  onTap: () => setState(() => _adGone = true),
+                  child: Container(
+                    height: 38,
+                    padding: const EdgeInsets.symmetric(horizontal: 22),
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(color: _fill, borderRadius: BorderRadius.circular(999)),
+                    child: Text('Dismiss', style: _ts(15, FontWeight.w600, _white)),
+                  ),
+                ),
+              ]),
+            ),
           ),
         ),
       );
@@ -1293,15 +1398,16 @@ class _FollowBtn extends StatelessWidget {
   Widget build(BuildContext context) => GestureDetector(
         onTap: onTap,
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+          duration: const Duration(milliseconds: 250),
+          height: 32,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: following ? Colors.transparent : _white,
-            border: following ? Border.all(color: _white20) : null,
-            borderRadius: BorderRadius.circular(100),
+            color: following ? _fill : _white,
+            borderRadius: BorderRadius.circular(999),
           ),
           child: Text(following ? 'Following' : 'Follow',
-              style: GoogleFonts.nunito(color: following ? _white70 : _black, fontSize: 12.5, fontWeight: FontWeight.w800)),
+              style: _ts(13.5, FontWeight.w600, following ? _white : _black)),
         ),
       );
 }
@@ -1314,10 +1420,10 @@ class _Avatar extends StatelessWidget {
   Widget build(BuildContext context) {
     final n = (name ?? 'A').trim();
     final initial = n.isNotEmpty ? n[0].toUpperCase() : 'A';
-    Widget fallback() => Center(child: Text(initial, style: GoogleFonts.outfit(color: _white70, fontWeight: FontWeight.w700, fontSize: size * 0.38)));
+    Widget fallback() => Center(child: Text(initial, style: _ts(size * 0.4, FontWeight.w600, _white70, em: 0)));
     return Container(
       width: size, height: size,
-      decoration: const BoxDecoration(shape: BoxShape.circle, color: _black3),
+      decoration: const BoxDecoration(shape: BoxShape.circle, color: _s2),
       clipBehavior: Clip.antiAlias,
       child: (url != null && url!.isNotEmpty)
           ? CachedNetworkImage(
@@ -1340,13 +1446,13 @@ class _StoryBubble extends StatelessWidget {
   Widget build(BuildContext context) => GestureDetector(
         onTap: onTap,
         child: Container(
-          width: 72, margin: const EdgeInsets.only(right: 6),
+          width: 74, margin: const EdgeInsets.only(right: 4),
           child: Column(children: [
             Stack(children: [
               Container(
-                padding: const EdgeInsets.all(2.5),
+                padding: const EdgeInsets.all(3),
                 decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: ring, width: 2)),
-                child: _Avatar(url: avatarUrl, name: name, size: 56),
+                child: _Avatar(url: avatarUrl, name: name, size: 58),
               ),
               if (addBadge)
                 Positioned(
@@ -1354,22 +1460,22 @@ class _StoryBubble extends StatelessWidget {
                   child: GestureDetector(
                     onTap: onAdd,
                     child: Container(
-                      width: 21, height: 21,
+                      width: 22, height: 22,
                       decoration: BoxDecoration(shape: BoxShape.circle, color: _white, border: Border.all(color: _black, width: 2)),
-                      child: const Icon(Icons.add, size: 13, color: _black),
+                      child: const Icon(Icons.add, size: 14, color: _black),
                     ),
                   ),
                 ),
             ]),
             const SizedBox(height: 6),
             Text(label, maxLines: 1, overflow: TextOverflow.ellipsis,
-                style: GoogleFonts.nunito(color: _white70, fontSize: 11, fontWeight: FontWeight.w600)),
+                style: _ts(11.5, FontWeight.w500, _white70, em: 0)),
           ]),
         ),
       );
 }
 
-// ─── Post card — edge to edge, Instagram-style ──────────────────────────
+// ─── Post card — edge to edge ───────────────────────────────────────────
 class _PostCard extends StatefulWidget {
   final Map<String, dynamic> post;
   final bool liked, isFollowing, isSelf;
@@ -1410,8 +1516,8 @@ class _PostCardState extends State<_PostCard> {
   Widget _photo(String image, double w, double dpr) {
     final aspectRaw = (widget.post['imageAspect'] as num?)?.toDouble();
     final cache = (w * dpr).round();
-    Widget broken(double h) => Container(height: h, color: _black2,
-        child: const Center(child: Icon(Icons.broken_image_outlined, color: _greyDark)));
+    Widget broken(double h) => Container(height: h, color: _s1,
+        child: const Center(child: Icon(Icons.broken_image_outlined, color: _t3)));
     if (aspectRaw != null && aspectRaw > 0) {
       // Shape is known up front, so nothing jumps when the picture arrives.
       final a = aspectRaw.clamp(0.8, 1.91).toDouble();
@@ -1420,7 +1526,7 @@ class _PostCardState extends State<_PostCard> {
         child: CachedNetworkImage(
           imageUrl: image, fit: BoxFit.cover, memCacheWidth: cache,
           fadeInDuration: const Duration(milliseconds: 180),
-          placeholder: (_, __) => Container(color: _black2),
+          placeholder: (_, __) => Container(color: _s1),
           errorWidget: (_, __, ___) => broken(w / a),
         ),
       );
@@ -1431,10 +1537,17 @@ class _PostCardState extends State<_PostCard> {
       child: CachedNetworkImage(
         imageUrl: image, width: double.infinity, fit: BoxFit.cover, memCacheWidth: cache,
         fadeInDuration: const Duration(milliseconds: 180),
-        placeholder: (_, __) => Container(height: w, color: _black2),
+        placeholder: (_, __) => Container(height: w, color: _s1),
         errorWidget: (_, __, ___) => broken(w * 0.6),
       ),
     );
+  }
+
+  void _ownerMenu() {
+    _actionSheet(context, [
+      _Act('Edit', () => setState(() => _editing = true)),
+      _Act('Delete', widget.onDelete, color: _rose),
+    ]);
   }
 
   @override
@@ -1457,18 +1570,17 @@ class _PostCardState extends State<_PostCard> {
       builder: (context, snap) {
         final info = snap.data!;
         final name = (info['name'] ?? 'Artist').toString();
-        final caption = TextStyle(color: _white90, fontSize: 14.5, height: 1.45);
 
         return Padding(
-          padding: const EdgeInsets.only(bottom: 26),
+          padding: const EdgeInsets.only(top: 10, bottom: 8),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             // header
             Padding(
-              padding: const EdgeInsets.fromLTRB(14, 0, 6, 10),
+              padding: const EdgeInsets.fromLTRB(14, 0, 8, 10),
               child: Row(children: [
                 GestureDetector(
                   onTap: () => Navigator.pushNamed(context, '/viewpro', arguments: uid),
-                  child: _Avatar(url: info['avatar'], name: name, size: 36),
+                  child: _Avatar(url: info['avatar'], name: name, size: 38),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
@@ -1477,36 +1589,36 @@ class _PostCardState extends State<_PostCard> {
                     onTap: () => Navigator.pushNamed(context, '/viewpro', arguments: uid),
                     child: Row(children: [
                       Flexible(child: Text(name, overflow: TextOverflow.ellipsis,
-                          style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w600, fontSize: 14.5))),
-                      if (info['verified'] == true) Padding(padding: const EdgeInsets.only(left: 4), child: verifiedTick(size: 14)),
+                          style: _ts(15, FontWeight.w600, _white))),
+                      if (info['verified'] == true) Padding(padding: const EdgeInsets.only(left: 4), child: verifiedTick(size: 15)),
                     ]),
                   ),
                 ),
                 if (!widget.isSelf && !widget.isFollowing)
                   GestureDetector(
                     onTap: widget.onFollow,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                      child: Text('Follow', style: GoogleFonts.nunito(color: _blue, fontWeight: FontWeight.w800, fontSize: 13.5)),
+                    child: Container(
+                      height: 28,
+                      margin: const EdgeInsets.only(right: 4),
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(color: _fill, borderRadius: BorderRadius.circular(999)),
+                      child: Text('Follow', style: _ts(13, FontWeight.w600, _white)),
                     ),
                   ),
                 if (widget.isSelf)
-                  PopupMenuButton<String>(
-                    icon: const Icon(Icons.more_horiz_rounded, color: _white70),
-                    color: _black3,
-                    onSelected: (v) {
-                      if (v == 'delete') widget.onDelete();
-                      if (v == 'edit') setState(() => _editing = true);
-                    },
-                    itemBuilder: (_) => [
-                      PopupMenuItem(value: 'edit', child: Text('Edit', style: GoogleFonts.nunito(color: _white90, fontWeight: FontWeight.w700))),
-                      PopupMenuItem(value: 'delete', child: Text('Delete', style: GoogleFonts.nunito(color: _rose, fontWeight: FontWeight.w700))),
-                    ],
+                  GestureDetector(
+                    onTap: _ownerMenu,
+                    behavior: HitTestBehavior.opaque,
+                    child: const Padding(
+                      padding: EdgeInsets.all(8),
+                      child: Icon(Icons.more_horiz_rounded, color: _white70, size: 22),
+                    ),
                   ),
               ]),
             ),
 
-            // photo — full width, no card, 4:5 at most
+            // photo — full width, 4:5 at most
             if (image.isNotEmpty)
               GestureDetector(
                 onDoubleTap: _doubleTap,
@@ -1530,8 +1642,8 @@ class _PostCardState extends State<_PostCard> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(14, 0, 14, 4),
                 child: Text.rich(TextSpan(children: [
-                  ...hashtagSpans(text, base: GoogleFonts.nunito(color: _white, fontSize: 16.5, height: 1.5)),
-                  if (p['edited'] == true) TextSpan(text: '  edited', style: GoogleFonts.nunito(color: _grey, fontSize: 12)),
+                  ...hashtagSpans(text, base: _ts(17, FontWeight.w400, _white, em: -0.02, height: 1.45)),
+                  if (p['edited'] == true) TextSpan(text: '  edited', style: _ts(12, FontWeight.w400, _t3)),
                 ])),
               ),
 
@@ -1550,7 +1662,7 @@ class _PostCardState extends State<_PostCard> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(14, 2, 14, 0),
                 child: Text('${formatCount(likes)} like${likes == 1 ? '' : 's'}',
-                    style: GoogleFonts.nunito(color: _white, fontWeight: FontWeight.w800, fontSize: 13.5)),
+                    style: _ts(14, FontWeight.w600, _white)),
               ),
 
             // caption (under the photo) or inline editor
@@ -1560,20 +1672,37 @@ class _PostCardState extends State<_PostCard> {
                 child: Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
                   TextField(
                     controller: _editCtrl, maxLines: 5, minLines: 1, maxLength: 500,
-                    style: GoogleFonts.nunito(color: _white, fontSize: 14.5),
+                    cursorColor: _white,
+                    style: _ts(15, FontWeight.w400, _white),
                     decoration: InputDecoration(
-                      filled: true, fillColor: _black3,
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none)),
+                      filled: true, fillColor: _s2,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                      counterStyle: _ts(12, FontWeight.w400, _t3)),
                   ),
+                  const SizedBox(height: 6),
                   Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-                    TextButton(
-                      onPressed: () => setState(() { _editCtrl.text = text; _editing = false; }),
-                      child: Text('Cancel', style: GoogleFonts.nunito(color: _white70, fontWeight: FontWeight.w700))),
-                    ElevatedButton(
-                      onPressed: _saveEdit,
-                      style: ElevatedButton.styleFrom(backgroundColor: _white, foregroundColor: _black, elevation: 0,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(100))),
-                      child: Text('Save', style: GoogleFonts.nunito(fontWeight: FontWeight.w800))),
+                    GestureDetector(
+                      onTap: () => setState(() { _editCtrl.text = text; _editing = false; }),
+                      child: Container(
+                        height: 34, padding: const EdgeInsets.symmetric(horizontal: 16),
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(color: _fill, borderRadius: BorderRadius.circular(999)),
+                        child: Text('Cancel', style: _ts(14, FontWeight.w600, _white)),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    GestureDetector(
+                      onTap: _saveEdit,
+                      child: Container(
+                        height: 34, padding: const EdgeInsets.symmetric(horizontal: 18),
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(color: _white, borderRadius: BorderRadius.circular(999)),
+                        child: Text('Save', style: _ts(14, FontWeight.w600, _black)),
+                      ),
+                    ),
                   ]),
                 ]),
               )
@@ -1581,9 +1710,9 @@ class _PostCardState extends State<_PostCard> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(14, 5, 14, 0),
                 child: Text.rich(TextSpan(children: [
-                  TextSpan(text: '$name  ', style: GoogleFonts.nunito(color: _white, fontWeight: FontWeight.w800, fontSize: 14.5)),
-                  ...hashtagSpans(text, base: GoogleFonts.nunito(color: caption.color, fontSize: 14.5, height: 1.45)),
-                  if (p['edited'] == true) TextSpan(text: '  edited', style: GoogleFonts.nunito(color: _grey, fontSize: 12)),
+                  TextSpan(text: '$name  ', style: _ts(15, FontWeight.w600, _white)),
+                  ...hashtagSpans(text, base: _ts(15, FontWeight.w400, _white90, height: 1.4)),
+                  if (p['edited'] == true) TextSpan(text: '  edited', style: _ts(12, FontWeight.w400, _t3)),
                 ])),
               ),
 
@@ -1596,7 +1725,7 @@ class _PostCardState extends State<_PostCard> {
                     const Icon(Icons.link_rounded, color: _blue, size: 16),
                     const SizedBox(width: 6),
                     Expanded(child: Text(link, overflow: TextOverflow.ellipsis,
-                        style: GoogleFonts.nunito(color: _blue, fontSize: 13.5, fontWeight: FontWeight.w600))),
+                        style: _ts(14, FontWeight.w500, _blue))),
                   ]),
                 ),
               ),
@@ -1606,12 +1735,17 @@ class _PostCardState extends State<_PostCard> {
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
                 child: Text(comments > 0 ? 'View all ${formatCount(comments)} comment${comments == 1 ? '' : 's'}' : 'Add a comment…',
-                    style: GoogleFonts.nunito(color: _grey, fontSize: 13.5, fontWeight: FontWeight.w600)),
+                    style: _ts(14, FontWeight.w400, _t2)),
               ),
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(14, 5, 14, 0),
-              child: Text(timeAgo(created), style: GoogleFonts.nunito(color: _greyDark, fontSize: 11.5, fontWeight: FontWeight.w600)),
+              child: Text(timeAgo(created), style: _ts(12, FontWeight.w400, _t3)),
+            ),
+            Container(
+              margin: const EdgeInsets.only(top: 18),
+              height: 0.5,
+              color: _sep,
             ),
           ]),
         );
@@ -1653,15 +1787,13 @@ class _CommentsSheet extends StatefulWidget {
 
 class _CommentsSheetState extends State<_CommentsSheet> {
   final _input = TextEditingController();
-  final _db = FirebaseFirestore.instance;
   List<Map<String, dynamic>> _all = [];
   bool _loading = true, _sending = false;
-
- 
 
   @override
   void initState() {
     super.initState();
+    _input.addListener(() => setState(() {}));
     _load();
   }
 
@@ -1673,13 +1805,13 @@ class _CommentsSheetState extends State<_CommentsSheet> {
 
   Future<void> _load() async {
     try {
-          final r = await _Api.get('/posts/${widget.post['id']}/comments') as List;
+      final r = await _Api.get('/posts/${widget.post['id']}/comments') as List;
       _all = r.map((e) => Map<String, dynamic>.from(e as Map)).toList();
     } catch (_) {}
     if (mounted) setState(() => _loading = false);
   }
 
-   Future<void> _add(String text, String? parentId, String notifyUid, String type) async {
+  Future<void> _add(String text, String? parentId, String notifyUid, String type) async {
     try {
       final res = await _Api.post('/posts/${widget.post['id']}/comments', {
         'text': text, 'parentId': parentId,
@@ -1708,7 +1840,7 @@ class _CommentsSheetState extends State<_CommentsSheet> {
     }
   }
 
-    Future<void> _delete(String id) async {
+  Future<void> _delete(String id) async {
     final before = List<Map<String, dynamic>>.from(_all);
     setState(() => _all.removeWhere((c) => c['id'] == id || c['parentId'] == id));
     final removed = before.length - _all.length;
@@ -1721,6 +1853,7 @@ class _CommentsSheetState extends State<_CommentsSheet> {
       widget.onDelta(removed);
     }
   }
+
   @override
   Widget build(BuildContext context) {
     final top = _all.where((c) => c['parentId'] == null).toList();
@@ -1728,24 +1861,21 @@ class _CommentsSheetState extends State<_CommentsSheet> {
     for (final c in _all) {
       if (c['parentId'] != null) replies.putIfAbsent(c['parentId'] as String, () => []).add(c);
     }
+    final canSend = _input.text.trim().isNotEmpty;
     return DraggableScrollableSheet(
       initialChildSize: 0.75, minChildSize: 0.4, maxChildSize: 0.95,
       builder: (context, scroll) => Container(
-        decoration: const BoxDecoration(color: _black1, borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
+        decoration: _sheetDecoration,
         child: Column(children: [
-          const SizedBox(height: 10),
-          Container(width: 38, height: 4, decoration: BoxDecoration(color: _white20, borderRadius: BorderRadius.circular(4))),
-          Padding(padding: const EdgeInsets.all(14),
-              child: Text('Comments', style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w700, fontSize: 15.5))),
-          const Divider(color: _white10, height: 1),
+          _sheetHeader('Comments'),
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator(color: _white, strokeWidth: 2))
                 : top.isEmpty
-                    ? Center(child: Text('No comments yet.', style: GoogleFonts.nunito(color: _grey)))
+                    ? Center(child: Text('No comments yet.', style: _ts(15, FontWeight.w400, _t2)))
                     : ListView.builder(
                         controller: scroll,
-                        padding: const EdgeInsets.symmetric(horizontal: 14),
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
                         itemCount: top.length,
                         itemBuilder: (context, i) => _CommentRow(
                           comment: top[i], replies: replies[top[i]['id']] ?? [], myUid: widget.myUid,
@@ -1754,23 +1884,37 @@ class _CommentsSheetState extends State<_CommentsSheet> {
                         ),
                       ),
           ),
+          Container(height: 0.5, color: _sep),
           SafeArea(
             top: false,
             child: Padding(
-              padding: EdgeInsets.fromLTRB(14, 8, 8, 8 + MediaQuery.of(context).viewInsets.bottom),
+              padding: EdgeInsets.fromLTRB(16, 10, 12, 10 + MediaQuery.of(context).viewInsets.bottom),
               child: Row(children: [
                 Expanded(
-                  child: TextField(
-                    controller: _input, onSubmitted: (_) => _submit(),
-                    style: GoogleFonts.nunito(color: _white, fontSize: 14),
-                    decoration: InputDecoration(
-                      isDense: true, filled: true, fillColor: _black3, hintText: 'Add a comment…',
-                      hintStyle: GoogleFonts.nunito(color: _grey),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(100), borderSide: BorderSide.none),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11)),
+                  child: Container(
+                    decoration: BoxDecoration(color: _fill, borderRadius: BorderRadius.circular(20)),
+                    child: TextField(
+                      controller: _input, onSubmitted: (_) => _submit(),
+                      cursorColor: _white,
+                      style: _ts(16, FontWeight.w400, _white),
+                      decoration: InputDecoration(
+                        isDense: true, hintText: 'Add a comment…',
+                        hintStyle: _ts(16, FontWeight.w400, _t2),
+                        border: InputBorder.none, enabledBorder: InputBorder.none, focusedBorder: InputBorder.none,
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11)),
+                    ),
                   ),
                 ),
-                IconButton(icon: const Icon(Icons.arrow_upward_rounded, color: _white), onPressed: _submit),
+                const SizedBox(width: 8),
+                GestureDetector(
+                  onTap: _submit,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    width: 36, height: 36,
+                    decoration: BoxDecoration(color: canSend ? _white : _fill, shape: BoxShape.circle),
+                    child: Icon(Icons.arrow_upward_rounded, color: canSend ? _black : _t3, size: 20),
+                  ),
+                ),
               ]),
             ),
           ),
@@ -1801,20 +1945,16 @@ class _CommentRowState extends State<_CommentRow> {
     super.dispose();
   }
 
-  Future<void> _confirm(String id) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: _black2,
-        title: Text('Delete comment?', style: GoogleFonts.outfit(color: _white)),
-        content: Text("This can't be undone.", style: GoogleFonts.nunito(color: _white70)),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.pop(ctx, true), child: Text('Delete', style: GoogleFonts.nunito(color: _rose))),
-        ],
-      ),
+  Future<void> _askDelete(String id) async {
+    final ok = await _confirm(
+      context,
+      title: 'Delete comment?',
+      message: "This can't be undone.",
+      cancel: 'Cancel',
+      ok: 'Delete',
+      destructive: true,
     );
-    if (ok == true) widget.onDelete(id);
+    if (ok) widget.onDelete(id);
   }
 
   Widget _line(Map<String, dynamic> c, {required double avatar}) {
@@ -1825,7 +1965,7 @@ class _CommentRowState extends State<_CommentRow> {
       builder: (context, snap) {
         final i = snap.data!;
         return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 7),
+          padding: const EdgeInsets.symmetric(vertical: 8),
           child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
             _Avatar(url: i['avatar'], name: i['name'], size: avatar),
             const SizedBox(width: 10),
@@ -1833,19 +1973,19 @@ class _CommentRowState extends State<_CommentRow> {
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Row(children: [
                   Flexible(child: Text(i['name'], overflow: TextOverflow.ellipsis,
-                      style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w600, fontSize: 13))),
-                  if (i['verified'] == true) Padding(padding: const EdgeInsets.only(left: 3), child: verifiedTick(size: 11)),
+                      style: _ts(13.5, FontWeight.w600, _white))),
+                  if (i['verified'] == true) Padding(padding: const EdgeInsets.only(left: 3), child: verifiedTick(size: 12)),
                   const SizedBox(width: 8),
-                  Text(timeAgo(_dt(c['createdAt'])), style: GoogleFonts.nunito(color: _greyDark, fontSize: 11)),
+                  Text(timeAgo(_dt(c['createdAt'])), style: _ts(12, FontWeight.w400, _t3)),
                 ]),
                 const SizedBox(height: 2),
-                Text.rich(TextSpan(children: hashtagSpans(c['text'] ?? '', base: GoogleFonts.nunito(color: _white90, fontSize: 13.5, height: 1.4)))),
+                Text.rich(TextSpan(children: hashtagSpans(c['text'] ?? '', base: _ts(14.5, FontWeight.w400, _white90, height: 1.4)))),
               ]),
             ),
             if (c['authorUid'] == widget.myUid)
               GestureDetector(
-                onTap: () => _confirm(c['id'] as String),
-                child: const Padding(padding: EdgeInsets.only(left: 8, top: 2), child: Icon(Icons.delete_outline_rounded, color: _grey, size: 17)),
+                onTap: () => _askDelete(c['id'] as String),
+                child: const Padding(padding: EdgeInsets.only(left: 8, top: 2), child: Icon(Icons.delete_outline_rounded, color: _t2, size: 18)),
               ),
           ]),
         );
@@ -1856,34 +1996,45 @@ class _CommentRowState extends State<_CommentRow> {
   @override
   Widget build(BuildContext context) {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      _line(widget.comment, avatar: 32),
+      _line(widget.comment, avatar: 34),
       Padding(
-        padding: const EdgeInsets.only(left: 42),
+        padding: const EdgeInsets.only(left: 44),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           GestureDetector(
             onTap: () => setState(() => _replying = !_replying),
-            child: Text('Reply', style: GoogleFonts.nunito(color: _grey, fontSize: 12, fontWeight: FontWeight.w700)),
+            child: Text('Reply', style: _ts(12.5, FontWeight.w600, _t2)),
           ),
           if (_replying)
             Padding(
               padding: const EdgeInsets.only(top: 8),
               child: Row(children: [
                 Expanded(
-                  child: TextField(
-                    controller: _ctrl, autofocus: true,
-                    style: GoogleFonts.nunito(color: _white, fontSize: 13),
-                    decoration: InputDecoration(
-                      isDense: true, filled: true, fillColor: _black3, hintText: 'Write a reply…',
-                      hintStyle: GoogleFonts.nunito(color: _grey),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(100), borderSide: BorderSide.none),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9)),
-                    onSubmitted: (_) => _send(),
+                  child: Container(
+                    decoration: BoxDecoration(color: _fill, borderRadius: BorderRadius.circular(18)),
+                    child: TextField(
+                      controller: _ctrl, autofocus: true, cursorColor: _white,
+                      style: _ts(15, FontWeight.w400, _white),
+                      decoration: InputDecoration(
+                        isDense: true, hintText: 'Write a reply…',
+                        hintStyle: _ts(15, FontWeight.w400, _t2),
+                        border: InputBorder.none, enabledBorder: InputBorder.none, focusedBorder: InputBorder.none,
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9)),
+                      onSubmitted: (_) => _send(),
+                    ),
                   ),
                 ),
-                IconButton(icon: const Icon(Icons.arrow_upward_rounded, color: _white70, size: 20), onPressed: _send),
+                const SizedBox(width: 6),
+                GestureDetector(
+                  onTap: _send,
+                  child: Container(
+                    width: 32, height: 32,
+                    decoration: const BoxDecoration(color: _white, shape: BoxShape.circle),
+                    child: const Icon(Icons.arrow_upward_rounded, color: _black, size: 18),
+                  ),
+                ),
               ]),
             ),
-          for (final r in widget.replies) _line(r, avatar: 26),
+          for (final r in widget.replies) _line(r, avatar: 28),
         ]),
       ),
       const SizedBox(height: 4),
@@ -1948,33 +2099,44 @@ class _NotificationsSheetState extends State<_NotificationsSheet> {
     return DraggableScrollableSheet(
       initialChildSize: 0.7, minChildSize: 0.4, maxChildSize: 0.95,
       builder: (context, scroll) => Container(
-        decoration: const BoxDecoration(color: _black1, borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
+        decoration: _sheetDecoration,
         child: Column(children: [
-          const SizedBox(height: 10),
-          Container(width: 38, height: 4, decoration: BoxDecoration(color: _white20, borderRadius: BorderRadius.circular(4))),
-          Padding(padding: const EdgeInsets.all(14),
-              child: Text('Notifications', style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w700, fontSize: 15.5))),
-          const Divider(color: _white10, height: 1),
+          _sheetHeader('Notifications'),
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator(color: _white, strokeWidth: 2))
                 : _items.isEmpty
-                    ? Center(child: Text('Nothing here yet.', style: GoogleFonts.nunito(color: _grey)))
-                    : ListView.builder(
+                    ? Center(child: Text('Nothing here yet.', style: _ts(15, FontWeight.w400, _t2)))
+                    : ListView.separated(
                         controller: scroll, itemCount: _items.length,
+                        separatorBuilder: (_, __) => Container(height: 0.5, margin: const EdgeInsets.only(left: 72), color: _sep),
                         itemBuilder: (context, i) {
                           final n = _items[i];
                           final created = (n['createdAt'] as num?)?.toInt();
                           final unread = _seenBefore != null && created != null && created > _seenBefore!;
-                          return ListTile(
-                            leading: _Avatar(url: n['fromAvatar'], name: n['fromName'], size: 42),
-                            title: Text(_text(n), style: GoogleFonts.nunito(color: _white90, fontSize: 13.5, fontWeight: unread ? FontWeight.w700 : FontWeight.w500)),
-                            subtitle: Text(timeAgo(_dt(created)), style: GoogleFonts.nunito(color: _grey, fontSize: 11.5)),
-                            trailing: unread ? const Icon(Icons.circle, color: _blue, size: 9) : null,
+                          return GestureDetector(
+                            behavior: HitTestBehavior.opaque,
                             onTap: () {
                               Navigator.pop(context);
                               if (n['fromUid'] != null) Navigator.pushNamed(context, '/viewpro', arguments: n['fromUid']);
                             },
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                              child: Row(children: [
+                                _Avatar(url: n['fromAvatar'], name: n['fromName'], size: 44),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                    Text(_text(n), style: _ts(15, unread ? FontWeight.w600 : FontWeight.w400, _white90, height: 1.3)),
+                                    const SizedBox(height: 2),
+                                    Text(timeAgo(_dt(created)), style: _ts(13, FontWeight.w400, _t2)),
+                                  ]),
+                                ),
+                                if (unread)
+                                  Container(width: 9, height: 9, margin: const EdgeInsets.only(left: 10),
+                                      decoration: const BoxDecoration(color: _blue, shape: BoxShape.circle)),
+                              ]),
+                            ),
                           );
                         },
                       ),
@@ -1985,83 +2147,22 @@ class _NotificationsSheetState extends State<_NotificationsSheet> {
   }
 }
 
-class _NotificationsSheetStateOld extends State<_NotificationsSheet> {
-  List<Map<String, dynamic>> _items = [];
-  bool _loading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    try {
-      final s = await FirebaseFirestore.instance.collection('notifications').doc(widget.uid).collection('items')
-          .orderBy('createdAt', descending: true).limit(30).get();
-      final now = Timestamp.now();
-      _items = s.docs.map((d) => <String, dynamic>{'id': d.id, ...d.data()}).where((n) {
-        final e = n['expiresAt'];
-        return e is! Timestamp || e.compareTo(now) > 0;
-      }).toList();
-    } catch (_) {}
-    if (mounted) setState(() => _loading = false);
-  }
-
-  String _text(Map<String, dynamic> n) {
-    final who = n['fromName'] ?? 'Someone';
-    switch (n['type']) {
-      case 'follow': return '$who started following you';
-      case 'like': return '$who liked your post';
-      case 'story_like': return '$who liked your story';
-      case 'comment': return '$who commented on your post';
-      case 'reply': return '$who replied to your comment';
-      case 'story_share': return '$who added your post to their story';
-      default: return '$who sent you a notification';
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return DraggableScrollableSheet(
-      initialChildSize: 0.7, minChildSize: 0.4, maxChildSize: 0.95,
-      builder: (context, scroll) => Container(
-        decoration: const BoxDecoration(color: _black1, borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
-        child: Column(children: [
-          const SizedBox(height: 10),
-          Container(width: 38, height: 4, decoration: BoxDecoration(color: _white20, borderRadius: BorderRadius.circular(4))),
-          Padding(padding: const EdgeInsets.all(14),
-              child: Text('Notifications', style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w700, fontSize: 15.5))),
-          const Divider(color: _white10, height: 1),
-          Expanded(
-            child: _loading
-                ? const Center(child: CircularProgressIndicator(color: _white, strokeWidth: 2))
-                : _items.isEmpty
-                    ? Center(child: Text('Nothing here yet.', style: GoogleFonts.nunito(color: _grey)))
-                    : ListView.builder(
-                        controller: scroll, itemCount: _items.length,
-                        itemBuilder: (context, i) {
-                          final n = _items[i];
-                          final created = n['createdAt'] as Timestamp?;
-                          final unread = widget.seenBefore != null && created != null && created.compareTo(widget.seenBefore!) > 0;
-                          return ListTile(
-                            leading: _Avatar(url: n['fromAvatar'], name: n['fromName'], size: 42),
-                            title: Text(_text(n), style: GoogleFonts.nunito(color: _white90, fontSize: 13.5, fontWeight: unread ? FontWeight.w700 : FontWeight.w500)),
-                            subtitle: Text(timeAgo(created?.toDate()), style: GoogleFonts.nunito(color: _grey, fontSize: 11.5)),
-                            trailing: unread ? const Icon(Icons.circle, color: _blue, size: 9) : null,
-                            onTap: () {
-                              Navigator.pop(context);
-                              if (n['fromUid'] != null) Navigator.pushNamed(context, '/viewpro', arguments: n['fromUid']);
-                            },
-                          );
-                        },
-                      ),
+// ─── Composer top bar (Cancel · Title · Action) ─────────────────────────
+Widget _composerBar(BuildContext context, {required String title, Widget? trailing}) => Container(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
+      decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: _sep, width: 0.5))),
+      child: Row(children: [
+        SizedBox(
+          width: 70,
+          child: GestureDetector(
+            onTap: () => Navigator.pop(context),
+            child: Text('Cancel', style: _ts(17, FontWeight.w400, _blue)),
           ),
-        ]),
-      ),
+        ),
+        Expanded(child: Center(child: Text(title, style: _ts(17, FontWeight.w600, _white)))),
+        SizedBox(width: 70, child: Align(alignment: Alignment.centerRight, child: trailing)),
+      ]),
     );
-  }
-}
 
 // ─── New post composer ──────────────────────────────────────────────────
 class _NewPostScreen extends StatefulWidget {
@@ -2101,7 +2202,7 @@ class _NewPostScreenState extends State<_NewPostScreen> {
         if (url == null) throw Exception('upload failed');
         aspect = await _aspectOf(_image!);
       }
-           final res = await _Api.post('/posts', {
+      final res = await _Api.post('/posts', {
         'text': text, 'mediaKey': url, 'linkUrl': link.isEmpty ? null : link,
         'imageAspect': aspect, 'authorName': widget.myName, 'authorAvatar': widget.myAvatar,
       });
@@ -2114,65 +2215,94 @@ class _NewPostScreenState extends State<_NewPostScreen> {
     }
   }
 
+  Widget _pill(IconData icon, String label, VoidCallback onTap) => GestureDetector(
+        onTap: onTap,
+        child: Container(
+          height: 36,
+          margin: const EdgeInsets.only(right: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          decoration: BoxDecoration(color: _fill, borderRadius: BorderRadius.circular(999)),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(icon, color: _white, size: 17),
+            const SizedBox(width: 7),
+            Text(label, style: _ts(14, FontWeight.w600, _white)),
+          ]),
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: _black,
-      appBar: AppBar(
-        backgroundColor: _black, elevation: 0,
-        leading: IconButton(icon: const Icon(Icons.close_rounded, color: _white), onPressed: () => Navigator.pop(context)),
-        title: Text('New post', style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w700)),
-        actions: [
-          TextButton(
-            onPressed: _busy ? null : _publish,
-            child: _busy
-                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: _white))
-                : Text('Share', style: GoogleFonts.nunito(color: _blue, fontWeight: FontWeight.w800, fontSize: 15)),
-          ),
-        ],
-      ),
-      body: ListView(padding: const EdgeInsets.all(16), children: [
-        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          _Avatar(url: widget.myAvatar, name: widget.myName, size: 40),
-          const SizedBox(width: 12),
-          Expanded(
-            child: TextField(
-              controller: _text, maxLines: 8, minLines: 2, maxLength: 500,
-              style: GoogleFonts.nunito(color: _white, fontSize: 15.5),
-              decoration: InputDecoration(border: InputBorder.none, counterText: '', hintText: 'Write something…', hintStyle: GoogleFonts.nunito(color: _grey)),
+      body: SafeArea(
+        child: Column(children: [
+          _composerBar(
+            context,
+            title: 'New post',
+            trailing: GestureDetector(
+              onTap: _busy ? null : _publish,
+              child: _busy
+                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: _white))
+                  : Text('Share', style: _ts(17, FontWeight.w600, _blue)),
             ),
           ),
-        ]),
-        if (_image != null)
-          Padding(
-            padding: const EdgeInsets.only(top: 12),
-            child: Stack(children: [
-              ClipRRect(borderRadius: BorderRadius.circular(6), child: Image.file(io.File(_image!.path), width: double.infinity, fit: BoxFit.cover)),
-              Positioned(
-                top: 8, right: 8,
-                child: GestureDetector(
-                  onTap: () => setState(() => _image = null),
-                  child: const CircleAvatar(radius: 14, backgroundColor: Colors.black54, child: Icon(Icons.close, color: _white, size: 16))),
-              ),
+          Expanded(
+            child: ListView(padding: const EdgeInsets.all(16), children: [
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                _Avatar(url: widget.myAvatar, name: widget.myName, size: 42),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: TextField(
+                    controller: _text, maxLines: 8, minLines: 3, maxLength: 500, cursorColor: _white,
+                    style: _ts(17, FontWeight.w400, _white, height: 1.4),
+                    decoration: InputDecoration(
+                      border: InputBorder.none, enabledBorder: InputBorder.none, focusedBorder: InputBorder.none,
+                      counterStyle: _ts(12, FontWeight.w400, _t3),
+                      hintText: 'Write something…', hintStyle: _ts(17, FontWeight.w400, _t2)),
+                  ),
+                ),
+              ]),
+              if (_image != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Stack(children: [
+                    ClipRRect(borderRadius: BorderRadius.circular(14), child: Image.file(io.File(_image!.path), width: double.infinity, fit: BoxFit.cover)),
+                    Positioned(
+                      top: 10, right: 10,
+                      child: GestureDetector(
+                        onTap: () => setState(() => _image = null),
+                        child: Container(
+                          width: 30, height: 30,
+                          decoration: const BoxDecoration(color: Color(0x99000000), shape: BoxShape.circle),
+                          child: const Icon(Icons.close_rounded, color: _white, size: 17)),
+                      ),
+                    ),
+                  ]),
+                ),
+              if (_showLink)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Container(
+                    decoration: BoxDecoration(color: _fill, borderRadius: BorderRadius.circular(12)),
+                    child: TextField(
+                      controller: _link, cursorColor: _white,
+                      style: _ts(16, FontWeight.w400, _white),
+                      decoration: InputDecoration(
+                        hintText: 'Paste a link…', hintStyle: _ts(16, FontWeight.w400, _t2),
+                        border: InputBorder.none, enabledBorder: InputBorder.none, focusedBorder: InputBorder.none,
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13)),
+                    ),
+                  ),
+                ),
+              const SizedBox(height: 16),
+              Row(children: [
+                _pill(Icons.image_outlined, 'Photo', _pick),
+                _pill(Icons.link_rounded, 'Link', () => setState(() => _showLink = !_showLink)),
+              ]),
             ]),
           ),
-        if (_showLink)
-          Padding(
-            padding: const EdgeInsets.only(top: 12),
-            child: TextField(
-              controller: _link, style: GoogleFonts.nunito(color: _white, fontSize: 14),
-              decoration: InputDecoration(filled: true, fillColor: _black3, hintText: 'Paste a link…', hintStyle: GoogleFonts.nunito(color: _grey),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none)),
-            ),
-          ),
-        const SizedBox(height: 12),
-        Row(children: [
-          TextButton.icon(onPressed: _pick, icon: const Icon(Icons.image_outlined, color: _white70),
-              label: Text('Photo', style: GoogleFonts.nunito(color: _white70, fontWeight: FontWeight.w700))),
-          TextButton.icon(onPressed: () => setState(() => _showLink = !_showLink), icon: const Icon(Icons.link_rounded, color: _white70),
-              label: Text('Link', style: GoogleFonts.nunito(color: _white70, fontWeight: FontWeight.w700))),
         ]),
-      ]),
+      ),
     );
   }
 }
@@ -2199,7 +2329,8 @@ class _StoryComposerScreenState extends State<_StoryComposerScreen> {
   }
 
   bool get _can => _type == 'image' ? _image != null : _type == 'text' ? _text.text.trim().isNotEmpty : _link.text.trim().isNotEmpty;
-Future<void> _share() async {
+
+  Future<void> _share() async {
     setState(() => _busy = true);
     try {
       final me = FirebaseAuth.instance.currentUser!;
@@ -2226,99 +2357,94 @@ Future<void> _share() async {
     }
   }
 
-  Future<void> _shareOld() async {
-    setState(() => _busy = true);
-    try {
-      final me = FirebaseAuth.instance.currentUser!;
-      final data = <String, dynamic>{
-        'authorUid': me.uid, 'authorName': widget.myName, 'authorAvatar': widget.myAvatar,
-        'type': _type, 'createdAt': FieldValue.serverTimestamp(),
-        'expiresAt': Timestamp.fromDate(DateTime.now().add(const Duration(hours: 24))),
-      };
-      if (_type == 'image') {
-        final url = await _uploadToR2(_image!, kind: 'story', uid: me.uid);
-        if (url == null) throw Exception('upload failed');
-        data['imageUrl'] = url;
-      } else if (_type == 'text') {
-        data['text'] = _text.text.trim();
-      } else {
-        data['linkUrl'] = _link.text.trim();
-      }
-      await FirebaseFirestore.instance.collection('stories').add(data);
-      if (mounted) Navigator.pop(context, true);
-    } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Couldn't share your story.")));
-        setState(() => _busy = false);
-      }
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     InputDecoration deco(String hint) => InputDecoration(
-        filled: true, fillColor: _black3, hintText: hint, hintStyle: GoogleFonts.nunito(color: _grey),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none));
+        filled: true, fillColor: _fill, hintText: hint, hintStyle: _ts(16, FontWeight.w400, _t2),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+        counterStyle: _ts(12, FontWeight.w400, _t3),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none));
     return Scaffold(
       backgroundColor: _black,
-      appBar: AppBar(
-        backgroundColor: _black, elevation: 0,
-        leading: IconButton(icon: const Icon(Icons.close_rounded, color: _white), onPressed: () => Navigator.pop(context)),
-        title: Text('Add to your story', style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w700)),
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
+      body: SafeArea(
         child: Column(children: [
-          Row(children: [
-            for (final t in ['image', 'text', 'link'])
-              Expanded(
-                child: GestureDetector(
-                  onTap: () => setState(() => _type = t),
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 4),
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    decoration: BoxDecoration(color: _type == t ? _white : _white06, borderRadius: BorderRadius.circular(100)),
-                    child: Center(child: Text(t == 'image' ? 'Photo' : t == 'text' ? 'Text' : 'Link',
-                        style: GoogleFonts.nunito(color: _type == t ? _black : _white70, fontWeight: FontWeight.w700, fontSize: 13))),
+          _composerBar(context, title: 'Your story'),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(children: [
+                Container(
+                  padding: const EdgeInsets.all(2),
+                  decoration: BoxDecoration(color: _fill, borderRadius: BorderRadius.circular(9)),
+                  child: Row(children: [
+                    for (final t in ['image', 'text', 'link'])
+                      Expanded(
+                        child: GestureDetector(
+                          onTap: () => setState(() => _type = t),
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 250),
+                            height: 32,
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              color: _type == t ? _s3 : Colors.transparent,
+                              borderRadius: BorderRadius.circular(7),
+                              boxShadow: _type == t ? [BoxShadow(color: Colors.black.withValues(alpha: 0.3), blurRadius: 6, offset: const Offset(0, 2))] : const [],
+                            ),
+                            child: Text(t == 'image' ? 'Photo' : t == 'text' ? 'Text' : 'Link',
+                                style: _ts(14, FontWeight.w600, _type == t ? _white : _t2)),
+                          ),
+                        ),
+                      ),
+                  ]),
+                ),
+                const SizedBox(height: 20),
+                if (_type == 'image')
+                  _image == null
+                      ? GestureDetector(
+                          onTap: () async {
+                            final f = await ImagePicker().pickImage(source: ImageSource.gallery, imageQuality: 85, maxWidth: 1440);
+                            if (f != null) setState(() => _image = f);
+                          },
+                          child: Container(
+                            width: double.infinity, padding: const EdgeInsets.symmetric(vertical: 40),
+                            decoration: BoxDecoration(color: _s1, borderRadius: BorderRadius.circular(16)),
+                            child: Column(children: [
+                              Container(
+                                width: 48, height: 48,
+                                decoration: const BoxDecoration(color: _fill, shape: BoxShape.circle),
+                                child: const Icon(Icons.image_outlined, color: _white, size: 22),
+                              ),
+                              const SizedBox(height: 12),
+                              Text('Choose a photo', style: _ts(16, FontWeight.w500, _white)),
+                            ]),
+                          ),
+                        )
+                      : ClipRRect(borderRadius: BorderRadius.circular(16), child: Image.file(io.File(_image!.path), height: 280, width: double.infinity, fit: BoxFit.cover)),
+                if (_type == 'text')
+                  TextField(controller: _text, maxLength: 280, maxLines: 6, onChanged: (_) => setState(() {}), cursorColor: _white,
+                      style: _ts(16, FontWeight.w400, _white), decoration: deco('Share something…')),
+                if (_type == 'link')
+                  TextField(controller: _link, onChanged: (_) => setState(() {}), cursorColor: _white,
+                      style: _ts(16, FontWeight.w400, _white), decoration: deco('Paste a link…')),
+                const Spacer(),
+                GestureDetector(
+                  onTap: _can && !_busy ? _share : null,
+                  child: AnimatedOpacity(
+                    duration: const Duration(milliseconds: 200),
+                    opacity: _can ? 1 : 0.4,
+                    child: Container(
+                      width: double.infinity, height: 52,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(color: _white, borderRadius: BorderRadius.circular(999)),
+                      child: _busy
+                          ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2.5, color: _black))
+                          : Text('Share to story', style: _ts(17, FontWeight.w600, _black)),
+                    ),
                   ),
                 ),
-              ),
-          ]),
-          const SizedBox(height: 20),
-          if (_type == 'image')
-            _image == null
-                ? GestureDetector(
-                    onTap: () async {
-                      final f = await ImagePicker().pickImage(source: ImageSource.gallery, imageQuality: 85, maxWidth: 1440);
-                      if (f != null) setState(() => _image = f);
-                    },
-                    child: Container(
-                      width: double.infinity, padding: const EdgeInsets.all(30),
-                      decoration: BoxDecoration(border: Border.all(color: _white20), borderRadius: BorderRadius.circular(14)),
-                      child: Column(children: [
-                        const Icon(Icons.image_outlined, color: _grey, size: 28),
-                        const SizedBox(height: 8),
-                        Text('Choose a photo', style: GoogleFonts.nunito(color: _white70, fontWeight: FontWeight.w700)),
-                      ]),
-                    ),
-                  )
-                : ClipRRect(borderRadius: BorderRadius.circular(14), child: Image.file(io.File(_image!.path), height: 260, width: double.infinity, fit: BoxFit.cover)),
-          if (_type == 'text')
-            TextField(controller: _text, maxLength: 280, maxLines: 6, onChanged: (_) => setState(() {}),
-                style: GoogleFonts.nunito(color: _white), decoration: deco('Share something…')),
-          if (_type == 'link')
-            TextField(controller: _link, onChanged: (_) => setState(() {}),
-                style: GoogleFonts.nunito(color: _white), decoration: deco('Paste a link…')),
-          const Spacer(),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: _can && !_busy ? _share : null,
-              style: ElevatedButton.styleFrom(backgroundColor: _white, foregroundColor: _black, elevation: 0,
-                  padding: const EdgeInsets.symmetric(vertical: 15), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(100))),
-              child: _busy
-                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: _black))
-                  : Text('Share to story', style: GoogleFonts.nunito(fontWeight: FontWeight.w800)),
+              ]),
             ),
           ),
         ]),
@@ -2362,7 +2488,7 @@ class _StoryViewerScreenState extends State<_StoryViewerScreen> with SingleTicke
     super.dispose();
   }
 
- void _show(int i) {
+  void _show(int i) {
     if (i < 0 || i >= _stories.length) { Navigator.pop(context); return; }
     setState(() => _index = i);
     _ctrl.reset();
@@ -2378,27 +2504,6 @@ class _StoryViewerScreenState extends State<_StoryViewerScreen> with SingleTicke
       widget.seen.add(id);
       widget.onPersist();
       _Api.post('/stories/$id/view').catchError((_) {});
-    }
-  }
-
-  void _showOld(int i) {
-    if (i < 0 || i >= _stories.length) { Navigator.pop(context); return; }
-    setState(() => _index = i);
-    _ctrl.reset();
-    _ctrl.forward();
-    final s = _stories[i], id = s['id'] as String;
-    if (s['authorUid'] == widget.myUid) {
-      if (!_viewerCounts.containsKey(id)) {
-        FirebaseFirestore.instance.collection('stories').doc(id).collection('viewers').count().get().then((a) {
-          if (mounted) setState(() => _viewerCounts[id] = a.count ?? 0);
-        }).catchError((_) {});
-      }
-    } else if (!widget.seen.contains(id)) {
-      // One write the first time you see a story on this phone.
-      widget.seen.add(id);
-      widget.onPersist();
-      FirebaseFirestore.instance.collection('stories').doc(id).collection('viewers').doc(widget.myUid)
-          .set({'viewedAt': FieldValue.serverTimestamp()}).catchError((_) {});
     }
   }
 
@@ -2419,42 +2524,20 @@ class _StoryViewerScreenState extends State<_StoryViewerScreen> with SingleTicke
     }
   }
 
-  Future<void> _toggleLikeOld() async {
-    final s = _stories[_index], id = s['id'] as String, was = widget.liked.contains(id);
-    setState(() => was ? widget.liked.remove(id) : widget.liked.add(id));
-    widget.onPersist();
-    try {
-      final ref = FirebaseFirestore.instance.collection('stories').doc(id).collection('likes').doc(widget.myUid);
-      if (was) {
-        await ref.delete();
-      } else {
-        await ref.set({'uid': widget.myUid, 'likedAt': FieldValue.serverTimestamp()});
-        sendNotification(s['authorUid'], 'story_like', docId: 'slike_${id}_${widget.myUid}');
-      }
-    } catch (_) {
-      if (mounted) setState(() => was ? widget.liked.add(id) : widget.liked.remove(id));
-      widget.onPersist();
-    }
-  }
-
   Future<void> _delete() async {
     final s = _stories[_index];
     if (s['authorUid'] != widget.myUid) return;
     _ctrl.stop();
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: _black2,
-        title: Text('Delete this story?', style: GoogleFonts.outfit(color: _white)),
-        content: Text("This can't be undone.", style: GoogleFonts.nunito(color: _white70)),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.pop(ctx, true), child: Text('Delete', style: GoogleFonts.nunito(color: _rose))),
-        ],
-      ),
+    final ok = await _confirm(
+      context,
+      title: 'Delete this story?',
+      message: "This can't be undone.",
+      cancel: 'Cancel',
+      ok: 'Delete',
+      destructive: true,
     );
-    if (ok != true) { _ctrl.forward(); return; }
-   try { await _Api.delete('/stories/${s['id']}'); } catch (_) { if (mounted) _ctrl.forward(); return; }
+    if (!ok) { _ctrl.forward(); return; }
+    try { await _Api.delete('/stories/${s['id']}'); } catch (_) { if (mounted) _ctrl.forward(); return; }
     _stories.removeAt(_index);
     widget.onDeleted();
     if (_stories.isEmpty) { if (mounted) Navigator.pop(context); return; }
@@ -2465,6 +2548,7 @@ class _StoryViewerScreenState extends State<_StoryViewerScreen> with SingleTicke
     _ctrl.stop();
     showModalBottomSheet(
       context: context, backgroundColor: Colors.transparent, isScrollControlled: true,
+      barrierColor: Colors.black.withValues(alpha: 0.45),
       builder: (_) => _StoryViewersSheet(storyId: _stories[_index]['id']),
     ).then((_) => _ctrl.forward());
   }
@@ -2489,7 +2573,7 @@ class _StoryViewerScreenState extends State<_StoryViewerScreen> with SingleTicke
               child: Row(children: List.generate(_stories.length, (i) => Expanded(
                 child: Container(
                   height: 2.5, margin: const EdgeInsets.symmetric(horizontal: 2),
-                  decoration: BoxDecoration(color: _white20, borderRadius: BorderRadius.circular(3)),
+                  decoration: BoxDecoration(color: const Color(0x4DFFFFFF), borderRadius: BorderRadius.circular(3)),
                   child: i < _index
                       ? Container(decoration: BoxDecoration(color: _white, borderRadius: BorderRadius.circular(3)))
                       : i == _index
@@ -2516,14 +2600,14 @@ class _StoryViewerScreenState extends State<_StoryViewerScreen> with SingleTicke
                       builder: (context, snap) {
                         final i = snap.data!;
                         return Row(children: [
-                          _Avatar(url: i['avatar'], name: i['name'], size: 34),
+                          _Avatar(url: i['avatar'], name: i['name'], size: 36),
                           const SizedBox(width: 10),
                           Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                             Row(children: [
-                              Text(i['name'] ?? 'Artist', style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w600, fontSize: 14)),
-                              if (i['verified'] == true) Padding(padding: const EdgeInsets.only(left: 4), child: verifiedTick(size: 12)),
+                              Text(i['name'] ?? 'Artist', style: _ts(15, FontWeight.w600, _white)),
+                              if (i['verified'] == true) Padding(padding: const EdgeInsets.only(left: 4), child: verifiedTick(size: 13)),
                             ]),
-                            Text(timeAgo(created), style: GoogleFonts.nunito(color: _grey, fontSize: 11)),
+                            Text(timeAgo(created), style: _ts(12, FontWeight.w400, _t2)),
                           ]),
                         ]);
                       },
@@ -2544,18 +2628,18 @@ class _StoryViewerScreenState extends State<_StoryViewerScreen> with SingleTicke
                             onTap: () => openExternalLink((s['linkUrl'] ?? '').toString()),
                             child: Container(
                               margin: const EdgeInsets.symmetric(horizontal: 24), padding: const EdgeInsets.all(18),
-                              decoration: BoxDecoration(color: _black3, borderRadius: BorderRadius.circular(16)),
+                              decoration: BoxDecoration(color: _s1, borderRadius: BorderRadius.circular(16)),
                               child: Row(children: [
                                 const Icon(Icons.link_rounded, color: _blue),
                                 const SizedBox(width: 10),
-                                Expanded(child: Text(s['linkUrl'], overflow: TextOverflow.ellipsis, style: GoogleFonts.nunito(color: _white90))),
+                                Expanded(child: Text(s['linkUrl'], overflow: TextOverflow.ellipsis, style: _ts(15, FontWeight.w400, _white90))),
                               ]),
                             ),
                           )
                         : Padding(
                             padding: const EdgeInsets.all(32),
                             child: Text(s['text'] ?? '', textAlign: TextAlign.center,
-                                style: GoogleFonts.outfit(color: _white, fontSize: 23, fontWeight: FontWeight.w600, height: 1.45)),
+                                style: _ts(26, FontWeight.w600, _white, em: -0.03, height: 1.35)),
                           ),
               ),
             ),
@@ -2566,11 +2650,11 @@ class _StoryViewerScreenState extends State<_StoryViewerScreen> with SingleTicke
                   onTap: () => Navigator.pushReplacementNamed(context, '/viewpro', arguments: s['sharedFromUid']),
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-                    decoration: BoxDecoration(color: Colors.black.withOpacity(0.55), borderRadius: BorderRadius.circular(100)),
+                    decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.55), borderRadius: BorderRadius.circular(999)),
                     child: Row(mainAxisSize: MainAxisSize.min, children: [
                       const Icon(Icons.repeat_rounded, color: _white, size: 14),
                       const SizedBox(width: 6),
-                      Text(s['sharedFromName'] ?? 'Original post', style: GoogleFonts.nunito(color: _white, fontSize: 12, fontWeight: FontWeight.w700)),
+                      Text(s['sharedFromName'] ?? 'Original post', style: _ts(12.5, FontWeight.w600, _white, em: 0)),
                     ]),
                   ),
                 ),
@@ -2586,22 +2670,23 @@ class _StoryViewerScreenState extends State<_StoryViewerScreen> with SingleTicke
                     ? GestureDetector(
                         onTap: _openViewers,
                         child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-                          decoration: BoxDecoration(color: _white10, borderRadius: BorderRadius.circular(100)),
+                          height: 40,
+                          padding: const EdgeInsets.symmetric(horizontal: 18),
+                          decoration: BoxDecoration(color: const Color(0x33FFFFFF), borderRadius: BorderRadius.circular(999)),
                           child: Row(mainAxisSize: MainAxisSize.min, children: [
-                            const Icon(Icons.visibility_outlined, color: _white90, size: 16),
+                            const Icon(Icons.visibility_outlined, color: _white90, size: 17),
                             const SizedBox(width: 8),
                             Text('${_viewerCounts[id] ?? 0} viewer${(_viewerCounts[id] ?? 0) == 1 ? '' : 's'}',
-                                style: GoogleFonts.nunito(color: _white90, fontWeight: FontWeight.w700, fontSize: 13)),
+                                style: _ts(14, FontWeight.w600, _white90)),
                           ]),
                         ),
                       )
                     : GestureDetector(
                         onTap: _toggleLike,
                         child: Container(
-                          width: 46, height: 46,
-                          decoration: BoxDecoration(shape: BoxShape.circle, color: _white10),
-                          child: Icon(liked ? Icons.favorite_rounded : Icons.favorite_border_rounded, color: liked ? _rose : _white90, size: 21),
+                          width: 48, height: 48,
+                          decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0x33FFFFFF)),
+                          child: Icon(liked ? Icons.favorite_rounded : Icons.favorite_border_rounded, color: liked ? _rose : _white90, size: 22),
                         ),
                       ),
               ),
@@ -2634,73 +2719,36 @@ class _StoryViewersSheetState extends State<_StoryViewersSheet> {
     return DraggableScrollableSheet(
       initialChildSize: 0.55, minChildSize: 0.3, maxChildSize: 0.9,
       builder: (context, scroll) => Container(
-        decoration: const BoxDecoration(color: _black1, borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
+        decoration: _sheetDecoration,
         child: Column(children: [
-          Padding(padding: const EdgeInsets.all(16), child: Text('Viewers', style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w700, fontSize: 15.5))),
-          const Divider(color: _white10, height: 1),
+          _sheetHeader('Viewers'),
           Expanded(
             child: FutureBuilder<List<String>>(
               future: _future,
               builder: (context, snap) {
-                if (snap.hasError) return Center(child: Text("Couldn't load viewers.", style: GoogleFonts.nunito(color: _grey)));
+                if (snap.hasError) return Center(child: Text("Couldn't load viewers.", style: _ts(15, FontWeight.w400, _t2)));
                 if (!snap.hasData) return const Center(child: CircularProgressIndicator(color: _white, strokeWidth: 2));
                 final ids = snap.data!;
-                if (ids.isEmpty) return Center(child: Text('No views yet.', style: GoogleFonts.nunito(color: _grey)));
-                return ListView.builder(
+                if (ids.isEmpty) return Center(child: Text('No views yet.', style: _ts(15, FontWeight.w400, _t2)));
+                return ListView.separated(
                   controller: scroll, itemCount: ids.length,
+                  separatorBuilder: (_, __) => Container(height: 0.5, margin: const EdgeInsets.only(left: 68), color: _sep),
                   itemBuilder: (context, i) => FutureBuilder<Map<String, dynamic>>(
                     future: UserInfoCache.instance.get(ids[i]),
                     initialData: UserInfoCache.instance.peek(ids[i]),
                     builder: (context, s) {
                       final info = s.data ?? {'name': 'Artist', 'avatar': ''};
-                      return ListTile(
-                        leading: _Avatar(url: info['avatar'], name: info['name'], size: 40),
-                        title: Text(info['name'], style: GoogleFonts.nunito(color: _white90, fontWeight: FontWeight.w700)),
+                      return GestureDetector(
+                        behavior: HitTestBehavior.opaque,
                         onTap: () => Navigator.pushNamed(context, '/viewpro', arguments: ids[i]),
-                      );
-                    },
-                  ),
-                );
-              },
-            ),
-          ),
-        ]),
-      ),
-    );
-  }
-}
-
-class _StoryViewersSheetStateOld extends State<_StoryViewersSheet> {
-  late final Future<QuerySnapshot<Map<String, dynamic>>> _future = FirebaseFirestore.instance
-      .collection('stories').doc(widget.storyId).collection('viewers').limit(100).get();
-
-  @override
-  Widget build(BuildContext context) {
-    return DraggableScrollableSheet(
-      initialChildSize: 0.55, minChildSize: 0.3, maxChildSize: 0.9,
-      builder: (context, scroll) => Container(
-        decoration: const BoxDecoration(color: _black1, borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
-        child: Column(children: [
-          Padding(padding: const EdgeInsets.all(16), child: Text('Viewers', style: GoogleFonts.outfit(color: _white, fontWeight: FontWeight.w700, fontSize: 15.5))),
-          const Divider(color: _white10, height: 1),
-          Expanded(
-            child: FutureBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              future: _future,
-              builder: (context, snap) {
-                if (!snap.hasData) return const Center(child: CircularProgressIndicator(color: _white, strokeWidth: 2));
-                final ids = snap.data!.docs.map((d) => d.id).toList();
-                if (ids.isEmpty) return Center(child: Text('No views yet.', style: GoogleFonts.nunito(color: _grey)));
-                return ListView.builder(
-                  controller: scroll, itemCount: ids.length,
-                  itemBuilder: (context, i) => FutureBuilder<Map<String, dynamic>>(
-                    future: UserInfoCache.instance.get(ids[i]),
-                    initialData: UserInfoCache.instance.peek(ids[i]),
-                    builder: (context, s) {
-                      final info = s.data ?? {'name': 'Artist', 'avatar': ''};
-                      return ListTile(
-                        leading: _Avatar(url: info['avatar'], name: info['name'], size: 40),
-                        title: Text(info['name'], style: GoogleFonts.nunito(color: _white90, fontWeight: FontWeight.w700)),
-                        onTap: () => Navigator.pushNamed(context, '/viewpro', arguments: ids[i]),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                          child: Row(children: [
+                            _Avatar(url: info['avatar'], name: info['name'], size: 42),
+                            const SizedBox(width: 12),
+                            Expanded(child: Text(info['name'], overflow: TextOverflow.ellipsis, style: _ts(16, FontWeight.w500, _white90))),
+                          ]),
+                        ),
                       );
                     },
                   ),
@@ -2734,8 +2782,11 @@ class _BottomNav extends StatelessWidget {
   Widget build(BuildContext context) {
     final bottom = MediaQuery.of(context).padding.bottom;
     return Container(
-      padding: EdgeInsets.fromLTRB(8, 10, 8, bottom + 10),
-      decoration: BoxDecoration(color: _black.withOpacity(0.97), border: const Border(top: BorderSide(color: _white10))),
+      padding: EdgeInsets.fromLTRB(8, 8, 8, bottom + 6),
+      decoration: BoxDecoration(
+        color: _black.withValues(alpha: 0.97),
+        border: const Border(top: BorderSide(color: _sep, width: 0.5)),
+      ),
       child: Row(
         children: List.generate(_items.length, (i) {
           final (activeIcon, inactiveIcon, label) = _items[i];
@@ -2746,9 +2797,9 @@ class _BottomNav extends StatelessWidget {
                 onTap: () => onTap(i),
                 child: Center(
                   child: Container(
-                    width: 52, height: 52,
+                    width: 50, height: 50,
                     decoration: const BoxDecoration(color: _white, shape: BoxShape.circle),
-                    child: const Icon(Icons.cloud_upload_rounded, color: _black, size: 24),
+                    child: const Icon(Icons.cloud_upload_rounded, color: _black, size: 23),
                   ),
                 ),
               ),
@@ -2760,19 +2811,13 @@ class _BottomNav extends StatelessWidget {
               child: Column(mainAxisSize: MainAxisSize.min, children: [
                 AnimatedSwitcher(
                   duration: const Duration(milliseconds: 250),
-                  child: Icon(isActive ? activeIcon : inactiveIcon, key: ValueKey(isActive), color: isActive ? _white : _greyDark, size: 24),
+                  child: Icon(isActive ? activeIcon : inactiveIcon, key: ValueKey(isActive), color: isActive ? _white : _t3, size: 25),
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 3),
                 AnimatedDefaultTextStyle(
                   duration: const Duration(milliseconds: 250),
-                  style: GoogleFonts.outfit(color: isActive ? _white : _greyDark, fontSize: 10, fontWeight: isActive ? FontWeight.w800 : FontWeight.w500),
+                  style: _ts(10.5, isActive ? FontWeight.w600 : FontWeight.w500, isActive ? _white : _t3, em: 0),
                   child: Text(label),
-                ),
-                const SizedBox(height: 2),
-                AnimatedContainer(
-                  duration: const Duration(milliseconds: 300), curve: Curves.easeOutCubic,
-                  height: 3, width: isActive ? 18 : 0,
-                  decoration: BoxDecoration(color: _white, borderRadius: BorderRadius.circular(99)),
                 ),
               ]),
             ),
@@ -2784,108 +2829,113 @@ class _BottomNav extends StatelessWidget {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  SIDEBAR
+//  SIDEBAR — glass panel
 // ════════════════════════════════════════════════════════════════════
 class _SidebarPanel extends StatelessWidget {
-  final VoidCallback onClose;
+  final VoidCallback onClose, onLogout;
   final void Function(String) onNavigate;
   final String userName, userEmail;
   final String? uid, avatarUrl;
-  const _SidebarPanel({required this.onClose, required this.onNavigate, required this.userName, required this.userEmail,
-    required this.uid, required this.avatarUrl});
+  const _SidebarPanel({required this.onClose, required this.onNavigate, required this.onLogout, required this.userName,
+    required this.userEmail, required this.uid, required this.avatarUrl});
 
   @override
   Widget build(BuildContext context) {
     final top = MediaQuery.of(context).padding.top, bottom = MediaQuery.of(context).padding.bottom;
-    final w = MediaQuery.of(context).size.width * 0.78;
-    return Container(
-      width: w, height: double.infinity, color: _black1,
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Container(
-          padding: EdgeInsets.fromLTRB(24, top + 20, 24, 20),
-          decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: _white10))),
-          child: Row(children: [
-            CachedNetworkImage(
-              imageUrl: 'https://444music-distribution.vercel.app/black.png', height: 26, color: _white, colorBlendMode: BlendMode.srcIn,
-              errorWidget: (_, __, ___) => Text('444Music', style: GoogleFonts.outfit(color: _white, fontSize: 20, fontWeight: FontWeight.w800)),
-            ),
-            const Spacer(),
-            GestureDetector(
-              onTap: onClose,
-              child: Container(
-                width: 34, height: 34,
-                decoration: BoxDecoration(borderRadius: BorderRadius.circular(10), border: Border.all(color: _white10)),
-                child: const Icon(Icons.close_rounded, color: _grey, size: 18),
-              ),
-            ),
-          ]),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(24, 20, 24, 20),
+    final w = (MediaQuery.of(context).size.width * 0.78).clamp(260.0, 320.0);
+    return SizedBox(
+      width: w, height: double.infinity,
+      child: ClipRect(
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
           child: Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(color: _white06, borderRadius: BorderRadius.circular(16), border: Border.all(color: _white10)),
-            child: Row(children: [
-              _Avatar(url: avatarUrl, name: userName, size: 44),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  FutureBuilder<Map<String, dynamic>>(
-                    future: uid != null ? UserInfoCache.instance.get(uid!) : null,
-                    builder: (context, snap) => Row(children: [
-                      Flexible(child: Text(userName, style: GoogleFonts.outfit(color: _white, fontSize: 14, fontWeight: FontWeight.w800), overflow: TextOverflow.ellipsis)),
-                      if (snap.data?['verified'] == true) Padding(padding: const EdgeInsets.only(left: 4), child: verifiedTick()),
-                    ]),
+            decoration: const BoxDecoration(
+              color: Color(0xE01C1C1E),
+              border: Border(left: BorderSide(color: _sep, width: 0.5)),
+            ),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Padding(
+                padding: EdgeInsets.fromLTRB(20, top + 20, 16, 14),
+                child: Row(children: [
+                  CachedNetworkImage(
+                    imageUrl: 'https://444music-distribution.vercel.app/black.png', height: 26, color: _white, colorBlendMode: BlendMode.srcIn,
+                    errorWidget: (_, __, ___) => Text('444Music', style: _ts(21, FontWeight.w700, _white, em: -0.03)),
                   ),
-                  const SizedBox(height: 2),
-                  Text(userEmail, style: GoogleFonts.outfit(color: _grey, fontSize: 11), overflow: TextOverflow.ellipsis),
+                  const Spacer(),
+                  GestureDetector(
+                    onTap: onClose,
+                    child: Container(
+                      width: 32, height: 32,
+                      decoration: const BoxDecoration(color: _fill, shape: BoxShape.circle),
+                      child: const Icon(Icons.close_rounded, color: _t2, size: 16),
+                    ),
+                  ),
                 ]),
               ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                child: Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(color: _s2, borderRadius: BorderRadius.circular(16)),
+                  child: Row(children: [
+                    _Avatar(url: avatarUrl, name: userName, size: 44),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        FutureBuilder<Map<String, dynamic>>(
+                          future: uid != null ? UserInfoCache.instance.get(uid!) : null,
+                          builder: (context, snap) => Row(children: [
+                            Flexible(child: Text(userName, style: _ts(15, FontWeight.w600, _white), overflow: TextOverflow.ellipsis)),
+                            if (snap.data?['verified'] == true) Padding(padding: const EdgeInsets.only(left: 4), child: verifiedTick(size: 14)),
+                          ]),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(userEmail, style: _ts(12.5, FontWeight.w400, _t2), overflow: TextOverflow.ellipsis),
+                      ]),
+                    ),
+                  ]),
+                ),
+              ),
+              Expanded(
+                child: SingleChildScrollView(
+                  physics: const BouncingScrollPhysics(),
+                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    const _NavSection(label: 'Navigation'),
+                    _NavItem(icon: Icons.home_rounded, label: 'Home', route: '/home', onTap: onNavigate),
+                    _NavItem(icon: Icons.person_rounded, label: 'Settings', route: '/profile', onTap: onNavigate),
+                    _NavItem(icon: Icons.speed_rounded, label: 'Dashboard', route: '/dashboard', onTap: onNavigate),
+                    _NavItem(icon: Icons.cloud_upload_rounded, label: 'Upload Release', route: '/upload', onTap: onNavigate),
+                    _NavItem(icon: Icons.bar_chart_rounded, label: 'Analytics', route: '/analytics', onTap: onNavigate),
+                    _NavItem(icon: Icons.account_balance_wallet_rounded, label: 'Earnings', route: '/earnings', onTap: onNavigate),
+                    const _NavSection(label: 'More'),
+                    _NavItem(icon: Icons.build_rounded, label: 'More Tools', route: '/tools', onTap: onNavigate),
+                    _NavItem(icon: Icons.info_outline_rounded, label: 'About Us', route: '/legal', onTap: onNavigate),
+                    _NavItem(icon: Icons.mail_outline_rounded, label: 'Contact Support', route: '/support', onTap: onNavigate),
+                    _NavItem(icon: Icons.library_music_rounded, label: 'My Releases', route: '/releases', onTap: onNavigate),
+                  ]),
+                ),
+              ),
+              Padding(
+                padding: EdgeInsets.fromLTRB(16, 0, 16, bottom + 16),
+                child: GestureDetector(
+                  onTap: onLogout,
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    decoration: BoxDecoration(color: _rose.withValues(alpha: 0.14), borderRadius: BorderRadius.circular(14)),
+                    child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                      const Icon(Icons.logout_rounded, color: _rose, size: 18),
+                      const SizedBox(width: 9),
+                      Text('Log out', style: _ts(16, FontWeight.w600, _rose)),
+                    ]),
+                  ),
+                ),
+              ),
             ]),
           ),
         ),
-        Expanded(
-          child: SingleChildScrollView(
-            physics: const BouncingScrollPhysics(),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const _NavSection(label: 'Navigation'),
-              _NavItem(icon: Icons.home_rounded, label: 'Home', route: '/home', onTap: onNavigate),
-              _NavItem(icon: Icons.person_rounded, label: 'Settings', route: '/profile', onTap: onNavigate),
-              _NavItem(icon: Icons.speed_rounded, label: 'Dashboard', route: '/dashboard', onTap: onNavigate),
-              _NavItem(icon: Icons.cloud_upload_rounded, label: 'Upload Release', route: '/upload', onTap: onNavigate),
-              _NavItem(icon: Icons.bar_chart_rounded, label: 'Analytics', route: '/analytics', onTap: onNavigate),
-              _NavItem(icon: Icons.account_balance_wallet_rounded, label: 'Earnings', route: '/earnings', onTap: onNavigate),
-              const _SidebarDivider(),
-              const _NavSection(label: 'More'),
-              _NavItem(icon: Icons.build_rounded, label: 'More Tools', route: '/tools', onTap: onNavigate),
-              _NavItem(icon: Icons.info_outline_rounded, label: 'About Us', route: '/legal', onTap: onNavigate),
-              _NavItem(icon: Icons.mail_outline_rounded, label: 'Contact Support', route: '/support', onTap: onNavigate),
-              _NavItem(icon: Icons.library_music_rounded, label: 'My Releases', route: '/releases', onTap: onNavigate),
-              const _SidebarDivider(),
-            ]),
-          ),
-        ),
-        Padding(
-          padding: EdgeInsets.fromLTRB(16, 0, 16, bottom + 16),
-          child: GestureDetector(
-            onTap: () async {
-              await FirebaseAuth.instance.signOut();
-              onClose();
-              if (context.mounted) Navigator.pushReplacementNamed(context, '/login');
-            },
-            child: Container(
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              decoration: BoxDecoration(color: Colors.red.shade900.withOpacity(0.15), borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: Colors.red.shade900.withOpacity(0.25))),
-              child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                const Icon(Icons.logout_rounded, color: Color(0xFFFF6B6B), size: 18),
-                const SizedBox(width: 10),
-                Text('Logout', style: GoogleFonts.outfit(color: const Color(0xFFFF6B6B), fontSize: 14, fontWeight: FontWeight.w700)),
-              ]),
-            ),
-          ),
-        ),
-      ]),
+      ),
     );
   }
 }
@@ -2895,8 +2945,8 @@ class _NavSection extends StatelessWidget {
   const _NavSection({required this.label});
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.fromLTRB(24, 4, 24, 8),
-        child: Text(label.toUpperCase(), style: GoogleFonts.outfit(color: _greyDark, fontSize: 9, fontWeight: FontWeight.w800, letterSpacing: 2)),
+        padding: const EdgeInsets.fromLTRB(10, 16, 10, 6),
+        child: Text(label.toUpperCase(), style: _ts(12, FontWeight.w500, _t3, em: 0.04)),
       );
 }
 
@@ -2910,32 +2960,27 @@ class _NavItem extends StatefulWidget {
 }
 
 class _NavItemState extends State<_NavItem> {
-  bool _hover = false;
+  bool _pressed = false;
   @override
   Widget build(BuildContext context) => GestureDetector(
-        onTapDown: (_) => setState(() => _hover = true),
-        onTapUp: (_) { setState(() => _hover = false); widget.onTap(widget.route); },
-        onTapCancel: () => setState(() => _hover = false),
+        behavior: HitTestBehavior.opaque,
+        onTapDown: (_) => setState(() => _pressed = true),
+        onTapUp: (_) { setState(() => _pressed = false); widget.onTap(widget.route); },
+        onTapCancel: () => setState(() => _pressed = false),
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-          decoration: BoxDecoration(color: _hover ? _white10 : Colors.transparent, borderRadius: BorderRadius.circular(12)),
+          duration: const Duration(milliseconds: 200),
+          margin: const EdgeInsets.symmetric(vertical: 1),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+          decoration: BoxDecoration(color: _pressed ? _fill : Colors.transparent, borderRadius: BorderRadius.circular(10)),
           child: Row(children: [
-            Icon(widget.icon, color: _hover ? _white : _grey, size: 18),
-            const SizedBox(width: 14),
-            Text(widget.label, style: GoogleFonts.outfit(color: _hover ? _white : _grey, fontSize: 14, fontWeight: FontWeight.w600)),
+            Icon(widget.icon, color: _pressed ? _white : _t2, size: 18),
+            const SizedBox(width: 12),
+            Text(widget.label, style: _ts(15.5, FontWeight.w500, _pressed ? _white : _white70)),
             const Spacer(),
-            Icon(Icons.arrow_forward_ios_rounded, color: _hover ? _white40 : Colors.transparent, size: 12),
+            const Icon(Icons.chevron_right_rounded, color: _t3, size: 18),
           ]),
         ),
       );
-}
-
-class _SidebarDivider extends StatelessWidget {
-  const _SidebarDivider();
-  @override
-  Widget build(BuildContext context) => Container(margin: const EdgeInsets.symmetric(horizontal: 24, vertical: 10), height: 1, color: _white10);
 }
 
 class _PlaceholderTab extends StatelessWidget {
@@ -2945,11 +2990,15 @@ class _PlaceholderTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Icon(icon, color: _grey, size: 48),
+          Container(
+            width: 72, height: 72,
+            decoration: BoxDecoration(color: _s1, borderRadius: BorderRadius.circular(22)),
+            child: Icon(icon, color: _t2, size: 32),
+          ),
           const SizedBox(height: 16),
-          Text(label, style: GoogleFonts.outfit(color: _white, fontSize: 24, fontWeight: FontWeight.w800)),
-          const SizedBox(height: 8),
-          Text('Coming soon', style: GoogleFonts.outfit(color: _grey, fontSize: 13)),
+          Text(label, style: _ts(22, FontWeight.w700, _white, em: -0.03)),
+          const SizedBox(height: 6),
+          Text('Coming soon', style: _ts(15, FontWeight.w400, _t2)),
         ]),
       );
 }
