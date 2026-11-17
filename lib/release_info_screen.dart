@@ -518,14 +518,14 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen> {
 
   Future<void> _pickReleaseDate() async {
     final today = _today();
-    final min = DateTime(today.year, today.month, today.day + 3);
+        final min = DateTime(today.year, today.month, today.day + 5);
     final max = DateTime(today.year + 5, today.month, today.day);
     final init = (_releaseDate != null && !_releaseDate!.isBefore(min)) ? _releaseDate! : min;
     final d = await _pickDate('Release date', min, max, init);
     if (d == null || !mounted) return;
     final diff = (d.difference(today).inHours / 24).round();
-    setState(() => _releaseDate = diff < 3 ? null : d);
-    if (diff < 5) _showDateAdvice();
+        setState(() => _releaseDate = diff < 5 ? null : d);
+       if (diff < 7) _showDateAdvice();
   }
 
   Future<void> _showDateAdvice() async {
@@ -534,7 +534,7 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen> {
       barrierColor: Colors.black.withValues(alpha: 0.45),
       builder: (_) => const _IosAlert(
         title: 'Pick a later date?',
-        message: 'The earliest release date is 3 days from today. We recommend 5 days or more so stores have time to go live.',
+               message: 'The earliest release date is 5 days from today. We recommend 7 days or more so stores have time to go live.',
         cancelLabel: 'Keep date',
         confirmLabel: 'Change date',
       ),
@@ -587,9 +587,9 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen> {
 
     if (_releaseDate == null) return const _VErr('Please choose a release date.', 'releaseDate');
     final today = _today();
-    final minDate = DateTime(today.year, today.month, today.day + 3);
+       final minDate = DateTime(today.year, today.month, today.day + 5);
     if (_releaseDate!.isBefore(minDate)) {
-      return const _VErr('The earliest release date is 3 days from today.', 'releaseDate');
+            return const _VErr('The earliest release date is 5 days from today.', 'releaseDate');
     }
 
     if (_v['prev'] == 'Yes' && _previousReleaseDate == null) {
@@ -1026,7 +1026,7 @@ class _ReleaseInfoScreenState extends State<ReleaseInfoScreen> {
                             id: 'releaseDate', label: 'Release date', value: _releaseDate, onTap: _pickReleaseDate,
                           ),
                         ]),
-                        _sf('Earliest date is 3 days from today. 5 days or more is recommended.'),
+                                                _sf('Earliest date is 5 days from today. 7 days or more is recommended.'),
 
                         // ── SONG ──────────────────────────────────────
                         _sh('Song', right: 'Required', req: true),
