@@ -1130,9 +1130,12 @@ HSLColor _hslOfRgb(double r, double g, double b) =>
 Future<_BannerPalette?> _extractPalette(String url) async {
   if (url.isEmpty) return null;
   try {
-    final ImageProvider base = url.startsWith('data:image')
-        ? MemoryImage(base64Decode(url.split(',').last))
-        : CachedNetworkImageProvider(url);
+     final ImageProvider base;
+    if (url.startsWith('data:image')) {
+      base = MemoryImage(base64Decode(url.split(',').last));
+    } else {
+      base = CachedNetworkImageProvider(url);
+    }
     final stream = ResizeImage(base, width: 28, height: 28).resolve(const ImageConfiguration());
     final completer = Completer<ui.Image>();
     late final ImageStreamListener listener;
