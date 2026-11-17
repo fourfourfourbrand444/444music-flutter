@@ -27,6 +27,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 
 // ─── PALETTE (black & white, iOS grays) ─────────────────────────────
 const _black   = Color(0xFF000000);
@@ -712,6 +713,7 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
     _seenStories = _Local.getSet('seenst_$uid');
     _likedStories = _Local.getSet('likedst_$uid');
     _loadAd();
+    _setupPush(uid);
     try {
       final snap = await _db.collection('users').doc(uid).get();
       final d = snap.data() ?? {};
@@ -732,7 +734,23 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
     _booted = true;
     if (mounted) setState(() {});
   }
-
+  Future<void> _setupPush(String uid) async {
+    try {
+      final fm = FirebaseMessaging.instance;
+      await fm.requestPermission();
+      final token = await fm.getToken();
+      if (token != null) {
+        await _db.collection('users').doc(uid).set({
+          'fcmTokens': FieldValue.arrayUnion([token]),
+        }, SetOptions(merge: true));
+      }
+      fm.onTokenRefresh.listen((t) {
+        _db.collection('users').doc(uid).set({
+          'fcmTokens': FieldValue.arrayUnion([t]),
+        }, SetOptions(merge: true)).catchError((_) {});
+      });
+    } catch (_) {}
+  }
   Future<void> _syncFollowing(String uid) async {
     try {
       final s = await _db.collection('users').doc(uid).collection('following').get();
