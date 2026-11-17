@@ -1716,7 +1716,9 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
     return s.isEmpty ? null : s;
   }
 
-  String get _smartLinkUrl => '$_smartLinkBase${_smartLinkSlug ?? ''}';
+   String get _partnerLink => (_data['partnerShareLink'] ?? '').toString().trim();
+
+  String get _smartLinkUrl => _partnerLink.isNotEmpty ? _partnerLink : '$_smartLinkBase${_smartLinkSlug ?? ''}';
 
   void _copySmartLinkUrl() {
     Clipboard.setData(ClipboardData(text: _smartLinkUrl));
@@ -1826,7 +1828,7 @@ class _ReleaseDetailModalState extends State<_ReleaseDetailModal> {
                             _ReasonBox(label: 'Reason for rejection', text: rejection, color: _rose, bg: const Color(0x1FFF453A)),
                           if (_isTakenDown && takedown.isNotEmpty)
                             _ReasonBox(label: 'Reason for takedown', text: takedown, color: _takenDown, bg: const Color(0x2498989D)),
-                          if (_isApproved && _smartLinkSlug != null) ...[
+                                                    if (_isApproved && (_partnerLink.isNotEmpty || _smartLinkSlug != null)) ...[
                             const SizedBox(height: 22),
                             _buildSmartLinkRow(),
                           ],
