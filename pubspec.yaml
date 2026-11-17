@@ -29,6 +29,7 @@ dependencies:
   cupertino_icons: ^1.0.8
   file_selector: ^1.0.3
   shared_preferences: ^2.2.3
+  firebase_messaging: ^16.0.0
 
 flutter_launcher_icons:
   android: true
