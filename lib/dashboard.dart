@@ -2,11 +2,14 @@
 //  444MUSIC — My Releases Dashboard (App)
 //  Rebuilt to mirror the web version 1:1 — iOS look.
 //  Same logic, same Firestore reads/writes. Only the styling changed.
+//  Banner: full-screen release banner, colours taken from the artwork.
 // ═══════════════════════════════════════════════════════════════════
 import 'package:url_launcher/url_launcher.dart';
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
-import 'dart:ui';
+import 'dart:ui' show ImageFilter, FontFeature;
+import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -530,12 +533,6 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
                 icon: Icons.add_circle_outline_rounded,
                 onTap: () => Navigator.pushNamed(context, '/upload'),
               ),
-              const SizedBox(width: 10),
-              _CircleBtn(
-                icon: Icons.help_outline_rounded,
-                color: _t2,
-                onTap: () => Navigator.pushNamed(context, '/support'),
-              ),
             ],
           ),
         ),
@@ -605,13 +602,7 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
   }
 
   Widget _buildSectionHeader() {
-    return Row(
-      children: [
-        Container(width: 6, height: 6, decoration: const BoxDecoration(color: _white, shape: BoxShape.circle)),
-        const SizedBox(width: 8),
-        Text('All Releases', style: _ts(17.6, FontWeight.w700, _white, em: -0.02)),
-      ],
-    );
+    return Text('All Releases', style: _ts(17.6, FontWeight.w700, _white, em: -0.02));
   }
 
   Widget _buildFilterRow() {
@@ -787,11 +778,7 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
                   padding: EdgeInsets.fromLTRB(20, top + 20, 16, 14),
                   child: Row(
                     children: [
-                      Container(
-                        width: 32, height: 32,
-                        decoration: BoxDecoration(color: _white, borderRadius: BorderRadius.circular(8)),
-                        child: const Icon(Icons.music_note_rounded, color: Colors.black, size: 18),
-                      ),
+                      const _BrandLogo(size: 32),
                       const SizedBox(width: 10),
                       Text('444Music', style: _ts(17, FontWeight.w700, _white, em: -0.02)),
                       const Spacer(),
@@ -832,8 +819,6 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
                             onTap: () { _closeSidebar(); Future.delayed(const Duration(milliseconds: 300), () => Navigator.pushNamed(context, '/analytics')); }),
                         _SidebarItem(icon: Icons.help_outline_rounded, label: 'Support',
                             onTap: () { _closeSidebar(); Future.delayed(const Duration(milliseconds: 300), () => Navigator.pushNamed(context, '/support')); }),
-                        _SidebarItem(icon: Icons.speed_rounded, label: 'Dashboard',
-                            onTap: () { _closeSidebar(); Future.delayed(const Duration(milliseconds: 300), () => Navigator.pushNamed(context, '/dashboard')); }),
                       ],
                     ),
                   ),
@@ -902,6 +887,36 @@ class _ReleasesScreenState extends State<ReleasesScreen> with TickerProviderStat
   }
 }
 
+// ── REAL 444MUSIC LOGO (sidebar) ─────────────────────────────────────
+// Uses the app icon asset; falls back to the website logo, then to a
+// plain music note if neither can be loaded.
+class _BrandLogo extends StatelessWidget {
+  final double size;
+  const _BrandLogo({this.size = 32});
+
+  Widget _noteFallback() => Container(
+        width: size, height: size,
+        decoration: BoxDecoration(color: _white, borderRadius: BorderRadius.circular(8)),
+        child: Icon(Icons.music_note_rounded, color: Colors.black, size: size * 0.56),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: Image.asset(
+        'assets/icon/icon.png',
+        width: size, height: size, fit: BoxFit.contain,
+        errorBuilder: (_, __, ___) => Image.network(
+          'https://www.444musicdistro.com/logo.png',
+          width: size, height: size, fit: BoxFit.contain,
+          errorBuilder: (_, __, ___) => _noteFallback(),
+        ),
+      ),
+    );
+  }
+}
+
 // ════════════════════════════════════════════════════════════════════
 //  RELEASE ROW — index | thumb | title / artist / meta | countdown + chevron
 // ════════════════════════════════════════════════════════════════════
@@ -932,9 +947,9 @@ class _ReleaseRowState extends State<_ReleaseRow> {
     final proceed = await Navigator.of(context).push<bool>(
       PageRouteBuilder(
         opaque: true,
-        transitionDuration: const Duration(milliseconds: 500),
+        transitionDuration: const Duration(milliseconds: 400),
         reverseTransitionDuration: const Duration(milliseconds: 300),
-        pageBuilder: (_, __, ___) => _AppleShowcaseScreen(data: widget.data),
+        pageBuilder: (_, __, ___) => _ReleaseBannerScreen(data: widget.data),
         transitionsBuilder: (_, anim, __, child) =>
             FadeTransition(opacity: anim, child: child),
       ),
@@ -1068,55 +1083,263 @@ class _ReleaseRowState extends State<_ReleaseRow> {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  APPLE-STYLE SHOWCASE — shown first when a row is tapped;
-//  tapping anywhere continues to the detail sheet.
+//  RELEASE BANNER — same as the web banner.
+//  Shown first when a row is tapped; tap anywhere to open the details.
+//  Gradient colours come from the cover art (no purple); falls back to
+//  a random luxury palette if the art can't be read.
 // ════════════════════════════════════════════════════════════════════
-class _AppleShowcaseScreen extends StatefulWidget {
-  final Map<String, dynamic> data;
-  const _AppleShowcaseScreen({required this.data});
 
-  @override
-  State<_AppleShowcaseScreen> createState() => _AppleShowcaseScreenState();
+// Luxury fallbacks [top, bottom] — no purple
+const List<List<int>> _rbFallback = [
+  [0xFF0B0B0B, 0xFFD4AF37], // black + gold
+  [0xFF111111, 0xFFF2C230], // black + yellow
+  [0xFF4A4D50, 0xFFEFE6D2], // ash + cream
+  [0xFF0F3D2E, 0xFFD4AF37], // deep green + gold
+  [0xFF0B1D3A, 0xFFEFE6D2], // navy + cream
+  [0xFF3B2A1A, 0xFFE8D9B5], // bronze + champagne
+  [0xFF1A1A1A, 0xFFC9C9C4], // charcoal + silver
+  [0xFF12312B, 0xFFE9DFC6], // forest + ivory
+];
+
+Color _inkFor(Color c) =>
+    HSLColor.fromColor(c).lightness < 0.55 ? Colors.white : const Color(0xFF111111);
+
+class _BannerPalette {
+  final Color top, bot, inkTop, inkBot;
+  _BannerPalette(this.top, this.bot)
+      : inkTop = _inkFor(top),
+        inkBot = _inkFor(bot);
 }
 
-class _AppleShowcaseScreenState extends State<_AppleShowcaseScreen>
-    with SingleTickerProviderStateMixin {
-  static const double _totalMs = 3600;
-  static const Cubic _ease = Cubic(0.22, 1, 0.36, 1);
+final Map<String, _BannerPalette> _paletteCache = {};
 
-  late final AnimationController _ctrl;
-  late final Animation<double> _statusAnim;
-  late final Animation<double> _titleAnim;
-  late final Animation<double> _subtitleAnim;
-  late final Animation<double> _distribAnim;
-  late final Animation<double> _artworkAnim;
-  late final Animation<double> _hintAnim;
+_BannerPalette _randomFallbackPalette() {
+  final f = _rbFallback[Random().nextInt(_rbFallback.length)];
+  return _BannerPalette(Color(f[0]), Color(f[1]));
+}
 
-  String get _status     => (widget.data['status'] ?? 'Pending').toString().trim();
-  bool   get _isApproved => _status.toLowerCase() == 'approved';
+class _Bucket {
+  int n = 0;
+  double r = 0, g = 0, b = 0;
+}
 
-  Animation<double> _interval(double startMs, double endMs) {
-    return CurvedAnimation(
-      parent: _ctrl,
-      curve: Interval(
-        (startMs / _totalMs).clamp(0.0, 1.0),
-        (endMs / _totalMs).clamp(0.0, 1.0),
-        curve: _ease,
-      ),
+HSLColor _hslOfRgb(double r, double g, double b) =>
+    HSLColor.fromColor(Color.fromARGB(255, r.round().clamp(0, 255), g.round().clamp(0, 255), b.round().clamp(0, 255)));
+
+/// Dominant colours from the artwork → palette, or null if unreadable.
+Future<_BannerPalette?> _extractPalette(String url) async {
+  if (url.isEmpty) return null;
+  try {
+    final ImageProvider base = url.startsWith('data:image')
+        ? MemoryImage(base64Decode(url.split(',').last))
+        : CachedNetworkImageProvider(url);
+    final stream = ResizeImage(base, width: 28, height: 28).resolve(const ImageConfiguration());
+    final completer = Completer<ui.Image>();
+    late final ImageStreamListener listener;
+    listener = ImageStreamListener(
+      (info, _) {
+        if (!completer.isCompleted) completer.complete(info.image);
+        stream.removeListener(listener);
+      },
+      onError: (Object e, StackTrace? s) {
+        if (!completer.isCompleted) completer.completeError(e);
+        stream.removeListener(listener);
+      },
     );
+    stream.addListener(listener);
+    final img = await completer.future;
+    final bd = await img.toByteData(format: ui.ImageByteFormat.rawRgba);
+    if (bd == null) return null;
+    final data = bd.buffer.asUint8List();
+
+    final buckets = <int, _Bucket>{};
+    for (int i = 0; i + 3 < data.length; i += 4) {
+      if (data[i + 3] < 200) continue;
+      final r = data[i], g = data[i + 1], b = data[i + 2];
+      final k = ((r >> 5) << 6) | ((g >> 5) << 3) | (b >> 5);
+      final e = buckets.putIfAbsent(k, () => _Bucket());
+      e.n++; e.r += r; e.g += g; e.b += b;
+    }
+
+    final list = <_Bucket>[];
+    for (final e in buckets.values) {
+      final c = _Bucket()
+        ..n = e.n
+        ..r = e.r / e.n
+        ..g = e.g / e.n
+        ..b = e.b / e.n;
+      final h = _hslOfRgb(c.r, c.g, c.b);
+      final purple = h.saturation > 0.18 && h.hue >= 250 && h.hue <= 325;
+      if (!purple) list.add(c);
+    }
+    if (list.isEmpty) return null;
+    list.sort((a, b) => b.n.compareTo(a.n));
+
+    final c1 = list.first;
+    _Bucket? c2;
+    for (final c in list) {
+      final d = (c.r - c1.r).abs() + (c.g - c1.g).abs() + (c.b - c1.b).abs();
+      if (d > 120) { c2 = c; break; }
+    }
+
+    final a = _hslOfRgb(c1.r, c1.g, c1.b);
+    final b = c2 != null
+        ? _hslOfRgb(c2.r, c2.g, c2.b)
+        : HSLColor.fromAHSL(1, a.hue, min(a.saturation, 0.35), 0.8);
+
+    HSLColor dark  = a.lightness <= b.lightness ? a : b;
+    final HSLColor lightSrc = a.lightness <= b.lightness ? b : a;
+
+    dark = HSLColor.fromAHSL(1, dark.hue, min(dark.saturation, 0.8), min(dark.lightness, 0.24));
+    double ll = lightSrc.lightness.clamp(0.5, 0.84).toDouble();
+    if (ll - dark.lightness < 0.3) ll = min(0.82, dark.lightness + 0.4);
+    final light = HSLColor.fromAHSL(1, lightSrc.hue, min(lightSrc.saturation, 0.8), ll);
+
+    return _BannerPalette(dark.toColor(), light.toColor());
+  } catch (_) {
+    return null;
   }
+}
+
+// ── Tiny SVG path reader (M, c, z only) — used for the Apple logo ────
+const String _appleD =
+    'M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701';
+
+Path _svgPath(String d) {
+  final path = Path();
+  final tokens = RegExp(r'([A-Za-z])|(-?(?:\d*\.\d+|\d+\.?))')
+      .allMatches(d)
+      .map((m) => m.group(0)!)
+      .toList();
+  final isCmd = RegExp(r'^[A-Za-z]$');
+  int i = 0;
+  String cmd = '';
+  double x = 0, y = 0;
+  double next() => double.parse(tokens[i++]);
+
+  while (i < tokens.length) {
+    final t = tokens[i];
+    if (isCmd.hasMatch(t)) {
+      cmd = t;
+      i++;
+      if (cmd == 'z' || cmd == 'Z') path.close();
+      continue;
+    }
+    if (cmd == 'M') {
+      x = next(); y = next();
+      path.moveTo(x, y);
+    } else if (cmd == 'c') {
+      final x1 = x + next(), y1 = y + next();
+      final x2 = x + next(), y2 = y + next();
+      final ex = x + next(), ey = y + next();
+      path.cubicTo(x1, y1, x2, y2, ex, ey);
+      x = ex; y = ey;
+    } else {
+      i++; // unknown token — skip so we never loop forever
+    }
+  }
+  return path;
+}
+
+final Path _applePath = _svgPath(_appleD);
+
+// ── Store icons (drawn, so no extra packages are needed) ─────────────
+class _SpotifyPainter extends CustomPainter {
+  @override
+  void paint(Canvas c, Size s) {
+    final w = s.width;
+    c.drawCircle(Offset(w / 2, w / 2), w / 2, Paint()..color = const Color(0xFF1ED760));
+    final p = Paint()
+      ..color = const Color(0xFF111111)
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    Path arc(double x1, double y1, double cx, double cy, double x2, double y2) => Path()
+      ..moveTo(x1 * w, y1 * w)
+      ..quadraticBezierTo(cx * w, cy * w, x2 * w, y2 * w);
+    c.drawPath(arc(.235, .375, .50, .285, .775, .430), p..strokeWidth = w * .085);
+    c.drawPath(arc(.265, .545, .50, .465, .735, .605), p..strokeWidth = w * .070);
+    c.drawPath(arc(.300, .695, .50, .635, .700, .745), p..strokeWidth = w * .058);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter old) => false;
+}
+
+class _ApplePainter extends CustomPainter {
+  @override
+  void paint(Canvas c, Size s) {
+    c.save();
+    c.scale(s.width / 24);
+    c.drawPath(_applePath, Paint()..color = const Color(0xFF111111));
+    c.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter old) => false;
+}
+
+class _YtMusicPainter extends CustomPainter {
+  @override
+  void paint(Canvas c, Size s) {
+    final w = s.width;
+    final center = Offset(w / 2, w / 2);
+    c.drawCircle(center, w / 2, Paint()..color = const Color(0xFFFF0000));
+    c.drawCircle(
+      center, w * 7 / 24,
+      Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = w * 1.6 / 24,
+    );
+    final k = w / 24;
+    final tri = Path()
+      ..moveTo(10.2 * k, 8.6 * k)
+      ..lineTo(10.2 * k, 15.4 * k)
+      ..lineTo(15.6 * k, 12.0 * k)
+      ..close();
+    c.drawPath(tri, Paint()..color = Colors.white);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter old) => false;
+}
+
+class _ReleaseBannerScreen extends StatefulWidget {
+  final Map<String, dynamic> data;
+  const _ReleaseBannerScreen({required this.data});
+
+  @override
+  State<_ReleaseBannerScreen> createState() => _ReleaseBannerScreenState();
+}
+
+class _ReleaseBannerScreenState extends State<_ReleaseBannerScreen>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _anim;
+  _BannerPalette? _pal;
+
+  String get _status => (widget.data['status'] ?? 'Pending').toString().trim();
 
   @override
   void initState() {
     super.initState();
-    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 3600));
-    _statusAnim   = _interval(200, 900);
-    _titleAnim    = _interval(550, 1450);
-    _subtitleAnim = _interval(1000, 1900);
-    _distribAnim  = _interval(1450, 2350);
-    _artworkAnim  = _interval(1900, 3000);
-    _hintAnim     = _interval(2900, 3600);
-    WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _ctrl.forward(); });
+    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 600));
+    _anim = CurvedAnimation(parent: _ctrl, curve: const Cubic(0.32, 0.72, 0, 1));
+    _loadPalette();
+  }
+
+  Future<void> _loadPalette() async {
+    final url = widget.data['coverURL']?.toString() ?? '';
+    _BannerPalette? pal = _paletteCache[url];
+    if (pal == null) {
+      pal = await _extractPalette(url)
+          .timeout(const Duration(milliseconds: 900), onTimeout: () => null);
+      if (pal != null) _paletteCache[url] = pal;
+    }
+    pal ??= _randomFallbackPalette();
+    if (!mounted) return;
+    setState(() => _pal = pal);
+    _ctrl.forward();
   }
 
   @override
@@ -1125,149 +1348,245 @@ class _AppleShowcaseScreenState extends State<_AppleShowcaseScreen>
     super.dispose();
   }
 
-  Widget _fadeUp(Animation<double> anim, {required Widget child, double distance = 16}) {
-    return AnimatedBuilder(
-      animation: anim,
-      builder: (_, c) => Opacity(
-        opacity: anim.value.clamp(0.0, 1.0),
-        child: Transform.translate(offset: Offset(0, distance * (1 - anim.value)), child: c),
-      ),
-      child: child,
-    );
-  }
-
-  Widget _buildArtwork() {
-    final url = widget.data['coverURL']?.toString() ?? '';
-    return AnimatedBuilder(
-      animation: _artworkAnim,
-      builder: (_, c) => Opacity(
-        opacity: _artworkAnim.value.clamp(0.0, 1.0),
-        child: Transform.translate(
-          offset: Offset(0, 26 * (1 - _artworkAnim.value)),
-          child: Transform.scale(scale: 0.96 + (0.04 * _artworkAnim.value), child: c),
-        ),
-      ),
-      child: AspectRatio(
-        aspectRatio: 1,
-        child: Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
-            color: const Color(0xFFE3E2DD),
-            boxShadow: [
-              BoxShadow(color: Colors.black.withValues(alpha: 0.20), blurRadius: 60, offset: const Offset(0, 30)),
-              BoxShadow(color: Colors.black.withValues(alpha: 0.10), blurRadius: 18, offset: const Offset(0, 8)),
-            ],
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(16),
-            child: _coverImage(url, bg: const Color(0xFFE3E2DD)),
-          ),
-        ),
-      ),
-    );
-  }
-
   void _proceed() => Navigator.of(context).pop(true);
   void _dismiss() => Navigator.of(context).pop(false);
 
+  // Status line + whether to show the store icons — same rules as the web.
+  String get _statusLine {
+    final s = _status.toLowerCase();
+    if (s == 'approved') return 'OUT NOW ON';
+    if (s == 'review' || s == 'in review') return 'COMING SOON TO';
+    if (s == 'pending') return 'PAY TO GO LIVE ON';
+    return _statusDisplayLabel(_status).toUpperCase();
+  }
+
+  bool get _showStores {
+    final s = _status.toLowerCase();
+    return s == 'approved' || s == 'review' || s == 'in review' || s == 'pending';
+  }
+
   @override
   Widget build(BuildContext context) {
-    final releaseType   = (widget.data['releaseType'] ?? 'Single').toString();
-    final title         = (widget.data['releaseTitle'] ?? 'Untitled Release').toString();
-    final displayStatus = _statusDisplayLabel(_status);
-    final top   = MediaQuery.of(context).padding.top;
-    final width = MediaQuery.of(context).size.width;
-    final hPad  = width > 480 ? (((width - 430) / 2) + 30).clamp(24.0, 400.0) : 24.0;
+    final pal = _pal;
+    if (pal == null) {
+      return const Scaffold(backgroundColor: Colors.black, body: SizedBox.expand());
+    }
 
-    return Scaffold(
-      backgroundColor: Colors.transparent,
-      body: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: _proceed,
-        child: Container(
-          width: double.infinity,
-          height: double.infinity,
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment(-0.35, -1),
-              end: Alignment(0.35, 1),
-              colors: [Color(0xFFFAF9F6), Color(0xFFF1EFE9), Color(0xFFE7E4DB), Color(0xFFDEDBD0)],
-              stops: [0.0, 0.42, 0.78, 1.0],
-            ),
-          ),
-          child: Stack(
-            children: [
-              SingleChildScrollView(
-                padding: EdgeInsets.fromLTRB(hPad, top + 80, hPad, 48),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (!_isApproved)
-                      _fadeUp(_statusAnim, child: Container(
-                        margin: const EdgeInsets.only(bottom: 18),
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                        decoration: BoxDecoration(color: Colors.black, borderRadius: BorderRadius.circular(999)),
-                        child: Text(displayStatus.toUpperCase(),
-                            style: _ts(12, FontWeight.w600, Colors.white, em: 0.04)),
-                      )),
-                    _fadeUp(_titleAnim, child: Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: RichText(
-                        text: TextSpan(
-                          style: _ts(24, FontWeight.w700, Colors.black, em: -0.03, height: 1.2),
-                          children: [
-                            TextSpan(text: title),
-                            TextSpan(
-                              text: ' - $releaseType',
-                              style: _ts(24, FontWeight.w500, Colors.black.withValues(alpha: 0.5), em: -0.03, height: 1.2),
-                            ),
-                          ],
-                        ),
-                      ),
-                    )),
-                    _fadeUp(_subtitleAnim, child: Padding(
-                      padding: const EdgeInsets.only(bottom: 28),
-                      child: Text('Distributed by',
-                          style: _ts(16, FontWeight.w500, Colors.black.withValues(alpha: 0.46))),
-                    )),
-                    _fadeUp(_distribAnim, child: Padding(
-                      padding: const EdgeInsets.only(bottom: 52),
-                      child: Row(children: [
-                        Image.network(
-                          'https://www.444musicdistro.com/black.png',
-                          height: 26,
-                          errorBuilder: (_, __, ___) => const SizedBox(width: 26, height: 26),
-                        ),
-                        const SizedBox(width: 10),
-                        Text('444Music', style: _ts(18, FontWeight.w600, Colors.black, em: -0.02)),
-                      ]),
-                    )),
-                    _buildArtwork(),
-                    _fadeUp(_hintAnim, child: Padding(
-                      padding: const EdgeInsets.only(top: 32),
-                      child: SizedBox(
-                        width: double.infinity,
-                        child: Center(
-                          child: Text('TAP ANYWHERE TO VIEW DETAILS',
-                              style: _ts(12, FontWeight.w500, Colors.black.withValues(alpha: 0.32), em: 0.06)),
-                        ),
-                      ),
-                    )),
-                  ],
-                ),
+    final mq     = MediaQuery.of(context);
+    final top    = mq.padding.top;
+    final bottom = mq.padding.bottom;
+    final title  = (widget.data['releaseTitle'] ?? 'Untitled Release').toString();
+    final artist = (widget.data['artistName'] ?? 'Unknown Artist').toString();
+    final cover  = widget.data['coverURL']?.toString() ?? '';
+
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness:
+            pal.inkTop == Colors.white ? Brightness.light : Brightness.dark,
+        statusBarBrightness:
+            pal.inkTop == Colors.white ? Brightness.dark : Brightness.light,
+      ),
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        body: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: _proceed,
+          child: Container(
+            width: double.infinity,
+            height: double.infinity,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [pal.top, pal.top, pal.bot, pal.bot],
+                stops: const [0.0, 0.30, 0.62, 1.0],
               ),
-              Positioned(
-                top: top + 20, right: 20,
-                child: GestureDetector(
-                  onTap: _dismiss,
-                  child: Container(
-                    width: 34, height: 34,
-                    decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0x243C3C43)),
-                    child: Icon(Icons.close_rounded, color: Colors.black.withValues(alpha: 0.55), size: 16),
+            ),
+            child: Stack(
+              children: [
+                LayoutBuilder(builder: (context, c) {
+                  // u = banner width; shrinks on short screens so nothing overflows.
+                  final u = min(min(c.maxWidth, 430.0), c.maxHeight * 0.54);
+                  final contentW = u * 0.82;
+                  final frameW   = contentW * 0.78;
+
+                  return Center(
+                    child: AnimatedBuilder(
+                      animation: _anim,
+                      builder: (_, child) {
+                        final v = _anim.value.clamp(0.0, 1.0);
+                        return Opacity(
+                          opacity: v,
+                          child: Transform.translate(
+                            offset: Offset(0, 20 * (1 - v)),
+                            child: Transform.scale(scale: 0.97 + 0.03 * v, child: child),
+                          ),
+                        );
+                      },
+                      child: SizedBox(
+                        width: u,
+                        height: c.maxHeight,
+                        child: Padding(
+                          padding: EdgeInsets.fromLTRB(u * 0.09, top + u * 0.2, u * 0.09, bottom + u * 0.2),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              // NEW RELEASE
+                              Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Container(
+                                    width: contentW * 0.52,
+                                    height: 1,
+                                    color: pal.inkTop.withValues(alpha: 0.35),
+                                  ),
+                                  SizedBox(height: u * 0.04),
+                                  Padding(
+                                    padding: EdgeInsets.only(left: u * 0.036 * 0.34),
+                                    child: Text('NEW RELEASE',
+                                        style: _ts(u * 0.036, FontWeight.w600, pal.inkTop, em: 0.34)),
+                                  ),
+                                ],
+                              ),
+
+                              // COVER FRAME
+                              Container(
+                                width: frameW,
+                                padding: EdgeInsets.all(u * 0.022),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withValues(alpha: 0.35),
+                                      blurRadius: u * 0.12,
+                                      offset: Offset(0, u * 0.06),
+                                    ),
+                                  ],
+                                ),
+                                child: AspectRatio(
+                                  aspectRatio: 1,
+                                  child: _coverImage(cover, bg: const Color(0xFFE8E6E0)),
+                                ),
+                              ),
+
+                              // TITLE + ARTIST
+                              SizedBox(
+                                width: double.infinity,
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      title.toUpperCase(),
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      textAlign: TextAlign.center,
+                                      style: _ts(u * 0.072, FontWeight.w800, pal.inkBot, em: 0.01, height: 1.1),
+                                    ),
+                                    SizedBox(height: u * 0.02),
+                                    Text(
+                                      artist.toUpperCase(),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      textAlign: TextAlign.center,
+                                      style: _ts(u * 0.042, FontWeight.w600, pal.inkBot, em: 0.1),
+                                    ),
+                                  ],
+                                ),
+                              ),
+
+                              // STATUS + STORES + LOGO
+                              Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Padding(
+                                    padding: EdgeInsets.only(left: u * 0.033 * 0.3),
+                                    child: Text(
+                                      _statusLine,
+                                      textAlign: TextAlign.center,
+                                      style: _ts(u * 0.033, FontWeight.w700, pal.inkBot, em: 0.3),
+                                    ),
+                                  ),
+                                  if (_showStores) ...[
+                                    SizedBox(height: u * 0.034),
+                                    Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        CustomPaint(size: Size(u * 0.105, u * 0.105), painter: _SpotifyPainter()),
+                                        SizedBox(width: u * 0.08),
+                                        CustomPaint(size: Size(u * 0.105, u * 0.105), painter: _ApplePainter()),
+                                        SizedBox(width: u * 0.08),
+                                        CustomPaint(size: Size(u * 0.105, u * 0.105), painter: _YtMusicPainter()),
+                                      ],
+                                    ),
+                                  ],
+                                  SizedBox(height: u * 0.034),
+                                  Container(
+                                    padding: EdgeInsets.symmetric(vertical: u * 0.018, horizontal: u * 0.032),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      borderRadius: BorderRadius.circular(u * 0.024),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withValues(alpha: 0.18),
+                                          blurRadius: u * 0.05,
+                                          offset: Offset(0, u * 0.02),
+                                        ),
+                                      ],
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Image.network(
+                                          'https://www.444musicdistro.com/black.png',
+                                          height: u * 0.054,
+                                          errorBuilder: (_, __, ___) => SizedBox(width: u * 0.054, height: u * 0.054),
+                                        ),
+                                        SizedBox(width: u * 0.02),
+                                        Text('444Music',
+                                            style: _ts(u * 0.04, FontWeight.w700, const Color(0xFF111111), em: -0.02)),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                }),
+
+                // HINT
+                Positioned(
+                  left: 0, right: 0, bottom: bottom + 10,
+                  child: IgnorePointer(
+                    child: FadeTransition(
+                      opacity: _anim,
+                      child: Text(
+                        'TAP ANYWHERE TO VIEW DETAILS',
+                        textAlign: TextAlign.center,
+                        style: _ts(12, FontWeight.w500, pal.inkBot.withValues(alpha: 0.55), em: 0.06),
+                      ),
+                    ),
                   ),
                 ),
-              ),
-            ],
+
+                // CLOSE
+                Positioned(
+                  top: top + 20, right: 20,
+                  child: GestureDetector(
+                    onTap: _dismiss,
+                    child: Container(
+                      width: 34, height: 34,
+                      decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0x29FFFFFF)),
+                      child: const Icon(Icons.close_rounded, color: Colors.white, size: 16),
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
