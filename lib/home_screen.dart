@@ -4,7 +4,7 @@
 //  Same feed logic and Firestore / API usage as v12. New in v13:
 //   • X-style posts: avatar left, bold names, caption ABOVE the image
 //   • Yellow accent (where X uses blue), bold text
-//   • Repost button + count, "reposted" label (needs /posts/:id/repost)
+//   • Repost button + count, "reposted" label (visual only, no backend)
 //   • Save icon: shows a message only, nothing is stored in the backend
 //   • 3-dots menu: hide post, hide like counts, post arrangement, more
 //   • Header, stories, tabs and bottom nav hide on scroll down, return
@@ -245,7 +245,7 @@ class UserInfoCache {
   }
 }
 
-Widget verifiedTick({double size = 13}) => Icon(Icons.verified_rounded, color: _gold, size: size);
+Widget verifiedTick({double size = 13}) => Icon(Icons.verified_rounded, color: _blue, size: size);
 
 /// Lets other screens call the feed API.
 class FeedApi {
@@ -273,7 +273,7 @@ List<InlineSpan> hashtagSpans(String text, {required TextStyle base}) {
   for (final m in RegExp(r'(^|\s)([#@][a-zA-Z0-9_.]+)').allMatches(text)) {
     if (m.start > last) spans.add(TextSpan(text: text.substring(last, m.start), style: base));
     spans.add(TextSpan(text: m.group(1), style: base));
-    spans.add(TextSpan(text: m.group(2), style: base.copyWith(color: _gold, fontWeight: FontWeight.w700)));
+    spans.add(TextSpan(text: m.group(2), style: base.copyWith(color: _blue, fontWeight: FontWeight.w700)));
     last = m.end;
   }
   if (last < text.length) spans.add(TextSpan(text: text.substring(last), style: base));
@@ -678,7 +678,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     if (i == 1) { Navigator.pushNamed(context, '/analytics'); return; }
     if (i == 2) { Navigator.pushNamed(context, '/upload'); return; }
     if (i == 3) { Navigator.pushNamed(context, '/earnings'); return; }
-    if (i == 4) { Navigator.pushNamed(context, '/dashboard'); return; }
+    if (i == 4) { if (_navIndex != 0) setState(() => _navIndex = 0); _feedKey.currentState?.openPeopleTab(); return; }
     if (i == 5) { Navigator.pushNamed(context, '/viewpro', arguments: _user?.uid); }
   }
 
@@ -700,7 +700,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             const _PlaceholderTab(icon: Icons.bar_chart_rounded, label: 'Analytics'),
             const _PlaceholderTab(icon: Icons.cloud_upload_rounded, label: 'Upload'),
             const _PlaceholderTab(icon: Icons.account_balance_wallet_rounded, label: 'Earnings'),
-            const _PlaceholderTab(icon: Icons.speed_rounded, label: 'Dashboard'),
+            const _PlaceholderTab(icon: Icons.people_rounded, label: 'People'),
             const _PlaceholderTab(icon: Icons.person_rounded, label: 'Profile'),
           ]),
           Positioned(
@@ -879,7 +879,6 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
     _following = _Local.getSet('following_$uid');
     _seenStories = _Local.getSet('seenst_$uid');
     _likedStories = _Local.getSet('likedst_$uid');
-    _reposted = _Local.getSet('reposted_$uid');
     _hidden = _Local.getSet('hidden_$uid');
     _hideLikes = _Local.getString('hidelikes_$uid') == '1';
     _latestFirst = _Local.getString('arrange_$uid') == 'latest';
@@ -995,14 +994,6 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
           _liked.add(id);
         } else {
           _liked.remove(id);
-        }
-        // Only trust the server on reposts when it actually sends the field.
-        if (p.containsKey('reposted')) {
-          if (p['reposted'] == true) {
-            _reposted.add(id);
-          } else {
-            _reposted.remove(id);
-          }
         }
       }
       if (reset) {
@@ -1242,32 +1233,14 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
     }
   }
 
-  // Needs POST /posts/:id/repost and DELETE /posts/:id/repost on the API.
-  Future<void> _toggleRepost(Map<String, dynamic> post) async {
-    final me = _user!.uid, id = post['id'] as String, was = _reposted.contains(id);
-    int count() => ((post['repostsCount'] ?? 0) as num).toInt();
+  // Visual only: no backend, nothing is saved. Resets when the app restarts.
+  void _toggleRepost(Map<String, dynamic> post) {
+    final id = post['id'] as String, was = _reposted.contains(id);
+    final count = ((post['repostsCount'] ?? 0) as num).toInt();
     setState(() {
       was ? _reposted.remove(id) : _reposted.add(id);
-      post['repostsCount'] = max(0, count() + (was ? -1 : 1));
+      post['repostsCount'] = max(0, count + (was ? -1 : 1));
     });
-    _Local.putSet('reposted_$me', _reposted);
-    try {
-      final r = was ? await _Api.delete('/posts/$id/repost') : await _Api.post('/posts/$id/repost');
-      if (mounted && r is Map && r['repostsCount'] is num) {
-        setState(() => post['repostsCount'] = (r['repostsCount'] as num).toInt());
-      }
-      if (!was) {
-        sendNotification(post['authorUid'], 'repost', postId: id, postText: post['text'],
-            postImage: post['imageUrl'], docId: 'repost_${id}_$me');
-      }
-    } catch (_) {
-      if (!mounted) return;
-      setState(() {
-        was ? _reposted.add(id) : _reposted.remove(id);
-        post['repostsCount'] = max(0, count() + (was ? 1 : -1));
-      });
-      _Local.putSet('reposted_$me', _reposted);
-    }
   }
 
   void _openRepost(Map<String, dynamic> post) {
@@ -2131,10 +2104,10 @@ class _PostCardState extends State<_PostCard> {
                       child: Padding(
                         padding: const EdgeInsets.only(top: 8),
                         child: Row(children: [
-                          const Icon(Icons.link_rounded, color: _gold, size: 16),
+                          const Icon(Icons.link_rounded, color: _blue, size: 16),
                           const SizedBox(width: 6),
                           Expanded(child: Text(link, overflow: TextOverflow.ellipsis,
-                              style: _ts(14, FontWeight.w700, _gold))),
+                              style: _ts(14, FontWeight.w700, _blue))),
                         ]),
                       ),
                     ),
@@ -2504,7 +2477,6 @@ class _NotificationsSheetState extends State<_NotificationsSheet> {
     switch (n['type']) {
       case 'follow': return '$who started following you';
       case 'like': return '$who liked your post';
-      case 'repost': return '$who reposted your post';
       case 'story_like': return '$who liked your story';
       case 'comment': return '$who commented on your post';
       case 'reply': return '$who replied to your comment';
@@ -3050,7 +3022,7 @@ class _StoryViewerScreenState extends State<_StoryViewerScreen> with SingleTicke
                               margin: const EdgeInsets.symmetric(horizontal: 24), padding: const EdgeInsets.all(18),
                               decoration: BoxDecoration(color: _s1, borderRadius: BorderRadius.circular(16)),
                               child: Row(children: [
-                                const Icon(Icons.link_rounded, color: _gold),
+                                const Icon(Icons.link_rounded, color: _blue),
                                 const SizedBox(width: 10),
                                 Expanded(child: Text(s['linkUrl'], overflow: TextOverflow.ellipsis, style: _ts(15, FontWeight.w600, _white90))),
                               ]),
@@ -3195,7 +3167,7 @@ class _BottomNav extends StatelessWidget {
     (Icons.bar_chart_rounded, Icons.bar_chart_outlined),
     (Icons.cloud_upload_rounded, Icons.cloud_upload_outlined),
     (Icons.account_balance_wallet_rounded, Icons.account_balance_wallet_outlined),
-    (Icons.speed_rounded, Icons.speed_outlined),
+    (Icons.people_rounded, Icons.people_outline_rounded),
     (Icons.person_rounded, Icons.person_outline_rounded),
   ];
 
@@ -3304,7 +3276,7 @@ class _SidebarPanelState extends State<_SidebarPanel> {
               ]),
             ),
             const SizedBox(height: 2),
-            Text(widget.userEmail, maxLines: 1, overflow: TextOverflow.ellipsis, style: _ts(14, FontWeight.w500, _t2, em: 0)),
+            Text('@${widget.userName.toLowerCase().replaceAll(RegExp(r'[^a-z0-9_]'), '').isEmpty ? 'artist' : widget.userName.toLowerCase().replaceAll(RegExp(r'[^a-z0-9_]'), '')}', maxLines: 1, overflow: TextOverflow.ellipsis, style: _ts(14, FontWeight.w500, _t2, em: 0)),
             const SizedBox(height: 12),
             ValueListenableBuilder<List<int>>(
               valueListenable: widget.counts,
