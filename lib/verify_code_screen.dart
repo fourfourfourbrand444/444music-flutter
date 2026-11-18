@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:async';
@@ -27,6 +28,22 @@ const _successGrn = Color(0xFF4ADE80);
 // ─────────────────────────────────────────
 //  ENTRY POINT
 // ─────────────────────────────────────────
+// Tells the feed API this user just joined (capped and de-duplicated on the server).
+Future<void> _announceJoin() async {
+  try {
+    final token = await FirebaseAuth.instance.currentUser?.getIdToken();
+    if (token == null) return;
+    await http.post(
+      Uri.parse('https://api.444musicdistro.com/announce-join'),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+      },
+    );
+  } catch (_) {
+    // best-effort: never block verification
+  }
+}
 class VerifyCodeScreen extends StatefulWidget {
   final String uid;
   final String email;
@@ -143,7 +160,8 @@ class _VerifyCodeScreenState extends State<VerifyCodeScreen>
         await FirebaseFirestore.instance
             .collection('users')
             .doc(widget.uid)
-            .update({'emailVerified': true});
+                        .update({'emailVerified': true});
+        unawaited(_announceJoin());
 
         _showMsg('Email verified.', _successGrn,
             icon: Icons.check_circle_outline);
