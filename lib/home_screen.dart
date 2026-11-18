@@ -737,7 +737,8 @@ class _FeedHomeState extends State<_FeedHome> with WidgetsBindingObserver {
   Future<void> _setupPush(String uid) async {
     try {
       final fm = FirebaseMessaging.instance;
-      await fm.requestPermission();
+            await fm.requestPermission();
+      try { await fm.subscribeToTopic('new_signups'); } catch (_) {}
       final token = await fm.getToken();
       if (token != null) {
         await _db.collection('users').doc(uid).set({
