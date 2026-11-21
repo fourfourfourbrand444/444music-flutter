@@ -1,21 +1,44 @@
 // ═══════════════════════════════════════════════════════════════════
 //  444MUSIC — Tools Screen
 //  Route: '/tools'
+//  Same look as the web Tools page: system font, same colours and icons.
 // ═══════════════════════════════════════════════════════════════════
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-// ─── PALETTE ────────────────────────────────────────────────────────
+// ─── PALETTE (same as web) ──────────────────────────────────────────
 const _bg    = Color(0xFF000000);
 const _card  = Color(0xFF1C1C1E);
 const _fill  = Color(0x3D767680);
 const _text  = Color(0xFFF2F2F7);
 const _text2 = Color(0xFF98989D);
+const _sep   = Color(0xFF38383A);
+const _blue  = Color(0xFF0A84FF);
 const _red   = Color(0xFFFF453A);
 const _redBg = Color(0x29FF453A);
+
+const _catColors = {
+  'artwork':    Color(0xFFFF375F),
+  'audio':      Color(0xFFFF9F0A),
+  'growth':     Color(0xFF30D158),
+  'royalties':  Color(0xFF0A84FF),
+  'management': Color(0xFF636366),
+};
+
+// System font: SF Pro on iPhone, Roboto on Android (same as the web page).
+TextStyle _ts(Color color, double size, FontWeight weight,
+    {double? ls, double? h}) {
+  return TextStyle(
+    color: color,
+    fontSize: size,
+    fontWeight: weight,
+    letterSpacing: ls,
+    height: h,
+  );
+}
 
 // ─── LAUNCHER ───────────────────────────────────────────────────────
 Future<void> _launch(String url) async {
@@ -43,6 +66,7 @@ class _Tool {
   final String? note;
   final String? warn;
   final bool danger;
+  final bool claim; // opens the store list instead of a link
 
   const _Tool({
     required this.cat,
@@ -50,13 +74,50 @@ class _Tool {
     required this.title,
     required this.desc,
     required this.tags,
-    required this.url,
     required this.button,
+    this.url = '',
     this.note,
     this.warn,
     this.danger = false,
+    this.claim = false,
   });
 }
+
+/// Stores that let artists claim a profile. Order = order shown in the list.
+class _Store {
+  final String name;
+  final String note;
+  final IconData? icon;
+  final String letter;
+  final Color color;
+  final String url;
+  const _Store(this.name, this.note, this.icon, this.letter, this.color,
+      this.url);
+}
+
+const _claimStores = [
+  _Store('Spotify', 'Spotify for Artists', FontAwesomeIcons.spotify, 'S',
+      Color(0xFF1DB954), 'https://artists.spotify.com/c/claim'),
+  _Store('Apple Music', 'Apple Music for Artists', FontAwesomeIcons.apple, 'A',
+      Color(0xFFFA243C), 'https://artists.apple.com'),
+  _Store('Boomplay', 'Boomplay for Artists', null, 'B', Color(0xFFE8281E),
+      'https://www.boomplay.com/ForArtist'),
+  _Store('YouTube Music', 'Official Artist Channel', FontAwesomeIcons.youtube,
+      'Y', Color(0xFFFF0000),
+      'https://support.google.com/youtube/answer/7336634'),
+  _Store('Amazon Music', 'Amazon Music for Artists', FontAwesomeIcons.amazon,
+      'A', Color(0xFF00A8E1), 'https://artists.amazonmusic.com'),
+  _Store('Audiomack', 'Audiomack for Creators', null, 'A', Color(0xFFFF7A00),
+      'https://audiomack.com/creators'),
+  _Store('Deezer', 'Deezer for Creators', FontAwesomeIcons.deezer, 'D',
+      Color(0xFFA238FF), 'https://creators.deezer.com'),
+  _Store('TIDAL', 'TIDAL for Artists', null, 'T', Color(0xFF111111),
+      'https://artists.tidal.com'),
+  _Store('SoundCloud', 'SoundCloud for Artists', FontAwesomeIcons.soundcloud,
+      'S', Color(0xFFFF5500), 'https://artists.soundcloud.com'),
+  _Store('Pandora', 'Pandora AMP', null, 'P', Color(0xFF224099),
+      'https://amp.pandora.com'),
+];
 
 const _sections = [
   _Section('artwork', 'Artwork'),
@@ -69,7 +130,7 @@ const _sections = [
 const _tools = [
   _Tool(
     cat: 'artwork',
-    icon: Icons.image_rounded,
+    icon: FontAwesomeIcons.image,
     title: 'Cover Art Generator',
     desc:
         'Design album and single cover art that meets streaming platform requirements. No design experience needed.',
@@ -80,7 +141,7 @@ const _tools = [
   ),
   _Tool(
     cat: 'artwork',
-    icon: Icons.open_in_full_rounded,
+    icon: FontAwesomeIcons.expand,
     title: '3000px Image Resizer',
     desc:
         'Convert your cover art to the 3000×3000 pixel size that streaming stores require.',
@@ -90,7 +151,7 @@ const _tools = [
   ),
   _Tool(
     cat: 'audio',
-    icon: Icons.tune_rounded,
+    icon: FontAwesomeIcons.sliders,
     title: 'Audio Mastering',
     desc:
         'Improve loudness, clarity and balance so your track sounds right on every platform.',
@@ -100,7 +161,7 @@ const _tools = [
   ),
   _Tool(
     cat: 'audio',
-    icon: Icons.sync_rounded,
+    icon: FontAwesomeIcons.arrowsRotate,
     title: 'Audio Format Converter',
     desc:
         'Turn MP3, AAC and AIFF files into WAV or FLAC, the formats needed for distribution.',
@@ -110,7 +171,7 @@ const _tools = [
   ),
   _Tool(
     cat: 'growth',
-    icon: Icons.calculate_rounded,
+    icon: FontAwesomeIcons.calculator,
     title: 'Royalty Calculator',
     desc:
         'Estimate what your streams could earn on Spotify, Apple Music, Tidal and YouTube Music before you release.',
@@ -120,7 +181,7 @@ const _tools = [
   ),
   _Tool(
     cat: 'growth',
-    icon: Icons.calendar_month_rounded,
+    icon: FontAwesomeIcons.calendarDays,
     title: 'Release Planner',
     desc:
         'Plan your release with a timeline, pre-save setup and rollout schedule to get a strong first week.',
@@ -130,7 +191,7 @@ const _tools = [
   ),
   _Tool(
     cat: 'growth',
-    icon: Icons.person_add_alt_1_rounded,
+    icon: FontAwesomeIcons.userPlus,
     title: 'Referral Program',
     desc:
         'Invite other artists to 444Music and earn a reward for every successful signup. There is no cap.',
@@ -140,7 +201,7 @@ const _tools = [
   ),
   _Tool(
     cat: 'royalties',
-    icon: Icons.pie_chart_rounded,
+    icon: FontAwesomeIcons.chartPie,
     title: 'Royalty Split Dashboard',
     desc:
         'See your earnings and split percentage, set your payout method and request withdrawals.',
@@ -151,7 +212,7 @@ const _tools = [
   ),
   _Tool(
     cat: 'management',
-    icon: Icons.numbers_rounded,
+    icon: FontAwesomeIcons.barcode,
     title: 'ISRC Code',
     desc:
         'Get an ISRC code for your recording. Sign in or create an account to continue.',
@@ -161,17 +222,26 @@ const _tools = [
   ),
   _Tool(
     cat: 'management',
-    icon: Icons.how_to_reg_rounded,
+    icon: FontAwesomeIcons.userCheck,
     title: 'Claim Artist Profile',
     desc:
-        'A step-by-step guide to claim your artist page on Spotify, Apple Music and Amazon Music.',
-    tags: ['Spotify for Artists', 'Apple Music', 'Amazon Music'],
-    url: 'https://wa.me/233530399523',
-    button: 'Get guide',
+        'Choose a store and open its artist portal to claim your page, get verified and see your stats.',
+    tags: [
+      'Spotify',
+      'Apple Music',
+      'Boomplay',
+      'YouTube Music',
+      'Amazon Music',
+      'Audiomack',
+      'Deezer',
+      'TIDAL',
+    ],
+    button: 'Choose store',
+    claim: true,
   ),
   _Tool(
     cat: 'management',
-    icon: Icons.delete_outline_rounded,
+    icon: FontAwesomeIcons.trashCan,
     title: 'Song Takedown',
     desc:
         'Request removal of a release from all platforms. Full removal takes 5 to 14 business days.',
@@ -249,7 +319,7 @@ class _ToolsScreenState extends State<ToolsScreen> {
               color: _bg,
               border: Border(
                 bottom: BorderSide(
-                  color: _scrolled ? const Color(0xFF38383A) : Colors.transparent,
+                  color: _scrolled ? _sep : Colors.transparent,
                   width: 0.5,
                 ),
               ),
@@ -271,16 +341,8 @@ class _ToolsScreenState extends State<ToolsScreen> {
                   ),
                 ),
                 const SizedBox(height: 2),
-                Text(
-                  'Tools',
-                  style: GoogleFonts.nunito(
-                    color: _text,
-                    fontSize: 34,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: -0.6,
-                    height: 1.1,
-                  ),
-                ),
+                Text('Tools',
+                    style: _ts(_text, 34, FontWeight.w700, ls: -0.68, h: 1.1)),
                 const SizedBox(height: 12),
                 _SearchField(
                   controller: _search,
@@ -323,11 +385,7 @@ class _ToolsScreenState extends State<ToolsScreen> {
                       _query.trim().isEmpty
                           ? 'Nothing here yet'
                           : 'No results for “${_query.trim()}”',
-                      style: GoogleFonts.nunito(
-                        color: _text2,
-                        fontSize: 15,
-                        fontWeight: FontWeight.w500,
-                      ),
+                      style: _ts(_text2, 15, FontWeight.w400),
                     ),
                   )
                 : ListView(
@@ -340,14 +398,8 @@ class _ToolsScreenState extends State<ToolsScreen> {
                       for (final e in visible.entries) ...[
                         Padding(
                           padding: const EdgeInsets.fromLTRB(6, 22, 6, 8),
-                          child: Text(
-                            e.key.name,
-                            style: GoogleFonts.nunito(
-                              color: _text2,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
+                          child: Text(e.key.name,
+                              style: _ts(_text2, 13, FontWeight.w400)),
                         ),
                         for (final t in e.value)
                           Padding(
@@ -402,20 +454,12 @@ class _SearchField extends StatelessWidget {
               onChanged: onChanged,
               cursorColor: _text,
               textInputAction: TextInputAction.search,
-              style: GoogleFonts.nunito(
-                color: _text,
-                fontSize: 16,
-                fontWeight: FontWeight.w500,
-              ),
+              style: _ts(_text, 17, FontWeight.w400),
               decoration: InputDecoration(
                 isCollapsed: true,
                 border: InputBorder.none,
                 hintText: 'Search',
-                hintStyle: GoogleFonts.nunito(
-                  color: _text2,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w500,
-                ),
+                hintStyle: _ts(_text2, 17, FontWeight.w400),
               ),
             ),
           ),
@@ -428,8 +472,8 @@ class _SearchField extends StatelessWidget {
                     behavior: HitTestBehavior.opaque,
                     child: const Padding(
                       padding: EdgeInsets.symmetric(horizontal: 8),
-                      child: Icon(Icons.cancel_rounded,
-                          color: _text2, size: 17),
+                      child:
+                          Icon(Icons.cancel_rounded, color: _text2, size: 17),
                     ),
                   ),
           ),
@@ -469,11 +513,7 @@ class _Pill extends StatelessWidget {
           ),
           child: AnimatedDefaultTextStyle(
             duration: const Duration(milliseconds: 200),
-            style: GoogleFonts.nunito(
-              color: active ? Colors.black : _text,
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-            ),
+            style: _ts(active ? Colors.black : _text, 14, FontWeight.w500),
             child: Text(label),
           ),
         ),
@@ -492,6 +532,7 @@ class _ToolCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = tool;
+    final tileColor = t.danger ? _red : (_catColors[t.cat] ?? _blue);
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(18),
@@ -507,42 +548,26 @@ class _ToolCard extends StatelessWidget {
               Container(
                 width: 44,
                 height: 44,
+                alignment: Alignment.center,
                 decoration: BoxDecoration(
-                  color: t.danger ? _redBg : _fill,
+                  color: tileColor,
                   borderRadius: BorderRadius.circular(11),
                 ),
-                child: Icon(
-                  t.icon,
-                  color: t.danger ? _red : _text,
-                  size: 21,
-                ),
+                child: FaIcon(t.icon, color: Colors.white, size: 19),
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      t.title,
-                      style: GoogleFonts.nunito(
-                        color: _text,
-                        fontSize: 17,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: -0.2,
-                        height: 1.25,
-                      ),
-                    ),
+                    Text(t.title,
+                        style: _ts(_text, 17, FontWeight.w600,
+                            ls: -0.17, h: 1.25)),
                     if (t.note != null)
                       Padding(
                         padding: const EdgeInsets.only(top: 1),
-                        child: Text(
-                          t.note!,
-                          style: GoogleFonts.nunito(
-                            color: _text2,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
+                        child: Text(t.note!,
+                            style: _ts(_text2, 12, FontWeight.w400)),
                       ),
                   ],
                 ),
@@ -550,15 +575,7 @@ class _ToolCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 12),
-          Text(
-            t.desc,
-            style: GoogleFonts.nunito(
-              color: _text2,
-              fontSize: 14,
-              fontWeight: FontWeight.w500,
-              height: 1.5,
-            ),
-          ),
+          Text(t.desc, style: _ts(_text2, 14, FontWeight.w400, h: 1.5)),
           const SizedBox(height: 12),
           Wrap(
             spacing: 6,
@@ -572,34 +589,21 @@ class _ToolCard extends StatelessWidget {
                     color: _fill,
                     borderRadius: BorderRadius.circular(99),
                   ),
-                  child: Text(
-                    g,
-                    style: GoogleFonts.nunito(
-                      color: _text2,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
+                  child: Text(g, style: _ts(_text2, 12, FontWeight.w400)),
                 ),
             ],
           ),
           if (t.warn != null) ...[
             const SizedBox(height: 12),
-            Text(
-              t.warn!,
-              style: GoogleFonts.nunito(
-                color: _text2,
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-                height: 1.45,
-              ),
-            ),
+            Text(t.warn!, style: _ts(_text2, 12, FontWeight.w400, h: 1.45)),
           ],
           const SizedBox(height: 16),
           _PillButton(
             label: t.button,
             danger: t.danger,
-            onTap: () => _launch(t.url),
+            onTap: t.claim
+                ? () => _showClaimSheet(context)
+                : () => _launch(t.url),
           ),
         ],
       ),
@@ -608,7 +612,157 @@ class _ToolCard extends StatelessWidget {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  PILL BUTTON
+//  CLAIM STORE SHEET
+// ════════════════════════════════════════════════════════════════════
+void _showClaimSheet(BuildContext context) {
+  HapticFeedback.selectionClick();
+  showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: _card,
+    isScrollControlled: true,
+    useSafeArea: true,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+    ),
+    builder: (_) => const _ClaimSheet(),
+  );
+}
+
+class _ClaimSheet extends StatelessWidget {
+  const _ClaimSheet();
+
+  @override
+  Widget build(BuildContext context) {
+    final mq = MediaQuery.of(context);
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxHeight: mq.size.height * 0.86),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Center(
+            child: Container(
+              margin: const EdgeInsets.only(top: 8),
+              width: 36,
+              height: 5,
+              decoration: BoxDecoration(
+                color: const Color(0x4DEBEBF5),
+                borderRadius: BorderRadius.circular(3),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 14, 12, 12),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Claim Artist Profile',
+                          style: _ts(_text, 20, FontWeight.w700, ls: -0.4)),
+                      const SizedBox(height: 3),
+                      Text(
+                        'Pick a store to open its artist portal and claim your page.',
+                        style: _ts(_text2, 13, FontWeight.w400, h: 1.4),
+                      ),
+                    ],
+                  ),
+                ),
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => Navigator.pop(context),
+                  child: Container(
+                    width: 30,
+                    height: 30,
+                    margin: const EdgeInsets.only(left: 8, top: 2),
+                    decoration: const BoxDecoration(
+                      color: _fill,
+                      shape: BoxShape.circle,
+                    ),
+                    child:
+                        const Icon(Icons.close_rounded, color: _text2, size: 16),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 0.5, thickness: 0.5, color: _sep),
+          Flexible(
+            child: ListView.separated(
+              shrinkWrap: true,
+              physics: const BouncingScrollPhysics(),
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 4),
+              itemCount: _claimStores.length,
+              separatorBuilder: (_, __) =>
+                  const Divider(height: 0.5, thickness: 0.5, color: _sep),
+              itemBuilder: (_, i) => _StoreRow(store: _claimStores[i]),
+            ),
+          ),
+          const Divider(height: 0.5, thickness: 0.5, color: _sep),
+          Padding(
+            padding: EdgeInsets.fromLTRB(18, 12, 18, 14 + mq.padding.bottom),
+            child: Text(
+              'Your music must already be live on a store before you can claim your profile there. Keep your artist name the same on every release.',
+              style: _ts(_text2, 12, FontWeight.w400, h: 1.5),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StoreRow extends StatelessWidget {
+  final _Store store;
+  const _StoreRow({required this.store});
+
+  @override
+  Widget build(BuildContext context) {
+    final s = store;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Row(
+        children: [
+          Container(
+            width: 42,
+            height: 42,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: s.color,
+              borderRadius: BorderRadius.circular(11),
+            ),
+            child: s.icon != null
+                ? FaIcon(s.icon, color: Colors.white, size: 20)
+                : Text(s.letter, style: _ts(Colors.white, 20, FontWeight.w700)),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(s.name,
+                    style: _ts(_text, 16, FontWeight.w600, ls: -0.16)),
+                const SizedBox(height: 1),
+                Text(s.note, style: _ts(_text2, 12, FontWeight.w400, h: 1.35)),
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          _PillButton(
+            label: 'Claim',
+            danger: false,
+            onTap: () => _launch(s.url),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  PILL BUTTON (blue, same as web)
 // ════════════════════════════════════════════════════════════════════
 class _PillButton extends StatefulWidget {
   final String label;
@@ -638,22 +792,19 @@ class _PillButtonState extends State<_PillButton> {
       },
       child: AnimatedOpacity(
         duration: const Duration(milliseconds: 120),
-        opacity: _down ? 0.65 : 1,
+        opacity: _down ? 0.7 : 1,
         child: Container(
           height: 32,
           padding: const EdgeInsets.symmetric(horizontal: 20),
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: widget.danger ? _redBg : Colors.white,
+            color: widget.danger ? _redBg : _blue,
             borderRadius: BorderRadius.circular(99),
           ),
           child: Text(
             widget.label,
-            style: GoogleFonts.nunito(
-              color: widget.danger ? _red : Colors.black,
-              fontSize: 15,
-              fontWeight: FontWeight.w700,
-            ),
+            style: _ts(widget.danger ? _red : Colors.white, 15,
+                FontWeight.w600),
           ),
         ),
       ),
