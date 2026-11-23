@@ -20,6 +20,7 @@ dependencies:
   image_picker: ^1.1.2
   video_player: ^2.9.2
   share_plus: ^10.1.4
+  font_awesome_flutter: ^10.7.0
   app_links: ^7.1.1
   http: ^1.2.0
   flutter_svg: ^2.0.10+1
